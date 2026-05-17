@@ -17,8 +17,9 @@ use zti_protocol::response::*;
 #[derive(Parser)]
 #[command(name = "zebra-mcp", about = "Zebra MCP server (stdio)")]
 struct Cli {
+    /// HF id or local path. When omitted, the daemon uses its own default.
     #[arg(short, long)]
-    model: String,
+    model: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -72,11 +73,11 @@ pub struct ProjectRootParam {
 struct ZebraMcpServer {
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
-    model: String,
+    model: Option<String>,
 }
 
 impl ZebraMcpServer {
-    fn new(model: String) -> Self {
+    fn new(model: Option<String>) -> Self {
         Self {
             tool_router: Self::tool_router(),
             model,
@@ -84,7 +85,7 @@ impl ZebraMcpServer {
     }
 
     async fn client(&self) -> Result<Client, ErrorData> {
-        let mut client = Client::connect(Duration::from_secs(10), &self.model)
+        let mut client = Client::connect(Duration::from_secs(10), self.model.as_deref())
             .await
             .map_err(daemon_err)?;
         client.handshake().await.map_err(daemon_err)?;

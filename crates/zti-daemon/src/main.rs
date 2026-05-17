@@ -19,7 +19,9 @@ use state::DaemonState;
 #[derive(Parser)]
 #[command(name = "zti-daemon", about = "Zebra tree indexer daemon")]
 struct Cli {
-    #[arg(short, long)]
+    /// HuggingFace repo id (e.g. `Xenova/bge-small-en-v1.5`) or a local
+    /// path to a .onnx file or a directory containing one.
+    #[arg(short, long, default_value = "Xenova/bge-small-en-v1.5")]
     model: String,
 }
 
@@ -48,16 +50,20 @@ fn main() -> Result<()> {
     write!(pid_file, "{}", std::process::id())?;
     pid_file.flush()?;
 
-    let log_path = zti_common::paths::daemon_log()?;
-    let log_file = std::fs::File::create(&log_path)?;
-
+    // Writes to stderr. When run in a terminal you see logs directly; when
+    // spawned by `zti_ipc_client::spawn::spawn_daemon`, stderr is redirected
+    // to `~/.zebra_tree_indexer/zti-daemon.log` by the parent, so file
+    // logging is preserved without duplicating the writer here.
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                EnvFilter::new(
+                    "info,zti_daemon=debug,zti_embed=debug,\
+                     zti_pipeline=debug,zti_dsl=debug,zti_store=debug",
+                )
+            }),
         )
-        .with_writer(log_file)
-        .with_ansi(false)
+        .with_writer(std::io::stderr)
         .init();
 
     let socket_path = zti_common::paths::daemon_socket()?;

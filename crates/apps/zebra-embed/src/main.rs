@@ -14,8 +14,9 @@ use zti_protocol::response::*;
 #[derive(Parser)]
 #[command(name = "zebra-embed", version, about = "Index / search / chat via daemon")]
 struct Cli {
+    /// HF id or local path. When omitted, the daemon uses its own default.
     #[arg(short, long, global = true)]
-    model: String,
+    model: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -73,7 +74,7 @@ enum Commands {
 /// Connect to the daemon (auto-spawning if needed) and complete the mandatory
 /// handshake. Every subcommand uses this — including `Stop`. Replaces what was
 /// previously ~10 lines of duplicated boilerplate per command.
-async fn open_client(model: &str) -> Result<Client> {
+async fn open_client(model: Option<&str>) -> Result<Client> {
     let mut client = Client::connect(Duration::from_secs(10), model).await?;
     client.handshake().await?;
     Ok(client)
@@ -113,7 +114,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let model = &cli.model;
+    let model = cli.model.as_deref();
     match cli.command {
         Commands::Index { root, refresh } => {
             let mut client = open_client(model).await?;

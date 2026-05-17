@@ -5,7 +5,7 @@ use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::ValueType;
 
-use crate::model_registry::{ModelProfile, download_model, resolve_profile};
+use crate::model_registry::{ModelProfile, resolve_profile};
 use crate::normalize::normalize_l2;
 use crate::pooling::{PoolingStrategy, pool_row};
 use crate::tokenizer::Tokenizer;
@@ -36,7 +36,6 @@ impl EmbedEngine {
     }
 
     pub fn load_with_device(model_id: &str, hw: &Hardware) -> Result<Self> {
-        let _ = download_model(model_id)?;
         let mut profile = resolve_profile(model_id)?;
 
         tracing::info!(path = %profile.onnx_path.display(), "loading ONNX model");

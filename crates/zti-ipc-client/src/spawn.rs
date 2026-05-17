@@ -7,7 +7,10 @@ use tokio::time;
 
 use zti_common::paths;
 
-pub async fn connect_or_spawn(timeout: Duration, model: &str) -> Result<UnixStream> {
+pub async fn connect_or_spawn(
+    timeout: Duration,
+    model: Option<&str>,
+) -> Result<UnixStream> {
     let socket_path = paths::daemon_socket()?;
 
     if let Ok(stream) = UnixStream::connect(&socket_path).await {
@@ -15,12 +18,15 @@ pub async fn connect_or_spawn(timeout: Duration, model: &str) -> Result<UnixStre
         return Ok(stream);
     }
 
-    tracing::info!("daemon not running, spawning with model {model}...");
+    match model {
+        Some(m) => tracing::info!("daemon not running, spawning with model {m}..."),
+        None    => tracing::info!("daemon not running, spawning with daemon default model..."),
+    }
     spawn_daemon(model)?;
     wait_for_socket(&socket_path, timeout).await
 }
 
-fn spawn_daemon(model: &str) -> Result<()> {
+fn spawn_daemon(model: Option<&str>) -> Result<()> {
     let exe = std::env::current_exe()?;
     let dir = exe.parent().ok_or_else(|| anyhow::anyhow!("no parent dir for current exe"))?;
     let daemon_path = dir.join("zti-daemon");
@@ -28,12 +34,14 @@ fn spawn_daemon(model: &str) -> Result<()> {
     let log_path = paths::daemon_log()?;
     let log_file = std::fs::File::create(&log_path)?;
 
-    std::process::Command::new(&daemon_path)
-        .args(["--model", model])
-        .stdin(std::process::Stdio::null())
+    let mut cmd = std::process::Command::new(&daemon_path);
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(log_file)
-        .spawn()?;
+        .stderr(log_file);
+    if let Some(m) = model {
+        cmd.args(["--model", m]);
+    }
+    cmd.spawn()?;
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,11 @@ impl From<PoolingStrategyEnum> for PoolingStrategy {
             PoolingStrategyEnum::Cls => PoolingStrategy::Cls,
         }
     }
+}
+
+pub struct ResolvedModel {
+    pub onnx_path: PathBuf,
+    pub tokenizer_path: PathBuf,
 }
 
 struct FamilyQuirks {
@@ -76,11 +81,7 @@ fn lookup_quirks(model_name: &str) -> Option<FamilyQuirks> {
 }
 
 pub fn resolve_profile(model_id: &str) -> Result<ModelProfile> {
-    let model_dir = zti_common::paths::models_dir()?.join(model_id.replace('/', "_"));
-
-    let onnx_path = model_dir.join("model.onnx");
-    let tokenizer_path = model_dir.join("tokenizer.json");
-
+    let files = resolve_model_files(model_id)?;
     let quirks = lookup_quirks(model_id);
 
     let pooling = quirks
@@ -93,8 +94,8 @@ pub fn resolve_profile(model_id: &str) -> Result<ModelProfile> {
     // ONNX session and tokenizer are loaded.
     Ok(ModelProfile {
         model_id: model_id.to_string(),
-        onnx_path,
-        tokenizer_path,
+        onnx_path: files.onnx_path,
+        tokenizer_path: files.tokenizer_path,
         dim: 0,
         max_length: 512,
         pooling,
@@ -102,7 +103,89 @@ pub fn resolve_profile(model_id: &str) -> Result<ModelProfile> {
     })
 }
 
-pub fn download_model(model_id: &str) -> Result<PathBuf> {
+pub fn resolve_model_files(model_id: &str) -> Result<ResolvedModel> {
+    let p = Path::new(model_id);
+    if p.exists() {
+        resolve_local(p)
+    } else {
+        resolve_hf(model_id)
+    }
+}
+
+fn resolve_local(p: &Path) -> Result<ResolvedModel> {
+    let (dir, explicit_onnx) = if p.is_dir() {
+        (p.to_path_buf(), None)
+    } else if p.extension().and_then(|s| s.to_str()) == Some("onnx") {
+        let parent = p
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("path has no parent: {}", p.display()))?;
+        (parent.to_path_buf(), Some(p.to_path_buf()))
+    } else {
+        anyhow::bail!(
+            "{} is neither a directory nor a .onnx file",
+            p.display()
+        );
+    };
+
+    let onnx_path = match explicit_onnx {
+        Some(file) => file,
+        None => find_onnx_in(&dir)?,
+    };
+    let tokenizer_path = find_tokenizer_in(&dir)?;
+
+    tracing::info!(
+        onnx = %onnx_path.display(),
+        tokenizer = %tokenizer_path.display(),
+        "using local model files"
+    );
+
+    Ok(ResolvedModel {
+        onnx_path,
+        tokenizer_path,
+    })
+}
+
+fn find_onnx_in(dir: &Path) -> Result<PathBuf> {
+    for c in ONNX_CANDIDATES {
+        let p = dir.join(c);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    let mut found: Option<PathBuf> = None;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("onnx") {
+            if found.is_some() {
+                anyhow::bail!(
+                    "multiple .onnx files in {} — pass the specific file path \
+                     instead of the directory",
+                    dir.display()
+                );
+            }
+            found = Some(path);
+        }
+    }
+    found.ok_or_else(|| anyhow::anyhow!("no .onnx file found in {}", dir.display()))
+}
+
+fn find_tokenizer_in(dir: &Path) -> Result<PathBuf> {
+    for c in TOKENIZER_CANDIDATES {
+        let p = dir.join(c);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    anyhow::bail!(
+        "no tokenizer.json found in {} (download it from the model's HF repo, \
+         e.g. https://huggingface.co/<owner>/<name>/resolve/main/tokenizer.json)",
+        dir.display()
+    )
+}
+
+fn resolve_hf(model_id: &str) -> Result<ResolvedModel> {
     let model_dir = zti_common::paths::models_dir()?.join(model_id.replace('/', "_"));
     std::fs::create_dir_all(&model_dir)?;
 
@@ -131,7 +214,10 @@ pub fn download_model(model_id: &str) -> Result<PathBuf> {
         std::fs::copy(&downloaded, &tokenizer_path)?;
     }
 
-    Ok(model_dir)
+    Ok(ResolvedModel {
+        onnx_path,
+        tokenizer_path,
+    })
 }
 
 fn try_download(
