@@ -21,6 +21,22 @@ impl Tokenizer {
         Ok(Tokenized { ids, mask })
     }
 
+    /// Batch encode. Runs in parallel via rayon inside `tokenizers`.
+    pub fn encode_batch(&self, texts: &[&str]) -> Result<Vec<Tokenized>> {
+        let encs = self
+            .inner
+            .encode_batch(texts.to_vec(), false)
+            .map_err(|e| anyhow::anyhow!("encode_batch: {}", e))?;
+
+        let mut out = Vec::with_capacity(encs.len());
+        for enc in encs {
+            let ids = enc.get_ids().to_vec();
+            let mask = enc.get_attention_mask().to_vec();
+            out.push(Tokenized { ids, mask });
+        }
+        Ok(out)
+    }
+
     /// Read the tokenizer's truncation `max_length` if configured.
     pub fn truncation_max_length(&self) -> Option<usize> {
         self.inner.get_truncation().map(|t| t.max_length)
