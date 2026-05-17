@@ -64,13 +64,24 @@ pub struct ErrorBody {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CheckStatus {
+    Ok,
+    Warn,
+    Err,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DoctorCheck {
+    pub name: String,
+    pub status: CheckStatus,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoctorReport {
-    pub model_ok: bool,
-    pub model_path: String,
-    pub db_ok: bool,
-    pub db_path: String,
     pub device: String,
+    pub checks: Vec<DoctorCheck>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use anyhow::Result;
 use lancedb::connect;
 
@@ -10,7 +8,6 @@ use crate::projects_table::ProjectsTable;
 #[derive(Clone)]
 pub struct Db {
     db: lancedb::Connection,
-    root: PathBuf,
 }
 
 impl Db {
@@ -21,7 +18,7 @@ impl Db {
 
         let db = connect(lance_dir.to_str().ok_or_else(|| anyhow::anyhow!("invalid path"))?).execute().await?;
 
-        Ok(Self { db, root: lance_dir })
+        Ok(Self { db })
     }
 
     pub async fn open_global() -> Result<Self> {
@@ -31,10 +28,7 @@ impl Db {
 
         let db = connect(registry.to_str().ok_or_else(|| anyhow::anyhow!("invalid path"))?).execute().await?;
 
-        Ok(Self {
-            db,
-            root: registry,
-        })
+        Ok(Self { db })
     }
 
     pub fn connection(&self) -> &lancedb::Connection {

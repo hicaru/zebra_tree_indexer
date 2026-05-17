@@ -1,8 +1,10 @@
-use std::path::PathBuf;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
 use tracing_subscriber::EnvFilter;
 
 use zti_ipc_client::Client;
@@ -37,10 +39,12 @@ enum Commands {
         #[arg(short, long)]
         glob: Option<String>,
     },
-    #[command(about = "Interactive chat")]
+    #[command(about = "Interactive chat (search loop)")]
     Chat {
         #[arg(short, long)]
         root: PathBuf,
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
     },
     #[command(about = "Show project status")]
     Status {
@@ -63,12 +67,42 @@ enum Commands {
     },
 }
 
+/// Connect to the daemon (auto-spawning if needed) and complete the mandatory
+/// handshake. Every subcommand uses this — including `Stop`. Replaces what was
+/// previously ~10 lines of duplicated boilerplate per command.
+async fn open_client() -> Result<Client> {
+    let mut client = Client::connect(Duration::from_secs(10)).await?;
+    client.handshake().await?;
+    Ok(client)
+}
+
+fn canon(p: &Path) -> Result<String> {
+    Ok(p.canonicalize()?.to_string_lossy().into_owned())
+}
+
+fn canon_opt(p: Option<PathBuf>) -> Result<Option<String>> {
+    p.map(|r| canon(&r)).transpose()
+}
+
+fn print_search_hits(hits: &[SearchHit]) {
+    for (i, hit) in hits.iter().enumerate() {
+        println!(
+            "#{} {:.4} {} ({}:{}-{})",
+            i + 1,
+            hit.score,
+            hit.symbol_qualified,
+            hit.file_path,
+            hit.start_line,
+            hit.end_line
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("warn")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
         )
         .with_writer(std::io::stderr)
         .with_ansi(false)
@@ -78,21 +112,13 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Index { root, refresh } => {
-            let mut client = Client::connect(Duration::from_secs(10)).await?;
-            client.handshake().await?;
-
-            let root_str = root.canonicalize()?.to_string_lossy().to_string();
-
-            use indicatif::{ProgressBar, ProgressStyle};
-            use std::cell::RefCell;
+            let mut client = open_client().await?;
+            let project_root = canon(&root)?;
             let bar = RefCell::new(None::<ProgressBar>);
 
             let resp = client
                 .request_streaming(
-                    Request::Index(IndexReq {
-                        project_root: root_str,
-                        refresh,
-                    }),
+                    Request::Index(IndexReq { project_root, refresh }),
                     |frame| {
                         if let Response::IndexProgress(p) = frame {
                             let mut slot = bar.borrow_mut();
@@ -136,90 +162,112 @@ async fn main() -> Result<()> {
                         stats.duration_ms as f64 / 1000.0
                     );
                 }
-                Response::Index(Err(e)) => {
-                    eprintln!("Error: {}", e.message);
-                }
+                Response::Index(Err(e)) => eprintln!("Error: {}", e.message),
                 other => eprintln!("Unexpected response: {:?}", other),
             }
         }
         Commands::Search { root, query, limit, lang, glob } => {
-            let mut client = Client::connect(Duration::from_secs(10)).await?;
-            client.handshake().await?;
-
-            let root_str = root.canonicalize()?.to_string_lossy().to_string();
-            let resp = client.request(Request::Search(SearchReq {
-                project_root: root_str,
-                query,
-                limit,
-                offset: None,
-                languages: lang.map(|l| l.split(',').map(String::from).collect()),
-                path_glob: glob,
-                refresh_index: false,
-            })).await?;
-
+            let mut client = open_client().await?;
+            let project_root = canon(&root)?;
+            let resp = client
+                .request(Request::Search(SearchReq {
+                    project_root,
+                    query,
+                    limit,
+                    offset: None,
+                    languages: lang.map(|l| l.split(',').map(String::from).collect()),
+                    path_glob: glob,
+                    refresh_index: false,
+                }))
+                .await?;
             match resp {
                 Response::Search(Ok(results)) => {
-                    for (i, hit) in results.hits.iter().enumerate() {
-                        println!("#{} {:.4} {} ({}:{}-{})", i + 1, hit.score, hit.symbol_qualified,
-                            hit.file_path, hit.start_line, hit.end_line);
-                    }
+                    print_search_hits(&results.hits);
                     println!("{} results", results.total);
                 }
-                Response::Search(Err(e)) => {
-                    eprintln!("Error: {}", e.message);
-                }
+                Response::Search(Err(e)) => eprintln!("Error: {}", e.message),
                 other => eprintln!("Unexpected response: {:?}", other),
             }
         }
-        Commands::Chat { .. } => {
-            eprintln!("chat mode requires a running daemon with indexed project");
+        Commands::Chat { root, limit } => {
+            let mut client = open_client().await?;
+            let project_root = canon(&root)?;
+            let mut rl = rustyline::DefaultEditor::new()?;
+            println!("zebra-embed chat — type a query, :q or Ctrl-D to exit.");
+
+            while let Ok(line) = rl.readline("> ") {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed == ":q" {
+                    break;
+                }
+                let _ = rl.add_history_entry(trimmed);
+
+                let resp = client
+                    .request(Request::Search(SearchReq {
+                        project_root: project_root.clone(),
+                        query: trimmed.to_string(),
+                        limit,
+                        offset: None,
+                        languages: None,
+                        path_glob: None,
+                        refresh_index: false,
+                    }))
+                    .await?;
+                match resp {
+                    Response::Search(Ok(results)) => {
+                        if results.hits.is_empty() {
+                            println!("  no results");
+                        } else {
+                            print_search_hits(&results.hits);
+                        }
+                    }
+                    Response::Search(Err(e)) => eprintln!("Error: {}", e.message),
+                    other => eprintln!("Unexpected response: {:?}", other),
+                }
+            }
         }
         Commands::Status { root } => {
-            let mut client = Client::connect(Duration::from_secs(10)).await?;
-            client.handshake().await?;
-
-            let root_str = root.map(|r| r.canonicalize().map(|p| p.to_string_lossy().to_string()))
-                .transpose()?;
-            let resp = client.request(Request::ProjectStatus(ProjectStatusReq {
-                project_root: root_str,
-            })).await?;
-
+            let mut client = open_client().await?;
+            let project_root = canon_opt(root)?;
+            let resp = client
+                .request(Request::ProjectStatus(ProjectStatusReq { project_root }))
+                .await?;
             match resp {
                 Response::ProjectStatus(Ok(status)) => {
                     println!("Root: {}", status.project_root);
                     println!("Model: {} (dim={})", status.model_id, status.model_dim);
+                    println!("Chunks: {}", status.total_chunks);
+                    println!("Files: {}", status.total_files);
                 }
-                Response::ProjectStatus(Err(e)) => {
-                    eprintln!("Error: {}", e.message);
-                }
+                Response::ProjectStatus(Err(e)) => eprintln!("Error: {}", e.message),
                 other => eprintln!("Unexpected response: {:?}", other),
             }
         }
         Commands::Doctor { root } => {
-            let mut client = Client::connect(Duration::from_secs(10)).await?;
-            client.handshake().await?;
-
-            let resp = client.request(Request::Doctor(DoctorReq {
-                project_root: root.map(|r| r.canonicalize().map(|p| p.to_string_lossy().to_string()))
-                    .transpose()?,
-            })).await?;
-
+            let mut client = open_client().await?;
+            let project_root = canon_opt(root)?;
+            let resp = client.request(Request::Doctor(DoctorReq { project_root })).await?;
             match resp {
                 Response::Doctor(Ok(report)) => {
-                    println!("Model: {} ({})", report.model_path, if report.model_ok { "OK" } else { "MISSING" });
-                    println!("DB: {} ({})", report.db_path, if report.db_ok { "OK" } else { "MISSING" });
                     println!("Device: {}", report.device);
+                    for check in &report.checks {
+                        let marker = match check.status {
+                            CheckStatus::Ok => "OK  ",
+                            CheckStatus::Warn => "WARN",
+                            CheckStatus::Err => "ERR ",
+                        };
+                        println!("[{}] {}: {}", marker, check.name, check.message);
+                    }
                 }
-                Response::Doctor(Err(e)) => {
-                    eprintln!("Error: {}", e.message);
-                }
+                Response::Doctor(Err(e)) => eprintln!("Error: {}", e.message),
                 other => eprintln!("Unexpected response: {:?}", other),
             }
         }
         Commands::Env => {
-            let mut client = Client::connect(Duration::from_secs(10)).await?;
-            client.handshake().await?;
-
+            let mut client = open_client().await?;
             let resp = client.request(Request::DaemonEnv).await?;
             match resp {
                 Response::DaemonEnv(env) => {
@@ -234,21 +282,18 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Stop => {
-            let mut client = Client::connect(Duration::from_secs(5)).await?;
+            let mut client = open_client().await?;
             let resp = client.request(Request::Stop).await?;
             if matches!(resp, Response::Stop(())) {
                 println!("Daemon stopped.");
             }
         }
         Commands::Remove { root } => {
-            let mut client = Client::connect(Duration::from_secs(10)).await?;
-            client.handshake().await?;
-
-            let root_str = root.canonicalize()?.to_string_lossy().to_string();
-            let resp = client.request(Request::RemoveProject(RemoveProjectReq {
-                project_root: root_str,
-            })).await?;
-
+            let mut client = open_client().await?;
+            let project_root = canon(&root)?;
+            let resp = client
+                .request(Request::RemoveProject(RemoveProjectReq { project_root }))
+                .await?;
             match resp {
                 Response::RemoveProject(Ok(())) => println!("Project removed."),
                 Response::RemoveProject(Err(e)) => eprintln!("Error: {}", e.message),

@@ -9,16 +9,66 @@ use zti_tree_sitter::{Language, detect_from_path, frontend_for};
 use crate::model::{FileEntry, ProjectIndex};
 
 const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "build", "dist", ".cache"];
-const FORGE_SKIP_DIRS: &[&str] = &["lib"];
 
-pub fn build_index(root: &str) -> Result<ProjectIndex> {
-    let root_path = Path::new(root).canonicalize()?;
+/// Collect the union of every supported language's `extra_skip_dirs` —
+/// the standalone walker has no way to know which languages are present
+/// before traversing, so we filter against the superset.
+fn all_lang_skip_dirs() -> Vec<&'static str> {
+    use zti_tree_sitter::Language;
+    let mut out: Vec<&'static str> = Vec::new();
+    for lang in [Language::Rust, Language::Ts, Language::Tsx, Language::Dart, Language::Solidity] {
+        let cfg = zti_tree_sitter::frontend_for(lang).config();
+        for &d in cfg.extra_skip_dirs {
+            if !out.contains(&d) {
+                out.push(d);
+            }
+        }
+    }
+    out
+}
 
+/// One source file the parser will index. Caller owns the path string (it is
+/// moved into the resulting `FileEntry.path`); content is borrowed for the
+/// duration of the parse.
+pub struct SourceFile<'a> {
+    pub full_path: String,
+    pub content: &'a str,
+    pub language: Language,
+}
+
+/// Build a `ProjectIndex` from already-loaded sources. This is the hot path
+/// used by `zti-pipeline::indexer::index_project` — the indexer has already
+/// walked the filesystem and read every file, so we must not walk a second
+/// time.
+pub fn build_index_from_sources<'a, I>(root: String, sources: I) -> ProjectIndex
+where
+    I: IntoIterator<Item = SourceFile<'a>>,
+{
     let mut files: Vec<FileEntry> = Vec::new();
     let mut all_symbols: Vec<zti_ts_core::types::Symbol> = Vec::new();
     let mut all_edges: Vec<zti_ts_core::types::Edge> = Vec::new();
 
-    discover_and_parse(&root_path, &mut files, &mut all_symbols, &mut all_edges)?;
+    for src in sources {
+        let SourceFile { full_path, content, language } = src;
+        let file_idx = files.len() as u16;
+        let frontend = frontend_for(language);
+        let id_offset = all_symbols.len() as u32;
+
+        match frontend.parse(content, file_idx, id_offset) {
+            Ok((symbols, edges, imports)) => {
+                files.push(FileEntry {
+                    path: full_path,
+                    language,
+                    imports,
+                });
+                all_symbols.extend(symbols);
+                all_edges.extend(edges);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to parse {}: {}", full_path, e);
+            }
+        }
+    }
 
     let qualified_map = build_qualified_map(&all_symbols, &files);
     resolve_edges(&mut all_edges, &files, &qualified_map, &all_symbols);
@@ -26,25 +76,36 @@ pub fn build_index(root: &str) -> Result<ProjectIndex> {
     let reverse_edges = build_reverse_edges(&all_edges);
     let forward_edges = build_forward_edges(&all_edges);
 
-    Ok(ProjectIndex {
+    ProjectIndex {
         symbols: all_symbols,
         edges: all_edges,
         files,
         qualified_map,
         reverse_edges,
         forward_edges,
-        root: root_path.to_string_lossy().to_string(),
-    })
+        root,
+    }
 }
 
-fn discover_and_parse(
-    root: &Path,
-    files: &mut Vec<FileEntry>,
-    all_symbols: &mut Vec<zti_ts_core::types::Symbol>,
-    all_edges: &mut Vec<zti_ts_core::types::Edge>,
-) -> Result<()> {
-    let is_forge = root.join("foundry.toml").exists();
-    let walker = WalkBuilder::new(root)
+/// Standalone walker entry point — used by `zebra-dsl` and other callers that
+/// don't have pre-walked sources. The pipeline must not use this path
+/// (it would walk twice); use `build_index_from_sources` instead.
+pub fn build_index(root: &str) -> Result<ProjectIndex> {
+    let root_path = Path::new(root).canonicalize()?;
+
+    // (full_path, content, language)
+    let mut loaded: Vec<(String, String, Language)> = Vec::new();
+
+    // Foundry layout: only skip the language's extra dirs if the marker file
+    // is present. For non-Foundry repos `lib/` (rust crate dir!) must NOT be
+    // dropped, so we gate the extra-skip list on `foundry.toml`.
+    let is_forge = root_path.join("foundry.toml").exists();
+    let lang_skip_dirs: Vec<&'static str> = if is_forge {
+        all_lang_skip_dirs()
+    } else {
+        Vec::new()
+    };
+    let walker = WalkBuilder::new(&root_path)
         .hidden(false)
         .git_ignore(true)
         .filter_entry(move |entry| {
@@ -53,7 +114,7 @@ fn discover_and_parse(
                 if SKIP_DIRS.contains(&name.as_ref()) {
                     return false;
                 }
-                if is_forge && FORGE_SKIP_DIRS.contains(&name.as_ref()) {
+                if lang_skip_dirs.contains(&name.as_ref()) {
                     return false;
                 }
             }
@@ -61,51 +122,36 @@ fn discover_and_parse(
         })
         .build();
 
-    let mut file_entries: Vec<(u16, String, Language)> = Vec::new();
-
     for entry in walker {
         let entry = entry?;
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
-
         let lang = match detect_from_path(path) {
             Some(l) => l,
             None => continue,
         };
-
         let path_str = path.to_string_lossy().to_string();
-        let file_idx = file_entries.len() as u16;
-        file_entries.push((file_idx, path_str, lang));
-    }
-
-    for (file_idx, path_str, lang) in &file_entries {
-        let content = match std::fs::read_to_string(path_str) {
+        let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => continue,
         };
-
-        let frontend = frontend_for(*lang);
-        let id_offset = all_symbols.len() as u32;
-
-        match frontend.parse(&content, *file_idx, id_offset) {
-            Ok((symbols, edges, imports)) => {
-                files.push(FileEntry {
-                    path: path_str.clone(),
-                    language: *lang,
-                    imports,
-                });
-                all_symbols.extend(symbols);
-                all_edges.extend(edges);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to parse {}: {}", path_str, e);
-            }
-        }
+        loaded.push((path_str, content, lang));
     }
 
-    Ok(())
+    let sources = loaded
+        .iter()
+        .map(|(p, c, l)| SourceFile {
+            full_path: p.clone(),
+            content: c.as_str(),
+            language: *l,
+        });
+
+    Ok(build_index_from_sources(
+        root_path.to_string_lossy().to_string(),
+        sources,
+    ))
 }
 
 fn build_qualified_map(symbols: &[zti_ts_core::types::Symbol], files: &[FileEntry]) -> HashMap<String, u32> {

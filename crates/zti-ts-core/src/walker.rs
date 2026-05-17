@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
 use tree_sitter::{Node, Tree, TreeCursor};
 
 use crate::config::{extract_name, LangConfig};
@@ -101,6 +100,9 @@ fn walk_node(cursor: &mut TreeCursor, symbols: &mut Vec<Symbol>, state: &mut Wal
         let base_classes = extract_base_classes(&node, state.source, state.config);
         let traits = extract_traits(&node, state.source, state.config);
 
+        // Reserve the scope key BEFORE moving `name` into Symbol, so we
+        // don't pay for `symbols.last().unwrap().name.clone()` indirection.
+        let scope_name = name.clone();
         symbols.push(Symbol {
             id,
             kind,
@@ -115,9 +117,7 @@ fn walk_node(cursor: &mut TreeCursor, symbols: &mut Vec<Symbol>, state: &mut Wal
             parent,
             traits,
         });
-
-        let name_for_scope = symbols.last().unwrap().name.clone();
-        state.push_scope(id, name_for_scope);
+        state.push_scope(id, scope_name);
 
         collect_edges(&node, state, id);
 
@@ -218,12 +218,12 @@ fn collect_edges_recursive(
     for child in node.children(&mut cursor) {
         let kind = child.kind();
 
-        if kind == call_kind {
-            if let Some(func_node) = child.child_by_field_name(call_field) {
-                let callee = resolve_call_name(&func_node, state.source);
-                let line = child.start_position().row as u32 + 1;
-                state.add_edge(from_id, Target::Unresolved(callee), EdgeKind::Call, line);
-            }
+        if kind == call_kind
+            && let Some(func_node) = child.child_by_field_name(call_field)
+        {
+            let callee = resolve_call_name(&func_node, state.source);
+            let line = child.start_position().row as u32 + 1;
+            state.add_edge(from_id, Target::Unresolved(callee), EdgeKind::Call, line);
         }
 
         if kind == ref_kind {

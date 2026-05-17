@@ -10,7 +10,6 @@ use crate::schema;
 
 pub struct ChunksTable {
     table: Table,
-    dim: usize,
     index_created: bool,
 }
 
@@ -25,7 +24,6 @@ impl ChunksTable {
         };
         Ok(Self {
             table,
-            dim,
             index_created: false,
         })
     }
@@ -86,21 +84,21 @@ impl ChunksTable {
 
         let mut filters = Vec::new();
 
-        if let Some(langs) = languages {
-            if !langs.is_empty() {
-                let list = langs
-                    .iter()
-                    .map(|l| format!("'{}'", l))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                filters.push(format!("language IN ({})", list));
-            }
+        if let Some(langs) = languages
+            && !langs.is_empty()
+        {
+            let list = langs
+                .iter()
+                .map(|l| format!("'{}'", l))
+                .collect::<Vec<_>>()
+                .join(",");
+            filters.push(format!("language IN ({})", list));
         }
 
-        if let Some(glob) = path_glob {
-            if let Some(pattern) = glob_to_like(glob) {
-                filters.push(format!("file_path LIKE '{}'", pattern));
-            }
+        if let Some(glob) = path_glob
+            && let Some(pattern) = glob_to_like(glob)
+        {
+            filters.push(format!("file_path LIKE '{}'", pattern));
         }
 
         if !filters.is_empty() {
@@ -185,6 +183,27 @@ fn glob_to_like(glob: &str) -> Option<String> {
         }
     }
     Some(pattern)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glob_to_like_translates_wildcards() {
+        assert_eq!(glob_to_like("src/**").as_deref(), Some("src/%%"));
+        assert_eq!(glob_to_like("a?b").as_deref(), Some("a_b"));
+        assert_eq!(glob_to_like("plain").as_deref(), Some("plain"));
+    }
+
+    #[test]
+    fn glob_to_like_rejects_sql_injection() {
+        // Single quote, backslash, and raw SQL wildcards are not user-safe.
+        assert!(glob_to_like("' OR 1=1 --").is_none());
+        assert!(glob_to_like(r"back\slash").is_none());
+        assert!(glob_to_like("raw_underscore").is_none());
+        assert!(glob_to_like("raw%percent").is_none());
+    }
 }
 
 #[derive(Debug, Clone)]

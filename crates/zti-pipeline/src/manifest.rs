@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::Result;
 use ignore::WalkBuilder;
 
 use zti_store::FileRow;
-use zti_tree_sitter::detect_from_path;
+use zti_tree_sitter::{Language, detect_from_path};
 
 #[derive(Debug, Clone)]
 pub struct FileSnapshot {
@@ -14,7 +13,7 @@ pub struct FileSnapshot {
     pub blake3: [u8; 32],
     pub size_bytes: u64,
     pub contents: String,
-    pub language: String,
+    pub language: Language,
 }
 
 pub struct Changes {
@@ -80,7 +79,7 @@ pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
                 blake3,
                 size_bytes: metadata.len(),
                 contents,
-                language: lang.as_str().to_string(),
+                language: lang,
             },
         );
     }

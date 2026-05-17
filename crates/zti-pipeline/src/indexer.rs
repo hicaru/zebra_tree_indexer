@@ -8,12 +8,13 @@ use arrow::array::{
 use tracing::info;
 
 use zti_common::ids::project_id;
-use zti_dsl::{DslChunker, build_index};
+use zti_dsl::{DslChunker, SourceFile, build_index_from_sources};
 use zti_embed::EmbedEngine;
 use zti_rerank::TurboReranker;
 use zti_store::Db;
+use zti_tree_sitter::Language;
 
-use crate::manifest::{Changes, FileSnapshot, detect_changes, walk_source_files};
+use crate::manifest::{FileSnapshot, detect_changes, walk_source_files};
 use crate::progress::ProgressReporter;
 
 pub struct IndexStats {
@@ -85,8 +86,15 @@ pub async fn index_project(
         });
     }
 
-    let root_owned = root.to_path_buf();
-    let dsl_index = build_index(&root_owned.to_string_lossy())?;
+    // Single FS walk: reuse the snapshots we already loaded to drive the DSL
+    // parser. Avoids walking the tree (and re-reading every file) a second
+    // time inside `zti_dsl::build_index`.
+    let dsl_sources = snapshots.iter().map(|(rel, snap)| SourceFile {
+        full_path: root.join(rel).display().to_string(),
+        content: snap.contents.as_str(),
+        language: snap.language,
+    });
+    let dsl_index = build_index_from_sources(root_str.to_string(), dsl_sources);
     info!(
         "dsl-graph: {} symbols, {} edges, {} files",
         dsl_index.symbols.len(),
@@ -96,7 +104,7 @@ pub async fn index_project(
 
     let chunker = DslChunker::new(&dsl_index);
 
-    let mut all_pending: Vec<(zti_dsl::chunking::Chunk, String)> = Vec::new();
+    let mut all_pending: Vec<(zti_dsl::chunking::Chunk, Language)> = Vec::new();
     for rel in &need_reindex {
         let snap = match snapshots.get(rel) {
             Some(s) => s,
@@ -106,7 +114,7 @@ pub async fn index_project(
         let label = full_path.display().to_string();
         let chunks = chunker.chunks_for_file(&label, &snap.contents);
         for c in chunks {
-            all_pending.push((c, snap.language.clone()));
+            all_pending.push((c, snap.language));
         }
     }
 
@@ -154,10 +162,7 @@ pub async fn index_project(
                 let mut indexed_at_builder = UInt64Array::builder(n);
                 let mut embeddings: Vec<f32> = Vec::with_capacity(n * dim);
 
-                let zipped: Vec<_> = batch_items
-                    .into_iter()
-                    .zip(embs.into_iter())
-                    .collect();
+                let zipped: Vec<_> = batch_items.into_iter().zip(embs).collect();
 
                 for ((chunk, lang), emb) in zipped {
                     if emb.iter().any(|v| v.is_nan()) {
@@ -188,9 +193,9 @@ pub async fn index_project(
                         }
                     };
 
-                    chunk_id_builder.append_value(chunk_id);
+                    chunk_id_builder.append_value(chunk_id)?;
                     file_path_builder.append_value(&chunk.file);
-                    language_builder.append_value(&lang);
+                    language_builder.append_value(lang.as_str());
                     symbol_qualified_builder.append_value(&chunk.qualified);
                     symbol_kind_builder.append_value(chunk.kind.as_str());
                     parent_qualified_builder.append_null();
@@ -284,7 +289,7 @@ async fn upsert_files(
         };
 
         let mut blake3_builder = FixedSizeBinaryBuilder::new(32);
-        blake3_builder.append_value(snap.blake3);
+        blake3_builder.append_value(snap.blake3)?;
 
         let record = RecordBatch::try_new(
             std::sync::Arc::new(zti_store::schema::files_schema()),
@@ -293,7 +298,7 @@ async fn upsert_files(
                 std::sync::Arc::new(blake3_builder.finish()),
                 std::sync::Arc::new(UInt64Array::from(vec![snap.mtime_ns as u64])),
                 std::sync::Arc::new(UInt64Array::from(vec![snap.size_bytes])),
-                std::sync::Arc::new(StringArray::from(vec![snap.language.clone()])),
+                std::sync::Arc::new(StringArray::from(vec![snap.language.as_str()])),
                 std::sync::Arc::new(arrow::array::ListArray::new_null(
                     std::sync::Arc::new(arrow::datatypes::Field::new(
                         "item",
@@ -331,7 +336,7 @@ async fn upsert_project(
         .as_nanos() as u64;
 
     let mut project_id_builder = FixedSizeBinaryBuilder::new(32);
-    project_id_builder.append_value(pid);
+    project_id_builder.append_value(pid)?;
 
     let record = RecordBatch::try_new(
         std::sync::Arc::new(zti_store::schema::projects_schema()),

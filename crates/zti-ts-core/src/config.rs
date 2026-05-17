@@ -19,6 +19,10 @@ pub struct LangConfig {
     pub ref_node: &'static str,
     pub ref_field: &'static str,
     pub import_node: &'static str,
+    /// Extra directories to skip during traversal — per-language.
+    /// Used e.g. by Solidity to skip Foundry's `lib/`, `out/`, `cache/`.
+    /// Empty for languages without an opinion.
+    pub extra_skip_dirs: &'static [&'static str],
 }
 
 impl LangConfig {
@@ -101,6 +105,7 @@ pub static RUST_CONFIG: LangConfig = LangConfig {
     ref_node: "scoped_identifier",
     ref_field: "name",
     import_node: "use_declaration",
+    extra_skip_dirs: &[],
 };
 
 pub static TYPESCRIPT_CONFIG: LangConfig = LangConfig {
@@ -145,6 +150,7 @@ pub static TYPESCRIPT_CONFIG: LangConfig = LangConfig {
     ref_node: "identifier",
     ref_field: "name",
     import_node: "import_statement",
+    extra_skip_dirs: &[],
 };
 
 pub static DART_CONFIG: LangConfig = LangConfig {
@@ -197,6 +203,7 @@ pub static DART_CONFIG: LangConfig = LangConfig {
     ref_node: "identifier",
     ref_field: "name",
     import_node: "import_specification",
+    extra_skip_dirs: &[],
 };
 
 pub static SOLIDITY_CONFIG: LangConfig = LangConfig {
@@ -254,4 +261,6 @@ pub static SOLIDITY_CONFIG: LangConfig = LangConfig {
     ref_node: "identifier",
     ref_field: "name",
     import_node: "import_directive",
+    // Foundry layout — third-party deps + build artifacts that hide real code.
+    extra_skip_dirs: &["lib", "out", "cache", "broadcast"],
 };

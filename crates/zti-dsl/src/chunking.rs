@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use zti_common::line_byte_range;
 use zti_ts_core::types::Kind;
 
 use crate::model::ProjectIndex;
@@ -45,12 +46,15 @@ impl<'a> DslChunker<'a> {
             Some(idx) => idx,
             None => return Vec::new(),
         };
-        let lines: Vec<&str> = source.lines().collect();
+        // Each chunk slice goes through `line_byte_range`, which scans the
+        // source up to the requested end line once. No `lines.collect()` + per-
+        // symbol `join("\n")`; the cost is paid lazily and only for symbols we
+        // actually keep.
         self.index
             .symbols
             .iter()
             .filter(|s| s.file_idx == file_idx && is_chunkable_kind(s.kind))
-            .filter_map(|s| self.make_chunk(s, &lines))
+            .filter_map(|s| self.make_chunk(s, source))
             .collect()
     }
 
@@ -73,15 +77,19 @@ impl<'a> DslChunker<'a> {
         fallback.map(|i| i as u16)
     }
 
-    fn make_chunk(&self, sym: &zti_ts_core::types::Symbol, lines: &[&str]) -> Option<Chunk> {
-        let start = (sym.line as usize).saturating_sub(1);
-        let end = (sym.end_line as usize).min(lines.len());
-        if start >= end {
+    fn make_chunk(&self, sym: &zti_ts_core::types::Symbol, source: &str) -> Option<Chunk> {
+        if sym.line == 0 || sym.end_line < sym.line {
             return None;
         }
-        let body_src = lines[start..end].join("\n");
+        let range = line_byte_range(source, sym.line, sym.end_line);
+        if range.is_empty() {
+            return None;
+        }
+        let body = source[range].to_string();
+
         let mut header = String::with_capacity(256);
         render_symbol_inline(self.index, sym.id, &self.opts, &mut header);
+
         let file = self.index.files.get(sym.file_idx as usize)?;
         Some(Chunk {
             file: file.path.clone(),
@@ -89,7 +97,7 @@ impl<'a> DslChunker<'a> {
             end_line: sym.end_line,
             sym_id: sym.id,
             header,
-            body: body_src,
+            body,
             qualified: sym.qualified.clone(),
             kind: sym.kind,
         })
@@ -107,4 +115,56 @@ pub fn is_chunkable_kind(kind: Kind) -> bool {
             | Kind::Class
             | Kind::Interface
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn synthetic_chunk() -> Chunk {
+        Chunk {
+            file: "src/foo.rs".to_string(),
+            start_line: 10,
+            end_line: 12,
+            sym_id: 7,
+            header: "f#7 foo::bar".to_string(),
+            body: "fn bar() {}\n// body".to_string(),
+            qualified: "foo::bar".to_string(),
+            kind: Kind::Function,
+        }
+    }
+
+    #[test]
+    fn embed_text_brackets_body_with_header() {
+        let c = synthetic_chunk();
+        let txt = c.embed_text();
+        assert!(txt.starts_with("f#7 foo::bar\n---\n"));
+        assert!(txt.ends_with("\n---\nf#7 foo::bar"));
+        assert!(txt.contains("fn bar()"));
+    }
+
+    #[test]
+    fn display_text_one_header_then_body() {
+        let c = synthetic_chunk();
+        let txt = c.display_text();
+        assert_eq!(txt, "f#7 foo::bar\n---\nfn bar() {}\n// body");
+    }
+
+    #[test]
+    fn is_chunkable_kind_covers_aggregates() {
+        for k in [
+            Kind::Function,
+            Kind::Method,
+            Kind::Struct,
+            Kind::Enum,
+            Kind::TypeAlias,
+            Kind::Class,
+            Kind::Interface,
+        ] {
+            assert!(is_chunkable_kind(k));
+        }
+        for k in [Kind::Module, Kind::Field, Kind::Variant, Kind::Const, Kind::Static] {
+            assert!(!is_chunkable_kind(k));
+        }
+    }
 }

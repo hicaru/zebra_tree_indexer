@@ -1,4 +1,6 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
+use std::fmt::Write as _;
 
 use zti_ts_core::types::{Edge, EdgeKind, Kind, Target};
 
@@ -48,81 +50,106 @@ pub fn render_symbol_inline(
     let short = sym.kind.short();
     out.push_str(short);
     out.push('#');
-    out.push_str(&sym.id.to_string());
+    let _ = write!(out, "{}", sym.id);
     out.push(' ');
     out.push_str(&sym.qualified);
 
     if opts.show_file_path
-        && let Some(f) = file {
-            let rel = f.path.strip_prefix(&index.root).unwrap_or(&f.path);
-            let rel = rel.trim_start_matches('/');
-            out.push(' ');
-            out.push_str(rel);
-        }
+        && let Some(f) = file
+    {
+        let rel = f.path.strip_prefix(&index.root).unwrap_or(&f.path);
+        let rel = rel.trim_start_matches('/');
+        out.push(' ');
+        out.push_str(rel);
+    }
 
     if opts.show_line_range {
-        out.push(' ');
-        out.push(':');
-        out.push_str(&sym.line.to_string());
-        out.push('-');
-        out.push_str(&sym.end_line.to_string());
+        let _ = write!(out, " :{}-{}", sym.line, sym.end_line);
     }
 
     if let Some(ref doc) = sym.doc {
-        let doc_lines: Vec<&str> = doc.lines().take(opts.max_doc_lines).collect();
-        if !doc_lines.is_empty() {
+        let mut joined = String::new();
+        let mut seen = 0usize;
+        for line in doc.lines().take(opts.max_doc_lines) {
+            if seen > 0 {
+                joined.push(' ');
+            }
+            joined.push_str(line);
+            seen += 1;
+        }
+        if seen > 0 {
             out.push(' ');
             out.push('"');
-            let joined = doc_lines.join(" ");
-            let trimmed = joined.trim();
-            out.push_str(trimmed);
+            out.push_str(joined.trim());
             out.push('"');
         }
     }
 
-    let callers: Vec<&Edge> = index.reverse_edges
-        .get(&id)
-        .map(|v| v.iter().filter(|e| e.kind == EdgeKind::Call).collect())
-        .unwrap_or_default();
-
-    let callees: Vec<&Edge> = index.forward_edges
-        .get(&id)
-        .map(|v| v.iter().filter(|e| e.kind == EdgeKind::Call).collect())
-        .unwrap_or_default();
-
-    if !callers.is_empty() {
-        out.push(' ');
-        out.push_str("<- ");
-        for (i, edge) in callers.iter().take(opts.max_inline_targets).enumerate() {
-            if i > 0 { out.push(' '); }
-            let target_sym = index.symbols.get(edge.from as usize);
-            if let Some(ts) = target_sym {
+    write_targets(
+        out,
+        " <- ",
+        index
+            .reverse_edges
+            .get(&id)
+            .into_iter()
+            .flat_map(|v| v.iter())
+            .filter(|e| e.kind == EdgeKind::Call),
+        opts.max_inline_targets,
+        |edge, out| {
+            if let Some(ts) = index.symbols.get(edge.from as usize) {
                 out.push_str(&ts.qualified);
             }
-        }
-        if callers.len() > opts.max_inline_targets {
-            out.push_str(" ...");
-        }
-    }
+        },
+    );
 
-    if !callees.is_empty() {
-        out.push(' ');
-        out.push_str("-> ");
-        for (i, edge) in callees.iter().take(opts.max_inline_targets).enumerate() {
-            if i > 0 { out.push(' '); }
+    write_targets(
+        out,
+        " -> ",
+        index
+            .forward_edges
+            .get(&id)
+            .into_iter()
+            .flat_map(|v| v.iter())
+            .filter(|e| e.kind == EdgeKind::Call),
+        opts.max_inline_targets,
+        |edge, out| {
             out.push_str(&format_target(&edge.to));
+        },
+    );
+}
+
+/// Inline-render up to `max` edge targets, followed by `...` if the iterator
+/// would have produced more. Single-pass — no intermediate `Vec<&Edge>`.
+fn write_targets<'a, I, F>(out: &mut String, prefix: &str, edges: I, max: usize, mut write_one: F)
+where
+    I: IntoIterator<Item = &'a Edge>,
+    F: FnMut(&Edge, &mut String),
+{
+    let mut iter = edges.into_iter().peekable();
+    if iter.peek().is_none() {
+        return;
+    }
+    out.push_str(prefix);
+    let mut overflow = false;
+    for (i, edge) in iter.enumerate() {
+        if i >= max {
+            overflow = true;
+            break;
         }
-        if callees.len() > opts.max_inline_targets {
-            out.push_str(" ...");
+        if i > 0 {
+            out.push(' ');
         }
+        write_one(edge, out);
+    }
+    if overflow {
+        out.push_str(" ...");
     }
 }
 
-pub fn format_target(target: &Target) -> String {
+pub fn format_target(target: &Target) -> Cow<'_, str> {
     match target {
-        Target::Resolved(id) => format!("#{}", id),
-        Target::Unresolved(name) => name.clone(),
-        Target::External(name) => name.clone(),
+        Target::Resolved(id) => Cow::Owned(format!("#{}", id)),
+        Target::Unresolved(name) | Target::External(name) => Cow::Borrowed(name),
     }
 }
 
@@ -153,17 +180,19 @@ impl<'a> DslRenderer<'a> {
 
         for sym in &self.index.symbols {
             if let Some(ref set) = filter_set
-                && !set.contains(&sym.file_idx) {
-                    continue;
-                }
+                && !set.contains(&sym.file_idx)
+            {
+                continue;
+            }
             if let Some(ref set) = kind_set
-                && !set.contains(&sym.kind) {
-                    continue;
-                }
+                && !set.contains(&sym.kind)
+            {
+                continue;
+            }
 
             if last_file != Some(sym.file_idx) {
                 if let Some(file) = self.index.files.get(sym.file_idx as usize) {
-                    out.push_str(&format!("FILES #{} {}\n", sym.file_idx, file.path));
+                    let _ = writeln!(out, "FILES #{} {}", sym.file_idx, file.path);
                 }
                 last_file = Some(sym.file_idx);
             }
@@ -189,7 +218,7 @@ pub fn render_files_only(index: &ProjectIndex, file_indices: &[u16]) -> String {
     out.push_str("FILES (#N = file ID — appears as \"# N\" in project_map output)\n");
     for &idx in file_indices {
         if let Some(file) = index.files.get(idx as usize) {
-            out.push_str(&format!("# {} {}\n", idx, file.path));
+            let _ = writeln!(out, "# {} {}", idx, file.path);
         }
     }
     out

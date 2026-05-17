@@ -11,8 +11,11 @@ pub struct RerankParams {
 
 impl Default for RerankParams {
     fn default() -> Self {
+        // bits=3 matches the bitpolar paper's "provably unbiased inner
+        // product" setting (ICLR 2026). projections=0 → with_params picks
+        // (2 * dim).max(32), the paper's lower bound.
         Self {
-            bits: 4,
+            bits: 3,
             projections: 0,
             seed: 42,
         }

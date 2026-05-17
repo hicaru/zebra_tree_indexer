@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::fmt::Write as _;
+
 use zti_ts_core::types::{Edge, EdgeKind, Target};
 
 use crate::model::ProjectIndex;
@@ -17,8 +20,18 @@ impl<'a> AsciiTreeRenderer<'a> {
             Some(s) => s,
             None => return format!("Symbol {} not found\n", id),
         };
-        out.push_str(&format!("{}#{} {} (callers)\n", sym.kind.short(), id, sym.qualified));
-        self.render_callers_recursive(id, max_depth, 0, &mut out, &mut std::collections::HashSet::new());
+        let _ = writeln!(out, "{}#{} {} (callers)", sym.kind.short(), id, sym.qualified);
+        let mut prefix = String::new();
+        let mut visited = HashSet::new();
+        self.recurse(
+            id,
+            max_depth,
+            0,
+            &mut out,
+            &mut prefix,
+            &mut visited,
+            Direction::Callers,
+        );
         out
     }
 
@@ -28,83 +41,127 @@ impl<'a> AsciiTreeRenderer<'a> {
             Some(s) => s,
             None => return format!("Symbol {} not found\n", id),
         };
-        out.push_str(&format!("{}#{} {} (callees)\n", sym.kind.short(), id, sym.qualified));
-        self.render_callees_recursive(id, max_depth, 0, &mut out, &mut std::collections::HashSet::new());
+        let _ = writeln!(out, "{}#{} {} (callees)", sym.kind.short(), id, sym.qualified);
+        let mut prefix = String::new();
+        let mut visited = HashSet::new();
+        self.recurse(
+            id,
+            max_depth,
+            0,
+            &mut out,
+            &mut prefix,
+            &mut visited,
+            Direction::Callees,
+        );
         out
     }
 
-    fn render_callers_recursive(
+    /// One recursive descent; direction selects the edge map and target field.
+    /// `prefix` is an accumulator passed down — each level pushes its own
+    /// segment and truncates on the way back, so we allocate zero strings per
+    /// visited node.
+    #[allow(clippy::too_many_arguments)]
+    fn recurse(
         &self,
         id: u32,
         max_depth: usize,
         depth: usize,
         out: &mut String,
-        visited: &mut std::collections::HashSet<u32>,
+        prefix: &mut String,
+        visited: &mut HashSet<u32>,
+        direction: Direction,
     ) {
         if depth >= max_depth || !visited.insert(id) {
             return;
         }
 
-        if let Some(edges) = self.index.reverse_edges.get(&id) {
-            let call_edges: Vec<&Edge> = edges.iter().filter(|e| e.kind == EdgeKind::Call).collect();
-            for (i, edge) in call_edges.iter().enumerate() {
-                let is_last = i == call_edges.len() - 1;
-                let prefix = if is_last { "└── " } else { "├── " };
-                let child_prefix = if is_last { "    " } else { "│   " };
+        // Forward and reverse maps were built once in `build_index` — using
+        // them (rather than scanning `index.edges`) keeps render O(fanout)
+        // per symbol instead of O(E).
+        let edges_for_id: &[Edge] = match direction {
+            Direction::Callers => self.index.reverse_edges.get(&id).map(Vec::as_slice).unwrap_or(&[]),
+            Direction::Callees => self.index.forward_edges.get(&id).map(Vec::as_slice).unwrap_or(&[]),
+        };
 
-                let indent = (0..depth).map(|_| child_prefix).collect::<String>();
-                out.push_str(&indent);
-                out.push_str(prefix);
-
-                if let Target::Resolved(from_id) = edge.to
-                    && let Some(sym) = self.index.symbols.get(from_id as usize) {
-                        out.push_str(&format!("{}#{} {}\n", sym.kind.short(), from_id, sym.qualified));
-                        self.render_callers_recursive(from_id, max_depth, depth + 1, out, visited);
-                    }
-            }
-        }
-    }
-
-    fn render_callees_recursive(
-        &self,
-        id: u32,
-        max_depth: usize,
-        depth: usize,
-        out: &mut String,
-        visited: &mut std::collections::HashSet<u32>,
-    ) {
-        if depth >= max_depth || !visited.insert(id) {
-            return;
-        }
-
-        let callees: Vec<&Edge> = self.index.edges
+        let total = edges_for_id
             .iter()
-            .filter(|e| e.from == id && e.kind == EdgeKind::Call)
-            .collect();
+            .filter(|e| e.kind == EdgeKind::Call)
+            .count();
+        if total == 0 {
+            return;
+        }
 
-        for (i, edge) in callees.iter().enumerate() {
-            let is_last = i == callees.len() - 1;
-            let prefix = if is_last { "└── " } else { "├── " };
-            let child_prefix = if is_last { "    " } else { "│   " };
+        for (i, edge) in edges_for_id
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Call)
+            .enumerate()
+        {
+            let is_last = i + 1 == total;
+            let branch = if is_last { "└── " } else { "├── " };
+            let child_segment = if is_last { "    " } else { "│   " };
 
-            let indent = (0..depth).map(|_| child_prefix).collect::<String>();
-            out.push_str(&indent);
             out.push_str(prefix);
+            out.push_str(branch);
 
-            match &edge.to {
-                Target::Resolved(to_id) => {
-                    if let Some(sym) = self.index.symbols.get(*to_id as usize) {
-                        out.push_str(&format!("{}#{} {}\n", sym.kind.short(), to_id, sym.qualified));
-                        self.render_callees_recursive(*to_id, max_depth, depth + 1, out, visited);
+            match direction {
+                Direction::Callers => {
+                    // reverse edges store the original caller as `Target::Resolved(edge.to)`.
+                    if let Target::Resolved(from_id) = edge.to {
+                        if let Some(sym) = self.index.symbols.get(from_id as usize) {
+                            let _ = writeln!(out, "{}#{} {}", sym.kind.short(), from_id, sym.qualified);
+                            let saved = prefix.len();
+                            prefix.push_str(child_segment);
+                            self.recurse(
+                                from_id,
+                                max_depth,
+                                depth + 1,
+                                out,
+                                prefix,
+                                visited,
+                                direction,
+                            );
+                            prefix.truncate(saved);
+                        } else {
+                            out.push('\n');
+                        }
+                    } else {
+                        out.push('\n');
                     }
                 }
-                Target::External(name) => {
-                    out.push_str(&format!("*{}\n", name));
-                }
-                Target::Unresolved(name) => {
-                    out.push_str(&format!("?{}\n", name));
-                }
+                Direction::Callees => match &edge.to {
+                    Target::Resolved(to_id) => {
+                        if let Some(sym) = self.index.symbols.get(*to_id as usize) {
+                            let _ = writeln!(out, "{}#{} {}", sym.kind.short(), to_id, sym.qualified);
+                            let saved = prefix.len();
+                            prefix.push_str(child_segment);
+                            self.recurse(
+                                *to_id,
+                                max_depth,
+                                depth + 1,
+                                out,
+                                prefix,
+                                visited,
+                                direction,
+                            );
+                            prefix.truncate(saved);
+                        } else {
+                            out.push('\n');
+                        }
+                    }
+                    Target::External(name) => {
+                        let _ = writeln!(out, "*{}", name);
+                    }
+                    Target::Unresolved(name) => {
+                        let _ = writeln!(out, "?{}", name);
+                    }
+                },
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum Direction {
+    Callers,
+    Callees,
 }

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::Result;
 
-use zti_dsl::{EdgeKind, Kind, ProjectIndex, Target, LEGEND_LINE};
+use zti_dsl::{EdgeKind, ProjectIndex, Target, LEGEND_LINE};
 use zti_dsl::chunking::Chunk;
 use zti_embed::EmbedEngine;
 
@@ -214,5 +214,90 @@ impl<'a> ResponseRenderer<'a> {
             chunks,
             chunk_by_sym,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zti_dsl::{Kind, ProjectIndex, Symbol};
+
+    fn mk_chunk(sym_id: u32) -> Chunk {
+        Chunk {
+            file: "src/foo.rs".to_string(),
+            start_line: 1,
+            end_line: 2,
+            sym_id,
+            header: format!("f#{}", sym_id),
+            body: "body".to_string(),
+            qualified: format!("foo::s{}", sym_id),
+            kind: Kind::Function,
+        }
+    }
+
+    fn mk_sym(id: u32, parent: Option<u32>) -> Symbol {
+        Symbol {
+            id,
+            kind: Kind::Function,
+            name: format!("s{}", id),
+            qualified: format!("foo::s{}", id),
+            file_idx: 0,
+            line: 1,
+            end_line: 2,
+            signature: String::new(),
+            doc: None,
+            base_classes: Vec::new(),
+            parent,
+            traits: Vec::new(),
+        }
+    }
+
+    fn mk_index(symbols: Vec<Symbol>) -> ProjectIndex {
+        ProjectIndex {
+            symbols,
+            edges: Vec::new(),
+            files: Vec::new(),
+            qualified_map: HashMap::new(),
+            reverse_edges: HashMap::new(),
+            forward_edges: HashMap::new(),
+            root: String::new(),
+        }
+    }
+
+    #[test]
+    fn diversify_penalizes_repeat_parents() {
+        // Three siblings under parent=99 + one orphan. The ranked input puts
+        // the siblings first with identical raw scores; diversify must demote
+        // the 2nd and 3rd sibling, letting the orphan rise.
+        let chunks = vec![mk_chunk(1), mk_chunk(2), mk_chunk(3), mk_chunk(10)];
+        let symbols = vec![
+            mk_sym(0, None), // padding so id == index
+            mk_sym(1, Some(99)),
+            mk_sym(2, Some(99)),
+            mk_sym(3, Some(99)),
+            mk_sym(4, None),
+            mk_sym(5, None),
+            mk_sym(6, None),
+            mk_sym(7, None),
+            mk_sym(8, None),
+            mk_sym(9, None),
+            mk_sym(10, None),
+        ];
+        let index = mk_index(symbols);
+
+        let ranked = vec![(0, 1.0), (1, 1.0), (2, 1.0), (3, 0.6)];
+        let out = diversify(ranked, &chunks, &index, 4);
+
+        // First sibling keeps 1.0; second & third get penalty applied; orphan
+        // at 0.6 stays unchanged because it has no parent.
+        let scores: HashMap<usize, f32> = out.iter().copied().collect();
+        let s0 = scores[&0];
+        let s1 = scores[&1];
+        let s2 = scores[&2];
+        let s3 = scores[&3];
+        assert!((s0 - 1.0).abs() < 1e-6, "first sibling untouched, got {}", s0);
+        assert!(s1 < s0, "second sibling should be penalized");
+        assert!(s2 < s1, "third sibling penalized more than second");
+        assert!((s3 - 0.6).abs() < 1e-6, "orphan untouched");
     }
 }

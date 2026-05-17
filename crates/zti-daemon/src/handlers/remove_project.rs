@@ -1,5 +1,5 @@
 use zti_protocol::request::RemoveProjectReq;
-use zti_protocol::response::{ErrorBody, Response};
+use zti_protocol::response::Response;
 
 use crate::state::DaemonState;
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use zti_ts_core::{Edge, EdgeKind, Kind, Symbol, Target};
+use zti_ts_core::{Edge, Symbol};
 use zti_tree_sitter::Language;
 
 #[derive(Debug, Clone)]

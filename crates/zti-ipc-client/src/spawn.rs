@@ -32,8 +32,6 @@ fn spawn_daemon() -> Result<()> {
     let log_path = paths::daemon_log()?;
     let log_file = std::fs::File::create(&log_path)?;
 
-    let _pid_path = paths::daemon_pid()?;
-
     std::process::Command::new(&daemon_path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

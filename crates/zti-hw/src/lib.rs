@@ -2,9 +2,12 @@ use ort::ep::ExecutionProviderDispatch;
 
 pub use zti_hw_core::{BackendKind, Capability, Device, Hardware};
 
-/// Devices whose backend crates are linked into this build.
+/// Devices whose backend crates are linked into this build. The Vec init +
+/// cfg-gated pushes is intentional — array literals don't support per-element
+/// `#[cfg(..)]` cleanly.
+#[allow(clippy::vec_init_then_push)]
 pub fn supported_devices() -> Vec<Device> {
-    let mut devs = Vec::new();
+    let mut devs = Vec::with_capacity(4);
     #[cfg(feature = "metal")]
     devs.push(Device::Metal);
     #[cfg(feature = "cuda")]

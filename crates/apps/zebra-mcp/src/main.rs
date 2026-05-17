@@ -1,11 +1,12 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use rmcp::ServiceExt;
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
-use rmcp::model::{ServerCapabilities, ServerInfo};
-use rmcp::tool;
+use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
+use rmcp::{tool, ErrorData, ServiceExt};
 use tracing_subscriber::EnvFilter;
 
 use zti_ipc_client::Client;
@@ -61,6 +62,9 @@ pub struct ProjectRootParam {
 
 #[derive(Debug, Clone)]
 struct ZebraMcpServer {
+    // Populated/consumed by `#[rmcp::tool_router]` macro expansion; dead-code
+    // analysis can't see the macro reads.
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
 
@@ -71,89 +75,130 @@ impl ZebraMcpServer {
         }
     }
 
-    async fn client(&self) -> Result<Client> {
-        let mut client = Client::connect(Duration::from_secs(10)).await?;
-        client.handshake().await?;
+    async fn client(&self) -> Result<Client, ErrorData> {
+        let mut client = Client::connect(Duration::from_secs(10))
+            .await
+            .map_err(daemon_err)?;
+        client.handshake().await.map_err(daemon_err)?;
         Ok(client)
     }
+}
+
+/// Wrap a successful tool body text into a `CallToolResult`.
+fn ok_text(text: String) -> CallToolResult {
+    CallToolResult::success(vec![Content::text(text)])
+}
+
+/// Daemon I/O failure (couldn't connect, framing error, etc.).
+fn daemon_err(e: impl std::fmt::Display) -> ErrorData {
+    ErrorData::internal_error(format!("daemon I/O: {}", e), None)
+}
+
+/// Daemon returned a structured `ErrorBody` — propagate as MCP error.
+fn body_err(e: &ErrorBody) -> ErrorData {
+    ErrorData::invalid_params(e.message.clone(), None)
+}
+
+/// Wrong `Response` variant returned — protocol bug.
+fn unexpected_response() -> ErrorData {
+    ErrorData::internal_error("daemon returned unexpected response variant", None)
 }
 
 #[rmcp::tool_router]
 impl ZebraMcpServer {
     #[tool(description = "Returns the file tree with numeric #IDs")]
-    async fn file_tree(&self, Parameters(params): Parameters<FileTreeParams>) -> String {
-        async {
-            let mut client = self.client().await?;
-            let resp = client.request(Request::DslFileTree(FileTreeReq {
+    async fn file_tree(
+        &self,
+        Parameters(params): Parameters<FileTreeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let resp = client
+            .request(Request::DslFileTree(FileTreeReq {
                 project_root: params.project_root,
                 path_glob: params.path_glob,
-            })).await?;
-            match resp {
-                Response::DslFileTree(Ok(body)) => Ok(body.text),
-                Response::DslFileTree(Err(e)) => Err(anyhow::anyhow!("{}", e.message)),
-                _ => Err(anyhow::anyhow!("unexpected response")),
-            }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+            }))
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::DslFileTree(Ok(body)) => Ok(ok_text(body.text)),
+            Response::DslFileTree(Err(e)) => Err(body_err(&e)),
+            _ => Err(unexpected_response()),
+        }
     }
 
     #[tool(description = "Returns the DSL symbol map for a language")]
-    async fn project_map(&self, Parameters(params): Parameters<ProjectMapParams>) -> String {
-        async {
-            let mut client = self.client().await?;
-            let resp = client.request(Request::DslProjectMap(ProjectMapReq {
+    async fn project_map(
+        &self,
+        Parameters(params): Parameters<ProjectMapParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let resp = client
+            .request(Request::DslProjectMap(ProjectMapReq {
                 project_root: params.project_root,
                 language: params.language,
                 path_glob: params.path_glob,
                 kinds: params.kinds,
                 max_tokens: params.max_tokens,
-            })).await?;
-            match resp {
-                Response::DslProjectMap(Ok(body)) => Ok(body.text),
-                Response::DslProjectMap(Err(e)) => Err(anyhow::anyhow!("{}", e.message)),
-                _ => Err(anyhow::anyhow!("unexpected response")),
-            }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+            }))
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::DslProjectMap(Ok(body)) => Ok(ok_text(body.text)),
+            Response::DslProjectMap(Err(e)) => Err(body_err(&e)),
+            _ => Err(unexpected_response()),
+        }
     }
 
     #[tool(description = "Trace dependency chains for a symbol")]
-    async fn dep_tree(&self, Parameters(params): Parameters<DepTreeParams>) -> String {
-        async {
-            let mut client = self.client().await?;
-            let resp = client.request(Request::DslDepTree(DepTreeReq {
+    async fn dep_tree(
+        &self,
+        Parameters(params): Parameters<DepTreeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let resp = client
+            .request(Request::DslDepTree(DepTreeReq {
                 project_root: params.project_root,
                 symbol_id: params.symbol_id,
                 direction: params.direction,
                 depth: params.depth,
-            })).await?;
-            match resp {
-                Response::DslDepTree(Ok(body)) => Ok(body.text),
-                Response::DslDepTree(Err(e)) => Err(anyhow::anyhow!("{}", e.message)),
-                _ => Err(anyhow::anyhow!("unexpected response")),
-            }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+            }))
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::DslDepTree(Ok(body)) => Ok(ok_text(body.text)),
+            Response::DslDepTree(Err(e)) => Err(body_err(&e)),
+            _ => Err(unexpected_response()),
+        }
     }
 
     #[tool(description = "Read source code of a symbol")]
-    async fn symbol_body(&self, Parameters(params): Parameters<SymbolBodyParams>) -> String {
-        async {
-            let mut client = self.client().await?;
-            let resp = client.request(Request::DslSymbolBody(SymbolBodyReq {
+    async fn symbol_body(
+        &self,
+        Parameters(params): Parameters<SymbolBodyParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let resp = client
+            .request(Request::DslSymbolBody(SymbolBodyReq {
                 project_root: params.project_root,
                 symbol_id: params.symbol_id,
-            })).await?;
-            match resp {
-                Response::DslSymbolBody(Ok(body)) => Ok(body.text),
-                Response::DslSymbolBody(Err(e)) => Err(anyhow::anyhow!("{}", e.message)),
-                _ => Err(anyhow::anyhow!("unexpected response")),
-            }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+            }))
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::DslSymbolBody(Ok(body)) => Ok(ok_text(body.text)),
+            Response::DslSymbolBody(Err(e)) => Err(body_err(&e)),
+            _ => Err(unexpected_response()),
+        }
     }
 
     #[tool(description = "Search for code semantically")]
-    async fn search(&self, Parameters(params): Parameters<SearchParams>) -> String {
-        async {
-            let mut client = self.client().await?;
-            let resp = client.request(Request::Search(SearchReq {
+    async fn search(
+        &self,
+        Parameters(params): Parameters<SearchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let resp = client
+            .request(Request::Search(SearchReq {
                 project_root: params.project_root,
                 query: params.query,
                 limit: params.limit.unwrap_or(5),
@@ -161,139 +206,189 @@ impl ZebraMcpServer {
                 languages: None,
                 path_glob: None,
                 refresh_index: false,
-            })).await?;
-            match resp {
-                Response::Search(Ok(results)) => {
-                    let mut out = String::new();
-                    for (i, hit) in results.hits.iter().enumerate() {
-                        out.push_str(&format!("#{} {:.4} {} ({}:{}-{})\n",
-                            i + 1, hit.score, hit.symbol_qualified,
-                            hit.file_path, hit.start_line, hit.end_line));
-                    }
-                    Ok(out)
+            }))
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::Search(Ok(results)) => {
+                let mut out = String::new();
+                use std::fmt::Write as _;
+                for (i, hit) in results.hits.iter().enumerate() {
+                    let _ = writeln!(
+                        out,
+                        "#{} {:.4} {} ({}:{}-{})",
+                        i + 1,
+                        hit.score,
+                        hit.symbol_qualified,
+                        hit.file_path,
+                        hit.start_line,
+                        hit.end_line
+                    );
                 }
-                Response::Search(Err(e)) => Err(anyhow::anyhow!("{}", e.message)),
-                _ => Err(anyhow::anyhow!("unexpected response")),
+                Ok(ok_text(out))
             }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+            Response::Search(Err(e)) => Err(body_err(&e)),
+            _ => Err(unexpected_response()),
+        }
     }
 
     #[tool(description = "Index a project")]
-    async fn index(&self, Parameters(params): Parameters<IndexParams>) -> String {
-        async {
-            let mut client = self.client().await?;
-            // Index streams IndexProgress frames; in MCP we just drain them
-            // (no progressToken plumbing yet) and report the terminal stats.
-            let resp = client
-                .request_streaming(
-                    Request::Index(IndexReq {
-                        project_root: params.project_root,
-                        refresh: params.refresh.unwrap_or(false),
-                    }),
-                    |_progress| {},
-                )
-                .await?;
-            match resp {
-                Response::Index(Ok(stats)) => Ok(format!(
-                    "Indexed {} chunks in {} files ({:.1}s)",
-                    stats.total_chunks, stats.total_files, stats.duration_ms as f64 / 1000.0
-                )),
-                Response::Index(Err(e)) => Err(anyhow::anyhow!("{}", e.message)),
-                _ => Err(anyhow::anyhow!("unexpected response")),
-            }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+    async fn index(
+        &self,
+        Parameters(params): Parameters<IndexParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        // Progress frames are drained into a counter; we report the totals
+        // alongside the terminal stats. Future work (N11 follow-up): forward
+        // these to the MCP client via `Peer::notify_progress` when the caller
+        // supplied a `progressToken` in the request meta.
+        let progress_count = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&progress_count);
+        let resp = client
+            .request_streaming(
+                Request::Index(IndexReq {
+                    project_root: params.project_root,
+                    refresh: params.refresh.unwrap_or(false),
+                }),
+                move |frame| {
+                    if let Response::IndexProgress(_) = frame {
+                        counter.fetch_add(1, Ordering::Relaxed);
+                    }
+                },
+            )
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::Index(Ok(stats)) => Ok(ok_text(format!(
+                "Indexed {} chunks in {} files ({:.1}s, {} progress frames)",
+                stats.total_chunks,
+                stats.total_files,
+                stats.duration_ms as f64 / 1000.0,
+                progress_count.load(Ordering::Relaxed),
+            ))),
+            Response::Index(Err(e)) => Err(body_err(&e)),
+            _ => Err(unexpected_response()),
+        }
     }
 
     #[tool(description = "Show project status")]
-    async fn project_status(&self, Parameters(params): Parameters<ProjectRootParam>) -> String {
-        async {
-            let mut client = self.client().await?;
-            let resp = client.request(Request::ProjectStatus(ProjectStatusReq {
+    async fn project_status(
+        &self,
+        Parameters(params): Parameters<ProjectRootParam>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let resp = client
+            .request(Request::ProjectStatus(ProjectStatusReq {
                 project_root: params.project_root,
-            })).await?;
-            match resp {
-                Response::ProjectStatus(Ok(s)) => Ok(format!(
-                    "Root: {}\nModel: {} (dim={})\nChunks: {}\nFiles: {}",
-                    s.project_root, s.model_id, s.model_dim, s.total_chunks, s.total_files
-                )),
-                Response::ProjectStatus(Err(e)) => Err(anyhow::anyhow!("{}", e.message)),
-                _ => Err(anyhow::anyhow!("unexpected response")),
-            }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+            }))
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::ProjectStatus(Ok(s)) => Ok(ok_text(format!(
+                "Root: {}\nModel: {} (dim={})\nChunks: {}\nFiles: {}",
+                s.project_root, s.model_id, s.model_dim, s.total_chunks, s.total_files
+            ))),
+            Response::ProjectStatus(Err(e)) => Err(body_err(&e)),
+            _ => Err(unexpected_response()),
+        }
     }
 
     #[tool(description = "Show daemon status")]
-    async fn daemon_status(&self) -> String {
-        async {
-            let mut client = self.client().await?;
-            let resp = client.request(Request::DaemonStatus).await?;
-            match resp {
-                Response::DaemonStatus(s) => Ok(format!(
-                    "Uptime: {}s\nProjects: {}\nModel: {}\nDevice: {}",
-                    s.uptime_secs, s.projects_loaded, s.model_id, s.device
-                )),
-                _ => Err(anyhow::anyhow!("unexpected response")),
-            }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+    async fn daemon_status(&self) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let resp = client
+            .request(Request::DaemonStatus)
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::DaemonStatus(s) => Ok(ok_text(format!(
+                "Uptime: {}s\nProjects: {}\nModel: {}\nDevice: {}",
+                s.uptime_secs, s.projects_loaded, s.model_id, s.device
+            ))),
+            _ => Err(unexpected_response()),
+        }
     }
 
     #[tool(description = "Remove a project")]
-    async fn remove_project(&self, Parameters(params): Parameters<IndexParams>) -> String {
-        async {
-            let mut client = self.client().await?;
-            let resp = client.request(Request::RemoveProject(RemoveProjectReq {
+    async fn remove_project(
+        &self,
+        Parameters(params): Parameters<IndexParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let resp = client
+            .request(Request::RemoveProject(RemoveProjectReq {
                 project_root: params.project_root,
-            })).await?;
-            match resp {
-                Response::RemoveProject(Ok(())) => Ok("Project removed.".to_string()),
-                Response::RemoveProject(Err(e)) => Err(anyhow::anyhow!("{}", e.message)),
-                _ => Err(anyhow::anyhow!("unexpected response")),
-            }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+            }))
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::RemoveProject(Ok(())) => Ok(ok_text("Project removed.".to_string())),
+            Response::RemoveProject(Err(e)) => Err(body_err(&e)),
+            _ => Err(unexpected_response()),
+        }
     }
 
     #[tool(description = "Stop the daemon")]
-    async fn stop(&self) -> String {
-        async {
-            let mut client = self.client().await?;
-            let _ = client.request(Request::Stop).await?;
-            Ok::<String, anyhow::Error>("Daemon stopped.".to_string())
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+    async fn stop(&self) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let _ = client
+            .request(Request::Stop)
+            .await
+            .map_err(daemon_err)?;
+        Ok(ok_text("Daemon stopped.".to_string()))
     }
 
     #[tool(description = "Run diagnostics")]
-    async fn doctor(&self, Parameters(params): Parameters<ProjectRootParam>) -> String {
-        async {
-            let mut client = self.client().await?;
-            let resp = client.request(Request::Doctor(DoctorReq {
+    async fn doctor(
+        &self,
+        Parameters(params): Parameters<ProjectRootParam>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let resp = client
+            .request(Request::Doctor(DoctorReq {
                 project_root: params.project_root,
-            })).await?;
-            match resp {
-                Response::Doctor(Ok(r)) => Ok(format!(
-                    "Model: {} ({})\nDB: {} ({})\nDevice: {}",
-                    r.model_path, if r.model_ok { "OK" } else { "MISSING" },
-                    r.db_path, if r.db_ok { "OK" } else { "MISSING" },
-                    r.device
-                )),
-                Response::Doctor(Err(e)) => Err(anyhow::anyhow!("{}", e.message)),
-                _ => Err(anyhow::anyhow!("unexpected response")),
+            }))
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::Doctor(Ok(r)) => {
+                use std::fmt::Write as _;
+                let mut out = String::new();
+                let _ = writeln!(out, "Device: {}", r.device);
+                for check in &r.checks {
+                    let marker = match check.status {
+                        CheckStatus::Ok => "OK",
+                        CheckStatus::Warn => "WARN",
+                        CheckStatus::Err => "ERR",
+                    };
+                    let _ = writeln!(out, "[{}] {}: {}", marker, check.name, check.message);
+                }
+                Ok(ok_text(out))
             }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+            Response::Doctor(Err(e)) => Err(body_err(&e)),
+            _ => Err(unexpected_response()),
+        }
     }
 
     #[tool(description = "Show daemon environment")]
-    async fn daemon_env(&self) -> String {
-        async {
-            let mut client = self.client().await?;
-            let resp = client.request(Request::DaemonEnv).await?;
-            match resp {
-                Response::DaemonEnv(env) => Ok(format!(
-                    "Data: {}\nSocket: {}\nModel: {}\nDevice: {}\nCPUs: {}\nRAM: {}MB",
-                    env.data_dir, env.socket_path, env.model_id, env.device, env.cpus, env.mem_total_mb
-                )),
-                _ => Err(anyhow::anyhow!("unexpected response")),
-            }
-        }.await.unwrap_or_else(|e| format!("Error: {}", e))
+    async fn daemon_env(&self) -> Result<CallToolResult, ErrorData> {
+        let mut client = self.client().await?;
+        let resp = client
+            .request(Request::DaemonEnv)
+            .await
+            .map_err(daemon_err)?;
+        match resp {
+            Response::DaemonEnv(env) => Ok(ok_text(format!(
+                "Data: {}\nSocket: {}\nModel: {}\nDevice: {}\nCPUs: {}\nRAM: {}MB",
+                env.data_dir,
+                env.socket_path,
+                env.model_id,
+                env.device,
+                env.cpus,
+                env.mem_total_mb
+            ))),
+            _ => Err(unexpected_response()),
+        }
     }
 }
 
@@ -301,7 +396,13 @@ impl ZebraMcpServer {
 impl rmcp::ServerHandler for ZebraMcpServer {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
-        info.instructions = Some("Zebra Tree Indexer MCP server. Use file_tree, project_map, dep_tree, symbol_body for DSL graph. Use search, index, project_status, daemon_status, remove_project, stop, doctor, daemon_env for daemon operations.".into());
+        info.instructions = Some(
+            "Zebra Tree Indexer MCP server. Use file_tree, project_map, dep_tree, \
+             symbol_body for DSL graph. Use search, index, project_status, \
+             daemon_status, remove_project, stop, doctor, daemon_env for daemon \
+             operations."
+                .into(),
+        );
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info
     }
@@ -311,8 +412,7 @@ impl rmcp::ServerHandler for ZebraMcpServer {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("warn")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
         )
         .with_writer(std::io::stderr)
         .with_ansi(false)

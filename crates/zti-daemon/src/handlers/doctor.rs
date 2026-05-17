@@ -1,62 +1,131 @@
+use std::path::Path;
+
+use fs2::available_space;
+
 use zti_protocol::request::DoctorReq;
-use zti_protocol::response::{DoctorReport, Response};
+use zti_protocol::response::{CheckStatus, DoctorCheck, DoctorReport, Response};
 
 use crate::state::DaemonState;
 
 pub async fn handle(req: &DoctorReq, state: &DaemonState) -> Response {
-    let model_path = state.engine.profile().onnx_path.display().to_string();
-    let model_ok = std::path::Path::new(&model_path).exists();
+    let mut checks: Vec<DoctorCheck> = Vec::with_capacity(8);
 
-    let model_probe = if model_ok {
-        match state.engine.embed_batch_async(&["hello"]).await {
-            Ok(embs) => {
-                let dim_ok = embs.first().map(|e| e.len() == state.engine.dim()).unwrap_or(false);
-                dim_ok
-            }
-            Err(_) => false,
-        }
+    // -- model_load: ONNX session present AND a real embed returns the
+    //    expected dim.
+    let onnx_path = state.engine.profile().onnx_path.clone();
+    if !onnx_path.exists() {
+        checks.push(error_check(
+            "model_load",
+            format!("ONNX file missing at {}", onnx_path.display()),
+        ));
     } else {
-        false
-    };
+        match state.engine.embed_batch_async(&["hello"]).await {
+            Ok(embs) => match embs.first() {
+                Some(emb) if emb.len() == state.engine.dim() => checks.push(ok_check(
+                    "model_load",
+                    format!("dim={} via {}", emb.len(), onnx_path.display()),
+                )),
+                Some(emb) => checks.push(error_check(
+                    "model_load",
+                    format!("dim mismatch: profile={} probe={}", state.engine.dim(), emb.len()),
+                )),
+                None => checks.push(error_check("model_load", "probe returned no embedding")),
+            },
+            Err(e) => checks.push(error_check("model_load", format!("embed probe failed: {}", e))),
+        }
+    }
 
-    let (db_ok, db_path, chunk_count) = match &req.project_root {
-        Some(root) => {
-            let pid = zti_common::ids::project_id(std::path::Path::new(root));
-            let db_path = zti_common::paths::project_dir(&pid)
-                .map(|p| p.join("lance").display().to_string())
-                .unwrap_or_default();
-            let path_exists = std::path::Path::new(&db_path).exists();
-
-            let count = if path_exists {
-                match state.load_or_open(root).await {
-                    Ok(proj) => {
-                        let table = proj.db.chunks_table(state.engine.dim()).await;
-                        match table {
-                            Ok(t) => t.len().await.unwrap_or(0),
-                            Err(_) => 0,
-                        }
-                    }
-                    Err(_) => 0,
+    // -- data_dir_writable: probe by writing a tiny file under data_dir and
+    //    deleting it. Catches read-only filesystems, broken permissions, etc.
+    match zti_common::paths::data_dir() {
+        Ok(dir) => {
+            let probe = dir.join(".doctor-write-probe");
+            match std::fs::write(&probe, b"ok") {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&probe);
+                    checks.push(ok_check("data_dir_writable", dir.display().to_string()));
                 }
-            } else {
-                0
-            };
+                Err(e) => checks.push(error_check(
+                    "data_dir_writable",
+                    format!("{}: {}", dir.display(), e),
+                )),
+            }
 
-            (path_exists && count > 0, db_path, count)
+            // -- disk_free: rough warning threshold = 1 GiB.
+            match available_space(&dir) {
+                Ok(bytes) => {
+                    let gib = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                    let status = if gib < 1.0 { CheckStatus::Warn } else { CheckStatus::Ok };
+                    checks.push(DoctorCheck {
+                        name: "disk_free_gib".to_string(),
+                        status,
+                        message: format!("{:.2} GiB free at {}", gib, dir.display()),
+                    });
+                }
+                Err(e) => checks.push(error_check("disk_free_gib", e.to_string())),
+            }
         }
-        None => {
-            let db_path = zti_common::paths::data_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            (std::path::Path::new(&db_path).exists(), db_path, 0)
-        }
-    };
+        Err(e) => checks.push(error_check("data_dir_writable", e.to_string())),
+    }
 
+    // -- per-project DB probes: db_open, chunks_count, files_count.
+    if let Some(root) = req.project_root.as_deref() {
+        let pid = zti_common::ids::project_id(Path::new(root));
+        let db_path = match zti_common::paths::project_dir(&pid) {
+            Ok(p) => p.join("lance"),
+            Err(e) => {
+                checks.push(error_check("db_open", e.to_string()));
+                return finalize(&state.hardware.device, checks);
+            }
+        };
+
+        match state.load_or_open(root).await {
+            Ok(project) => {
+                checks.push(ok_check("db_open", db_path.display().to_string()));
+                match project.db.chunks_table(state.engine.dim()).await {
+                    Ok(t) => match t.len().await {
+                        Ok(n) => checks.push(ok_check("chunks_count", n.to_string())),
+                        Err(e) => checks.push(error_check("chunks_count", e.to_string())),
+                    },
+                    Err(e) => checks.push(error_check("chunks_count", e.to_string())),
+                }
+                match project.db.files_table().await {
+                    Ok(t) => match t.len().await {
+                        Ok(n) => checks.push(ok_check("files_count", n.to_string())),
+                        Err(e) => checks.push(error_check("files_count", e.to_string())),
+                    },
+                    Err(e) => checks.push(error_check("files_count", e.to_string())),
+                }
+            }
+            Err(e) => checks.push(error_check(
+                "db_open",
+                format!("{}: {}", db_path.display(), e),
+            )),
+        }
+    }
+
+    finalize(&state.hardware.device, checks)
+}
+
+fn finalize(device: &zti_hw::Device, checks: Vec<DoctorCheck>) -> Response {
     Response::Doctor(Ok(DoctorReport {
-        model_ok: model_ok && model_probe,
-        model_path,
-        db_ok,
-        db_path,
-        device: state.hardware.device.as_str().to_string(),
+        device: device.as_str().to_string(),
+        checks,
     }))
+}
+
+fn ok_check(name: &str, message: impl Into<String>) -> DoctorCheck {
+    DoctorCheck {
+        name: name.to_string(),
+        status: CheckStatus::Ok,
+        message: message.into(),
+    }
+}
+
+fn error_check(name: &str, message: impl Into<String>) -> DoctorCheck {
+    DoctorCheck {
+        name: name.to_string(),
+        status: CheckStatus::Err,
+        message: message.into(),
+    }
 }

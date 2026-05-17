@@ -1,37 +1,26 @@
 use std::sync::Arc;
 
 use zti_protocol::request::FileTreeReq;
-use zti_protocol::response::{ErrorBody, FileTreeBody, Response};
+use zti_protocol::response::{FileTreeBody, Response};
 
-use crate::state::DaemonState;
+use crate::handlers::with_project;
+use crate::state::{DaemonState, LoadedProject};
 
 pub async fn handle(req: &FileTreeReq, state: &DaemonState) -> Response {
-    let project = match state.load_or_open(&req.project_root).await {
-        Ok(p) => p,
-        Err(e) => {
-            return Response::DslFileTree(Err(ErrorBody {
-                message: e.to_string(),
-            }));
-        }
-    };
-
-    let index = match ensure_dsl_index(&project, &req.project_root).await {
-        Ok(idx) => idx,
-        Err(e) => {
-            return Response::DslFileTree(Err(ErrorBody {
-                message: e.to_string(),
-            }));
-        }
-    };
-
-    let file_indices: Vec<u16> = (0..index.files.len() as u16).collect();
-    let text = zti_dsl::render::dsl::render_files_only(&index, &file_indices);
-
-    Response::DslFileTree(Ok(FileTreeBody { text }))
+    let project_root = req.project_root.clone();
+    let result = with_project(state, &req.project_root, |project| async move {
+        let index = ensure_dsl_index(&project, &project_root).await?;
+        let file_indices: Vec<u16> = (0..index.files.len() as u16).collect();
+        Ok(FileTreeBody {
+            text: zti_dsl::render::dsl::render_files_only(&index, &file_indices),
+        })
+    })
+    .await;
+    Response::DslFileTree(result)
 }
 
 pub async fn ensure_dsl_index(
-    project: &crate::state::LoadedProject,
+    project: &LoadedProject,
     root: &str,
 ) -> anyhow::Result<Arc<zti_dsl::ProjectIndex>> {
     {

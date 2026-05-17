@@ -6,7 +6,7 @@ use tracing_subscriber::EnvFilter;
 
 use zti_dsl::render::dsl::{DslRenderer, render_files_only};
 use zti_dsl::render::tree::AsciiTreeRenderer;
-use zti_tree_sitter::Language;
+use zti_tree_sitter::{parse_kinds, parse_language};
 
 #[derive(Parser)]
 #[command(name = "zebra-dsl", version, about = "DSL graph dump for debugging")]
@@ -99,27 +99,11 @@ fn main() -> Result<()> {
             let file = index.files.get(sym.file_idx as usize)
                 .ok_or_else(|| anyhow::anyhow!("File not found for symbol {}", id))?;
             let content = std::fs::read_to_string(&file.path)?;
-            let lines: Vec<&str> = content.lines().collect();
-            let start = (sym.line as usize).saturating_sub(1);
-            let end = (sym.end_line as usize).min(lines.len());
+            let range = zti_common::line_byte_range(&content, sym.line, sym.end_line);
             println!("// File: {} | Lines: {}-{}", file.path, sym.line, sym.end_line);
-            println!("{}", lines[start..end].join("\n"));
+            println!("{}", &content[range]);
         }
     }
 
     Ok(())
-}
-
-fn parse_language(s: &str) -> Option<Language> {
-    match s.to_ascii_lowercase().as_str() {
-        "rs" | "rust" => Some(Language::Rust),
-        "ts" | "tsx" | "typescript" => Some(Language::Ts),
-        "dart" => Some(Language::Dart),
-        "sol" | "solidity" => Some(Language::Solidity),
-        _ => None,
-    }
-}
-
-fn parse_kinds(kinds: &[String]) -> Vec<zti_ts_core::types::Kind> {
-    kinds.iter().filter_map(|k| zti_ts_core::types::Kind::from_str_lossy(k)).collect()
 }
