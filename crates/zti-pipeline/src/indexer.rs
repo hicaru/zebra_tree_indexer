@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
 use arrow::array::{
@@ -256,7 +258,9 @@ pub async fn index_project(
 
     upsert_files(&files_table, &snapshots, &need_reindex).await?;
 
-    upsert_project(db, &pid, root_str, total_embedded, snapshots.len(), engine).await?;
+    let languages: HashSet<Language> = snapshots.values().map(|s| s.language).collect();
+    let languages: Vec<&Language> = languages.iter().collect();
+    upsert_project(db, &pid, root_str, total_embedded, snapshots.len(), &languages, engine).await?;
 
     reporter.finish_with_message(&format!("embedded {} passages", total_embedded));
 
@@ -327,6 +331,7 @@ async fn upsert_project(
     root: std::borrow::Cow<'_, str>,
     total_chunks: usize,
     total_files: usize,
+    languages: &[&Language],
     engine: &EmbedEngine,
 ) -> Result<()> {
     let projects_table = db.projects_table().await?;
@@ -338,25 +343,32 @@ async fn upsert_project(
     let mut project_id_builder = FixedSizeBinaryBuilder::new(32);
     project_id_builder.append_value(pid)?;
 
+    let lang_values = StringArray::from(
+        languages.iter().map(|l| l.as_str()).collect::<Vec<_>>(),
+    );
+    let languages_arr = arrow::array::ListArray::new(
+        Arc::new(arrow::datatypes::Field::new(
+            "item",
+            arrow::datatypes::DataType::Utf8,
+            false,
+        )),
+        arrow::buffer::OffsetBuffer::from_lengths([languages.len()]),
+        Arc::new(lang_values),
+        None,
+    );
+
     let record = RecordBatch::try_new(
-        std::sync::Arc::new(zti_store::schema::projects_schema()),
+        Arc::new(zti_store::schema::projects_schema()),
         vec![
-            std::sync::Arc::new(project_id_builder.finish()),
-            std::sync::Arc::new(StringArray::from(vec![root.to_string()])),
-            std::sync::Arc::new(arrow::array::ListArray::new_null(
-                std::sync::Arc::new(arrow::datatypes::Field::new(
-                    "item",
-                    arrow::datatypes::DataType::Utf8,
-                    false,
-                )),
-                1,
-            )),
-            std::sync::Arc::new(StringArray::from(vec![engine.profile().model_id.clone()])),
-            std::sync::Arc::new(UInt32Array::from(vec![engine.dim() as u32])),
-            std::sync::Arc::new(UInt64Array::from(vec![total_chunks as u64])),
-            std::sync::Arc::new(UInt64Array::from(vec![total_files as u64])),
-            std::sync::Arc::new(UInt64Array::from(vec![now_ns])),
-            std::sync::Arc::new(UInt64Array::from(vec![now_ns])),
+            Arc::new(project_id_builder.finish()),
+            Arc::new(StringArray::from(vec![root.to_string()])),
+            Arc::new(languages_arr),
+            Arc::new(StringArray::from(vec![engine.profile().model_id.clone()])),
+            Arc::new(UInt32Array::from(vec![engine.dim() as u32])),
+            Arc::new(UInt64Array::from(vec![total_chunks as u64])),
+            Arc::new(UInt64Array::from(vec![total_files as u64])),
+            Arc::new(UInt64Array::from(vec![now_ns])),
+            Arc::new(UInt64Array::from(vec![now_ns])),
         ],
     )?;
 

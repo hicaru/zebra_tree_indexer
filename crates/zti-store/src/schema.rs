@@ -36,7 +36,7 @@ pub fn files_schema() -> Schema {
         Field::new(
             "chunk_ids",
             DataType::List(Arc::new(Field::new("item", DataType::FixedSizeBinary(16), false))),
-            false,
+            true,
         ),
         Field::new("indexed_at_ns", DataType::UInt64, false),
     ];

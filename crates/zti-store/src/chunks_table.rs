@@ -45,7 +45,14 @@ impl ChunksTable {
         if self.index_created {
             return Ok(());
         }
-        if self.table.count_rows(None).await? == 0 {
+        let row_count = self.table.count_rows(None).await?;
+        if row_count == 0 {
+            return Ok(());
+        }
+        if row_count < 256 {
+            tracing::warn!(
+                "skipping IVF-PQ index: need >= 256 rows, got {row_count}"
+            );
             return Ok(());
         }
         self.table
