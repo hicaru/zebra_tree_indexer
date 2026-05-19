@@ -12,10 +12,8 @@ use crate::render::{build_children_by_parent, render_symbol_rich, LEGEND_LINE};
 const RICH_MAX_TARGETS: usize = 24;
 const MANIFEST_CAP: usize = 2048;
 
-pub const MANIFEST_NAMES: [&str; 4] = ["Cargo.toml", "pubspec.yaml", "package.json", "foundry.toml"];
-
 pub fn find_manifest(root: &Path) -> Option<String> {
-    MANIFEST_NAMES.iter().find_map(|name| {
+    crate::index::MANIFEST_NAMES.iter().find_map(|name| {
         let p = root.join(name);
         std::fs::read_to_string(&p).ok()
     })

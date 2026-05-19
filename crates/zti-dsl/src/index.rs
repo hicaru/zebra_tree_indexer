@@ -9,7 +9,9 @@ use zti_tree_sitter::{Language, detect_from_path, frontend_for};
 
 use crate::model::{FileEntry, ProjectIndex};
 
-const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "build", "dist", ".cache"];
+pub(crate) const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "build", "dist", ".cache"];
+
+pub(crate) const MANIFEST_NAMES: &[&str] = &["Cargo.toml", "pubspec.yaml", "package.json", "foundry.toml"];
 
 /// Collect the union of every supported language's `extra_skip_dirs` —
 /// the standalone walker has no way to know which languages are present
@@ -26,6 +28,55 @@ fn all_lang_skip_dirs() -> Vec<&'static str> {
         }
     }
     out
+}
+
+pub(crate) fn collect_manifest_paths(root: &Path, skip_dirs: Vec<&'static str>) -> Vec<String> {
+    let mut results: Vec<String> = Vec::with_capacity(8);
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .filter_entry(move |entry| {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                let name = entry.file_name().to_string_lossy();
+                if SKIP_DIRS.contains(&name.as_ref()) || skip_dirs.contains(&name.as_ref()) {
+                    return false;
+                }
+            }
+            true
+        })
+        .build();
+
+    for entry in walker.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = match path.file_name() {
+            Some(n) => n,
+            None => continue,
+        };
+        if !MANIFEST_NAMES.contains(&name.to_string_lossy().as_ref()) {
+            continue;
+        }
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy();
+        let rel = rel.trim_start_matches("./");
+        results.push(rel.to_string());
+    }
+
+    results.sort_by(|a, b| {
+        let a_is_root = MANIFEST_NAMES.contains(&a.rsplit('/').next().unwrap_or(a));
+        let b_is_root = MANIFEST_NAMES.contains(&b.rsplit('/').next().unwrap_or(b));
+        match (a_is_root, b_is_root) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.cmp(b),
+        }
+    });
+
+    results
 }
 
 /// One source file the parser will index. Caller owns the path string (it is
@@ -77,6 +128,10 @@ where
     let reverse_edges = build_reverse_edges(&all_edges);
     let forward_edges = build_forward_edges(&all_edges);
 
+    let root_path = Path::new(&root);
+    let skip_dirs = all_lang_skip_dirs();
+    let manifest_paths = collect_manifest_paths(root_path, skip_dirs);
+
     ProjectIndex {
         symbols: all_symbols,
         edges: all_edges,
@@ -85,6 +140,7 @@ where
         reverse_edges,
         forward_edges,
         root,
+        manifest_paths,
     }
 }
 
@@ -97,15 +153,7 @@ pub fn build_index(root: &str) -> Result<ProjectIndex> {
     // (full_path, content, language)
     let mut loaded: Vec<(String, String, Language)> = Vec::new();
 
-    // Foundry layout: only skip the language's extra dirs if the marker file
-    // is present. For non-Foundry repos `lib/` (rust crate dir!) must NOT be
-    // dropped, so we gate the extra-skip list on `foundry.toml`.
-    let is_forge = root_path.join("foundry.toml").exists();
-    let lang_skip_dirs: Vec<&'static str> = if is_forge {
-        all_lang_skip_dirs()
-    } else {
-        Vec::new()
-    };
+    let lang_skip_dirs = all_lang_skip_dirs();
     let walker = WalkBuilder::new(&root_path)
         .hidden(false)
         .git_ignore(true)

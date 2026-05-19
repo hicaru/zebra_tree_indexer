@@ -35,6 +35,7 @@ pub enum Kind {
     Module,
     Field,
     Variant,
+    Impl,
     Event,
     Error,
 }
@@ -54,6 +55,7 @@ impl Kind {
             Kind::Module => "M",
             Kind::Field => ".",
             Kind::Variant => ".",
+            Kind::Impl => "c",
             Kind::Event => "E",
             Kind::Error => "X",
         }
@@ -73,6 +75,7 @@ impl Kind {
             Kind::Module => "module",
             Kind::Field => "field",
             Kind::Variant => "variant",
+            Kind::Impl => "impl",
             Kind::Event => "event",
             Kind::Error => "error",
         }
@@ -91,6 +94,7 @@ impl Kind {
             "module" | "mod" => Some(Kind::Module),
             "field" => Some(Kind::Field),
             "variant" => Some(Kind::Variant),
+            "impl" => Some(Kind::Impl),
             "typealias" | "type" => Some(Kind::TypeAlias),
             "event" => Some(Kind::Event),
             "error" => Some(Kind::Error),

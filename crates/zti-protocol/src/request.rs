@@ -49,7 +49,7 @@ pub struct FileTreeReq {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMapReq {
     pub project_root: String,
-    pub language: String,
+    pub language: Option<String>,
     pub path_glob: Option<String>,
     pub kinds: Option<Vec<String>>,
     pub max_tokens: Option<usize>,

@@ -30,6 +30,8 @@ pub struct LangConfig {
     pub extract_docs: bool,
     pub instance_field_kinds: &'static [&'static str],
     pub no_retag_kinds: &'static [&'static str],
+    pub impl_node: Option<&'static str>,
+    pub symbol_name_skip: &'static [&'static str],
 }
 
 impl LangConfig {
@@ -203,22 +205,23 @@ pub static RUST_CONFIG: LangConfig = LangConfig {
         ("const_item", Kind::Const),
         ("static_item", Kind::Static),
         ("field_item", Kind::Field),
+        ("impl_item", Kind::Impl),
         ("macro_definition", Kind::Function),
         ("metavariable", Kind::Const),
     ],
-    container_kinds: &[Kind::Struct, Kind::Enum, Kind::Interface, Kind::Module, Kind::Class],
+    container_kinds: &[Kind::Struct, Kind::Enum, Kind::Interface, Kind::Module, Kind::Class, Kind::Impl],
     call_nodes: &["call_expression", "macro_invocation"],
     call_field: "function",
     ref_node: "scoped_identifier",
     ref_field: "name",
     import_node: "use_declaration",
     extra_skip_dirs: &[],
-    transparent_scope_kinds: &[
-        TransparentScope { node_kind: "impl_item", target_field: "type" },
-    ],
+    transparent_scope_kinds: &[],
     extract_docs: true,
     instance_field_kinds: &[],
     no_retag_kinds: &[],
+    impl_node: Some("impl_item"),
+    symbol_name_skip: &[],
 };
 
 pub static TYPESCRIPT_CONFIG: LangConfig = LangConfig {
@@ -269,6 +272,8 @@ pub static TYPESCRIPT_CONFIG: LangConfig = LangConfig {
     extract_docs: true,
     instance_field_kinds: &[],
     no_retag_kinds: &[],
+    impl_node: None,
+    symbol_name_skip: &[],
 };
 
 pub static DART_CONFIG: LangConfig = LangConfig {
@@ -339,6 +344,8 @@ pub static DART_CONFIG: LangConfig = LangConfig {
     extract_docs: true,
     instance_field_kinds: &["initialized_identifier"],
     no_retag_kinds: &[],
+    impl_node: None,
+    symbol_name_skip: &["AppLocalizations"],
 };
 
 pub static SOLIDITY_CONFIG: LangConfig = LangConfig {
@@ -401,4 +408,6 @@ pub static SOLIDITY_CONFIG: LangConfig = LangConfig {
     extract_docs: false,
     instance_field_kinds: &[],
     no_retag_kinds: &["modifier_definition"],
+    impl_node: None,
+    symbol_name_skip: &[],
 };

@@ -1,16 +1,21 @@
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
-use zti_ts_core::types::{Edge, EdgeKind, Kind, Target};
+use zti_ts_core::types::{EdgeKind, Kind, Target};
+use zti_tree_sitter::Language;
 
 use crate::model::ProjectIndex;
 
 pub const LEGEND_LINE: &str = "# k short = Kind   f#=fn m#=method s#=struct e#=enum C#=class I#=iface t#=typealias c#=const v#=static .=field/variant E#=event X#=error M#=mod   PKG = project manifest";
 
-/// One-pass: for every symbol with a `parent`, push its id under that
-/// parent. Used by `render_symbol_rich` so the ≈ siblings line is O(siblings)
-/// instead of O(all symbols) per render. Build once per index.
+pub const AST_HEADER: &str = "\
+Code AST. Use node #ID to fetch full code body.\n";
+
+const RUST_LEGEND: &str = "\
+Types: @=File, f=fn, m=method, s=struct, c=class/impl, t=trait, e=enum, v=var/field/variant, d=mod, k=const, y=typealias\n";
+
+/// O(N) once-per-index map: parent_id -> child ids. Used by render_symbol_rich
+/// so the siblings line is O(siblings) not O(all symbols).
 pub fn build_children_by_parent(index: &ProjectIndex) -> HashMap<u32, Vec<u32>> {
     let mut map: HashMap<u32, Vec<u32>> = HashMap::with_capacity(index.symbols.len() / 4);
     for sym in &index.symbols {
@@ -21,125 +26,263 @@ pub fn build_children_by_parent(index: &ProjectIndex) -> HashMap<u32, Vec<u32>> 
     map
 }
 
-pub struct InlineOpts {
-    pub max_inline_targets: usize,
-    pub max_doc_lines: usize,
-    pub show_file_path: bool,
-    pub show_line_range: bool,
-}
-
-impl InlineOpts {
-    pub fn for_embedding() -> Self {
-        Self {
-            max_inline_targets: 12,
-            max_doc_lines: 2,
-            show_file_path: true,
-            show_line_range: true,
-        }
-    }
-
-    pub fn compact() -> Self {
-        Self {
-            max_inline_targets: 4,
-            max_doc_lines: 1,
-            show_file_path: false,
-            show_line_range: false,
-        }
+fn rust_short(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Function => "f",
+        Kind::Method => "m",
+        Kind::Struct => "s",
+        Kind::Enum => "e",
+        Kind::Interface => "t",
+        Kind::Module => "d",
+        Kind::Static | Kind::Field | Kind::Variant => "v",
+        Kind::Const => "k",
+        Kind::TypeAlias => "y",
+        Kind::Class | Kind::Impl => "c",
+        Kind::Event => "E",
+        Kind::Error => "X",
     }
 }
 
-pub fn render_symbol_inline(
+fn short_for(kind: Kind, lang: Language) -> &'static str {
+    match lang {
+        Language::Rust => rust_short(kind),
+        _ => kind.short(),
+    }
+}
+
+fn lang_label(lang: Language) -> &'static str {
+    match lang {
+        Language::Rust => "Rust",
+        Language::Ts => "TypeScript",
+        Language::Tsx => "TypeScript",
+        Language::Dart => "Dart",
+        Language::Solidity => "Solidity",
+    }
+}
+
+const GENERIC_LEGEND: &str = "\
+Types: @=File, C#=class, I#=interface, s#=struct, e#=enum, f#=fn, m#=method, v#=var/field/variant, c#=const, d#=mod, t#=typealias, E#=event, X#=error\n";
+
+fn lang_legend(lang: Language) -> &'static str {
+    match lang {
+        Language::Rust => RUST_LEGEND,
+        _ => GENERIC_LEGEND,
+    }
+}
+
+const MANIFEST_CAP: usize = 2048;
+
+fn symbol_or_descendant_matches(
     index: &ProjectIndex,
+    children: &HashMap<u32, Vec<u32>>,
     id: u32,
-    opts: &InlineOpts,
-    out: &mut String,
-) {
-    let sym = match index.symbols.get(id as usize) {
-        Some(s) => s,
-        None => return,
+    kind_set: &HashSet<Kind>,
+) -> bool {
+    let Some(sym) = index.symbols.get(id as usize) else {
+        return false;
     };
-    let file = index.files.get(sym.file_idx as usize);
+    if kind_set.contains(&sym.kind) {
+        return true;
+    }
+    if let Some(child_ids) = children.get(&id) {
+        for &cid in child_ids {
+            if symbol_or_descendant_matches(index, children, cid, kind_set) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
-    let short = sym.kind.short();
-    out.push_str(short);
+fn load_manifest_content(root: &str, rel_path: &str) -> Option<String> {
+    let full = if rel_path.starts_with('/') {
+        rel_path.to_string()
+    } else {
+        format!("{}/{}", root.trim_end_matches('/'), rel_path)
+    };
+    let content = std::fs::read_to_string(&full).ok()?;
+    if content.len() > MANIFEST_CAP {
+        let end = content.ceil_char_boundary(MANIFEST_CAP);
+        Some(format!("{}\n...", &content[..end]))
+    } else {
+        Some(content)
+    }
+}
+
+fn format_signature_ts(sig: &str) -> &str {
+    let trimmed = sig.trim();
+    if trimmed.is_empty() {
+        return trimmed;
+    }
+    let mut s = trimmed;
+    for prefix in [
+        "export default ", "export ", "declare ",
+        "public ", "private ", "protected ",
+        "async function ", "function ",
+        "async ", "static ", "abstract ",
+        "class ", "interface ", "enum ", "type ",
+        "const ", "let ", "var ",
+    ] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest;
+            break;
+        }
+    }
+    s.trim_end_matches(&['{', ';', ',', ' ', '\t'] as &[char])
+}
+
+fn format_signature_dart(sig: &str) -> &str {
+    let trimmed = sig.trim();
+    if trimmed.is_empty() {
+        return trimmed;
+    }
+    let mut s = trimmed;
+    for prefix in [
+        "abstract ", "external ", "factory ",
+        "static ", "late ", "final ", "const ",
+        "class ", "mixin ", "enum ", "extension ",
+        "void ", "String ", "int ", "double ", "bool ",
+    ] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest;
+            break;
+        }
+    }
+    s.trim_end_matches(&['{', ';', ',', ' ', '\t'] as &[char])
+}
+
+fn format_signature_solidity(sig: &str) -> &str {
+    let trimmed = sig.trim();
+    if trimmed.is_empty() {
+        return trimmed;
+    }
+    let mut s = trimmed;
+    for prefix in [
+        "public ", "private ", "internal ", "external ",
+        "pure ", "view ", "payable ", "virtual ", "override ",
+        "function ", "event ", "error ", "struct ",
+        "contract ", "interface ", "library ",
+        "uint256 ", "address ", "bool ", "string ",
+    ] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest;
+            break;
+        }
+    }
+    s.trim_end_matches(&['{', ';', ',', ' ', '\t'] as &[char])
+}
+
+fn format_signature(sig: &str, lang: Language) -> &str {
+    match lang {
+        Language::Rust => format_signature_rust(sig),
+        Language::Ts | Language::Tsx => format_signature_ts(sig),
+        Language::Dart => format_signature_dart(sig),
+        Language::Solidity => format_signature_solidity(sig),
+    }
+}
+
+fn format_signature_rust(sig: &str) -> &str {
+    let trimmed = sig.trim();
+    if trimmed.is_empty() {
+        return trimmed;
+    }
+
+    let mut s = trimmed;
+
+    let stripped = s
+        .strip_prefix("pub(crate) ")
+        .or_else(|| s.strip_prefix("pub(super) "))
+        .or_else(|| s.strip_prefix("pub "));
+    if let Some(rest) = stripped {
+        s = rest;
+    }
+
+    loop {
+        let before = s.as_ptr();
+        for prefix in [
+            "unsafe fn ", "async fn ", "const fn ", "fn ",
+            "unsafe ", "async ", "const ", "static ", "let ",
+            "struct ", "enum ", "trait ", "mod ", "impl ", "type ",
+        ] {
+            if let Some(rest) = s.strip_prefix(prefix) {
+                s = rest;
+                break;
+            }
+        }
+        if s.as_ptr() == before {
+            break;
+        }
+    }
+
+    s.trim_end_matches(&['{', ';', ',', ' ', '\t'] as &[char])
+}
+
+fn render_node(
+    index: &ProjectIndex,
+    children: &HashMap<u32, Vec<u32>>,
+    id: u32,
+    depth: usize,
+    out: &mut String,
+    lang: Language,
+    max_bytes: usize,
+) -> bool {
+    let Some(sym) = index.symbols.get(id as usize) else {
+        return false;
+    };
+
+    for _ in 0..depth {
+        out.push_str("  ");
+    }
+
+    out.push_str(short_for(sym.kind, lang));
     out.push('#');
     let _ = write!(out, "{}", sym.id);
     out.push(' ');
-    out.push_str(&sym.qualified);
 
-    if opts.show_file_path
-        && let Some(f) = file
-    {
-        let rel = f.path.strip_prefix(&index.root).unwrap_or(&f.path);
-        let rel = rel.trim_start_matches('/');
-        out.push(' ');
-        out.push_str(rel);
-    }
-
-    if opts.show_line_range {
-        let _ = write!(out, " :{}-{}", sym.line, sym.end_line);
-    }
-
-    if let Some(ref doc) = sym.doc {
-        let mut joined = String::new();
-        let mut seen = 0usize;
-        for line in doc.lines().take(opts.max_doc_lines) {
-            if seen > 0 {
-                joined.push(' ');
-            }
-            joined.push_str(line);
-            seen += 1;
-        }
-        if seen > 0 {
-            out.push(' ');
-            out.push('"');
-            out.push_str(joined.trim());
-            out.push('"');
+    if sym.kind == Kind::Impl {
+        out.push_str(&sym.name);
+    } else {
+        let sig = format_signature(&sym.signature, lang);
+        if sig.is_empty() {
+            out.push_str(&sym.name);
+        } else {
+            out.push_str(sig);
         }
     }
 
-    write_targets(
-        out,
-        " <- ",
-        index
-            .reverse_edges
-            .get(&id)
-            .into_iter()
-            .flat_map(|v| v.iter())
-            .filter(|e| e.kind == EdgeKind::Call),
-        opts.max_inline_targets,
-        |edge, out| {
-            if let Some(ts) = index.symbols.get(edge.from as usize) {
-                out.push_str(&ts.qualified);
-            }
-        },
-    );
+    if sym.kind == Kind::Module && sym.line == sym.end_line {
+        let raw = sym.signature.trim();
+        if raw.ends_with(';') && !raw.contains('{') {
+            out.push(';');
+        }
+    }
 
-    write_targets(
-        out,
-        " -> ",
-        index
-            .forward_edges
-            .get(&id)
-            .into_iter()
-            .flat_map(|v| v.iter())
-            .filter(|e| e.kind == EdgeKind::Call),
-        opts.max_inline_targets,
-        |edge, out| {
-            out.push_str(&format_target(&edge.to));
-        },
-    );
+    let _ = write!(out, " :{}-{}", sym.line, sym.end_line);
+    out.push('\n');
+
+    if out.len() >= max_bytes {
+        return true;
+    }
+
+    if let Some(child_ids) = children.get(&id) {
+        let mut sorted: Vec<u32> = Vec::with_capacity(child_ids.len());
+        sorted.extend(child_ids.iter().copied());
+        sorted.sort_by_key(|cid| {
+            index
+                .symbols
+                .get(*cid as usize)
+                .map(|s| s.line)
+                .unwrap_or(0)
+        });
+        for cid in sorted {
+            if render_node(index, children, cid, depth + 1, out, lang, max_bytes) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
-/// Multi-line rich rendering for chunk headers. Produces:
-/// ```text
-/// {kind#id} {name}  {rel_path}:{line}-{end_line} "doc?"
-///     ├─ {callee tree (depth 2)}
-///     > {ref targets}
-///     ≈ {sibling names}
-/// ```
-/// Each subsection is omitted when empty. `children_by_parent` must be the
-/// map returned by [`build_children_by_parent`] for `index`.
 pub fn render_symbol_rich(
     index: &ProjectIndex,
     id: u32,
@@ -152,7 +295,6 @@ pub fn render_symbol_rich(
     };
     let file = index.files.get(sym.file_idx as usize);
 
-    // Line 1: kind#id name  file:lines "doc"
     out.push_str(sym.kind.short());
     out.push('#');
     let _ = write!(out, "{}", sym.id);
@@ -180,7 +322,6 @@ pub fn render_symbol_rich(
         }
     }
 
-    // Callees tree (depth 2)
     let tree = super::tree::AsciiTreeRenderer::new(index).render_callees_with_ids(id, 2, true, false);
     let tree = tree.trim();
     if !tree.is_empty() {
@@ -195,10 +336,8 @@ pub fn render_symbol_rich(
         }
     }
 
-    // Line 4: > uses
     write_rich_edge_line(out, index, id, EdgeKind::Ref, "\n  > ", max_targets);
 
-    // Line 5: ≈ siblings
     if let Some(parent_id) = sym.parent
         && let Some(sibs) = children_by_parent.get(&parent_id)
     {
@@ -273,41 +412,6 @@ fn write_rich_edge_line(
     }
 }
 
-/// Inline-render up to `max` edge targets, followed by `...` if the iterator
-/// would have produced more. Single-pass — no intermediate `Vec<&Edge>`.
-fn write_targets<'a, I, F>(out: &mut String, prefix: &str, edges: I, max: usize, mut write_one: F)
-where
-    I: IntoIterator<Item = &'a Edge>,
-    F: FnMut(&Edge, &mut String),
-{
-    let mut iter = edges.into_iter().peekable();
-    if iter.peek().is_none() {
-        return;
-    }
-    out.push_str(prefix);
-    let mut overflow = false;
-    for (i, edge) in iter.enumerate() {
-        if i >= max {
-            overflow = true;
-            break;
-        }
-        if i > 0 {
-            out.push(' ');
-        }
-        write_one(edge, out);
-    }
-    if overflow {
-        out.push_str(" ...");
-    }
-}
-
-pub fn format_target(target: &Target) -> Cow<'_, str> {
-    match target {
-        Target::Resolved(id) => Cow::Owned(format!("#{}", id)),
-        Target::Unresolved(name) | Target::External(name) => Cow::Borrowed(name),
-    }
-}
-
 pub struct DslRenderer<'a> {
     index: &'a ProjectIndex,
     max_tokens: usize,
@@ -323,44 +427,105 @@ impl<'a> DslRenderer<'a> {
         file_filter: Option<&[u16]>,
         kind_filter: Option<&[Kind]>,
     ) -> String {
-        let mut out = String::new();
-        let mut tokens_used = 0;
+        let kind_set: Option<HashSet<Kind>> =
+            kind_filter.map(|k| k.iter().copied().collect());
 
-        let opts = InlineOpts::for_embedding();
+        if kind_set.is_some() {
+            tracing::debug!("kind_filter active: {:?} kinds", kind_filter);
+        }
 
-        let filter_set: Option<HashSet<u16>> = file_filter.map(|f| f.iter().copied().collect());
-        let kind_set: Option<HashSet<Kind>> = kind_filter.map(|k| k.iter().copied().collect());
+        let mut out = String::with_capacity(self.max_tokens * crate::render::CHARS_PER_TOKEN);
+        out.push_str(AST_HEADER);
+        out.push('\n');
 
-        let mut last_file: Option<u16> = None;
+        let max_bytes = self.max_tokens * crate::render::CHARS_PER_TOKEN;
 
+        for rel in &self.index.manifest_paths {
+            if let Some(content) = load_manifest_content(&self.index.root, rel) {
+                let _ = writeln!(out, "@ {}\n{}", rel, content);
+                out.push('\n');
+            }
+            if out.len() >= max_bytes {
+                out.push_str("... (truncated)\n");
+                return out;
+            }
+        }
+
+        let children = build_children_by_parent(self.index);
+
+        let filter_set: Option<HashSet<u16>> =
+            file_filter.map(|f| f.iter().copied().collect());
+
+        let mut top_by_file: Vec<Vec<u32>> = vec![Vec::new(); self.index.files.len()];
         for sym in &self.index.symbols {
+            if sym.parent.is_none() {
+                top_by_file[sym.file_idx as usize].push(sym.id);
+            }
+        }
+        for list in &mut top_by_file {
+            list.sort_by_key(|id| {
+                self.index
+                    .symbols
+                    .get(*id as usize)
+                    .map(|s| s.line)
+                    .unwrap_or(0)
+            });
+        }
+
+        let mut by_label: HashMap<&'static str, (Language, Vec<usize>)> = HashMap::with_capacity(4);
+        for (file_idx, file) in self.index.files.iter().enumerate() {
             if let Some(ref set) = filter_set
-                && !set.contains(&sym.file_idx)
+                && !set.contains(&(file_idx as u16))
             {
                 continue;
             }
-            if let Some(ref set) = kind_set
-                && !set.contains(&sym.kind)
-            {
+            let label = lang_label(file.language);
+            by_label
+                .entry(label)
+                .or_insert_with(|| (file.language, Vec::with_capacity(16)))
+                .1
+                .push(file_idx);
+        }
+        let mut lang_files: Vec<(&'static str, Language, Vec<usize>)> =
+            by_label.into_iter().map(|(label, (lang, files))| (label, lang, files)).collect();
+        lang_files.sort_by_key(|(label, _, _)| *label);
+
+        for (label, lang, file_indices) in &lang_files {
+            let has_symbols = file_indices.iter().any(|&fi| !top_by_file[fi].is_empty());
+            if !has_symbols {
                 continue;
             }
 
-            if last_file != Some(sym.file_idx) {
-                if let Some(file) = self.index.files.get(sym.file_idx as usize) {
-                    let _ = writeln!(out, "FILES #{} {}", sym.file_idx, file.path);
-                }
-                last_file = Some(sym.file_idx);
-            }
-
-            let mut line = String::new();
-            render_symbol_inline(self.index, sym.id, &opts, &mut line);
-            out.push_str(&line);
+            let _ = writeln!(out, "## {}", label);
+            out.push_str(lang_legend(*lang));
             out.push('\n');
 
-            tokens_used += line.len() / crate::render::CHARS_PER_TOKEN;
-            if tokens_used >= self.max_tokens {
-                out.push_str("... (truncated)\n");
-                break;
+            for &file_idx in file_indices {
+                let top = &top_by_file[file_idx];
+                if top.is_empty() {
+                    continue;
+                }
+
+                let file = &self.index.files[file_idx];
+                let rel = file
+                    .path
+                    .strip_prefix(&self.index.root)
+                    .unwrap_or(&file.path)
+                    .trim_start_matches('/');
+                let _ = writeln!(out, "@ {}", rel);
+
+                for &id in top {
+                    if let Some(ref ks) = kind_set
+                        && !symbol_or_descendant_matches(self.index, &children, id, ks)
+                    {
+                        continue;
+                    }
+                    if render_node(self.index, &children, id, 0, &mut out, *lang, max_bytes) {
+                        out.push_str("... (truncated)\n");
+                        return out;
+                    }
+                }
+                out.push('\n');
             }
         }
 
@@ -369,11 +534,16 @@ impl<'a> DslRenderer<'a> {
 }
 
 pub fn render_files_only(index: &ProjectIndex, file_indices: &[u16]) -> String {
-    let mut out = String::new();
-    out.push_str("FILES (#N = file ID — appears as \"# N\" in project_map output)\n");
+    let mut out = String::with_capacity(file_indices.len() * 128);
+    out.push_str("FILES (#N = file id)\n");
     for &idx in file_indices {
         if let Some(file) = index.files.get(idx as usize) {
-            let _ = writeln!(out, "# {} {}", idx, file.path);
+            let rel = file
+                .path
+                .strip_prefix(&index.root)
+                .unwrap_or(&file.path)
+                .trim_start_matches('/');
+            let _ = writeln!(out, "# {} @ {}", idx, rel);
         }
     }
     out
@@ -399,6 +569,7 @@ mod tests {
             reverse_edges: HashMap::new(),
             forward_edges: HashMap::new(),
             root: "/p".into(),
+            manifest_paths: Vec::new(),
         }
     }
 
@@ -409,8 +580,8 @@ mod tests {
             name: name.to_string(),
             qualified: name.to_string(),
             file_idx,
-            line: 1,
-            end_line: 1,
+            line: id + 1,
+            end_line: id + 1,
             signature: String::new(),
             doc: None,
             base_classes: Vec::new(),
@@ -428,12 +599,12 @@ mod tests {
     }
 
     #[test]
-    fn legend_mentions_every_emitted_kind_prefix() {
-        for marker in ["f#", "m#", "c#", "v#", "s#", "C#", "e#", "t#", "I#", "M#"] {
+    fn ast_header_lists_every_rust_short_code() {
+        for entry in ["f=fn", "m=method", "s=struct", "c=class/impl", "t=trait", "e=enum", "v=var", "d=mod", "k=const", "y=typealias"] {
             assert!(
-                LEGEND_LINE.contains(marker),
-                "LEGEND_LINE missing marker `{}`",
-                marker
+                RUST_LEGEND.contains(entry),
+                "RUST_LEGEND missing entry `{}`",
+                entry
             );
         }
     }
@@ -463,23 +634,56 @@ mod tests {
             vec![mk_file("/p/a.rs")],
         );
         let out = DslRenderer::new(&idx, 8000).render(None, None);
-        assert!(out.contains("s#0 Empty"), "got:\n{}", out);
+        assert!(out.contains("## Rust"), "should contain ## Rust section, got:\n{}", out);
+        assert!(out.contains("s#0"), "should contain s#0, got:\n{}", out);
+        assert!(out.contains("@ a.rs"), "should contain @ a.rs, got:\n{}", out);
     }
 
     #[test]
-    fn struct_with_fields_renders_field_list() {
+    fn struct_with_fields_renders_nested() {
         let mut field = mk_sym(1, "x", Kind::Field, 0);
         field.parent = Some(0);
+        let mut field2 = mk_sym(2, "y", Kind::Field, 0);
+        field2.parent = Some(0);
         let idx = mk_index(
-            vec![mk_sym(0, "Point", Kind::Struct, 0), field],
+            vec![mk_sym(0, "Point", Kind::Struct, 0), field, field2],
             vec![mk_file("/p/a.rs")],
         );
         let out = DslRenderer::new(&idx, 8000).render(None, None);
-        assert!(out.contains("s#0 Point"), "got:\n{}", out);
+        let section_start = out.find("## Rust").unwrap();
+        let section = &out[section_start..];
+        let lines: Vec<&str> = section.lines().collect();
+        let s_line = lines.iter().find(|l| l.contains("s#0")).unwrap();
+        let v1_line = lines.iter().find(|l| l.contains("v#1")).unwrap();
+        let v2_line = lines.iter().find(|l| l.contains("v#2")).unwrap();
+        assert!(s_line.starts_with("s#0"), "struct should be at indent 0: {}", s_line);
+        assert!(v1_line.starts_with("  v#1"), "field should be at indent 1: {}", v1_line);
+        assert!(v2_line.starts_with("  v#2"), "field should be at indent 1: {}", v2_line);
     }
 
     #[test]
-    fn render_files_only_emits_tree_without_symbols() {
+    fn impl_emits_separate_symbol_with_methods_nested() {
+        let mut method = mk_sym(2, "new", Kind::Method, 0);
+        method.parent = Some(1);
+        let mut impl_sym = mk_sym(1, "impl State", Kind::Impl, 0);
+        impl_sym.signature = "impl State".to_string();
+        impl_sym.parent = None;
+        let idx = mk_index(
+            vec![mk_sym(0, "State", Kind::Struct, 0), impl_sym, method],
+            vec![mk_file("/p/a.rs")],
+        );
+        let out = DslRenderer::new(&idx, 8000).render(None, None);
+        let section_start = out.find("## Rust").unwrap();
+        let section = &out[section_start..];
+        let lines: Vec<&str> = section.lines().collect();
+        let c_line = lines.iter().find(|l| l.contains("c#1")).unwrap();
+        let m_line = lines.iter().find(|l| l.contains("m#2")).unwrap();
+        assert!(c_line.contains("impl State"), "should contain impl State: {}", c_line);
+        assert!(m_line.starts_with("  m#2"), "method should be indented under impl: {}", m_line);
+    }
+
+    #[test]
+    fn render_files_only_emits_at_paths_without_symbols() {
         let idx = mk_index(
             vec![
                 mk_sym(0, "foo", Kind::Function, 0),
@@ -496,12 +700,125 @@ mod tests {
         let out = render_files_only(&idx, &all);
 
         assert!(out.starts_with("FILES"), "should start with FILES header, got:\n{}", out);
+        assert!(out.contains("# 0 @ "), "should contain file ID 0, got:\n{}", out);
+        assert!(out.contains("# 1 @ "), "should contain file ID 1, got:\n{}", out);
+        assert!(out.contains("# 2 @ "), "should contain file ID 2, got:\n{}", out);
         assert!(out.contains("src/"), "should contain src dir, got:\n{}", out);
-        assert!(out.contains("main.rs"), "should contain main.rs, got:\n{}", out);
-        assert!(out.contains("lib.rs"), "should contain lib.rs, got:\n{}", out);
-        assert!(out.contains("mod.rs"), "should contain mod.rs, got:\n{}", out);
         assert!(!out.contains("f#"), "should NOT contain symbol DSL, got:\n{}", out);
         assert!(!out.contains("s#"), "should NOT contain symbol DSL, got:\n{}", out);
         assert!(!out.contains("foo"), "should NOT contain symbol names, got:\n{}", out);
+        assert!(out.contains("@ "), "should contain @ path prefix, got:\n{}", out);
+    }
+
+    #[test]
+    fn format_signature_rust_strips_visibility_and_keywords() {
+        assert_eq!(format_signature_rust("pub fn foo() -> Result<()>"), "foo() -> Result<()>");
+        assert_eq!(format_signature_rust("fn bar(x: i32)"), "bar(x: i32)");
+        assert_eq!(format_signature_rust("struct Point {"), "Point");
+        assert_eq!(format_signature_rust("enum Color {"), "Color");
+        assert_eq!(format_signature_rust("mod utils;"), "utils");
+        assert_eq!(format_signature_rust("pub(crate) fn hidden()"), "hidden()");
+        assert_eq!(format_signature_rust("const MAX: usize = 10;"), "MAX: usize = 10");
+        assert_eq!(format_signature_rust("pub unsafe async fn combo()"), "combo()");
+    }
+
+    fn mk_file_lang(path: &str, lang: Language) -> FileEntry {
+        FileEntry {
+            path: path.to_string(),
+            language: lang,
+            imports: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn render_merges_ts_and_tsx_into_single_section() {
+        let rust_sym = mk_sym(0, "Foo", Kind::Struct, 0);
+        let ts_sym = mk_sym(1, "Bar", Kind::Class, 1);
+        let tsx_sym = mk_sym(2, "Baz", Kind::Class, 2);
+        let idx = mk_index(
+            vec![rust_sym, ts_sym, tsx_sym],
+            vec![
+                mk_file_lang("/p/src/main.rs", Language::Rust),
+                mk_file_lang("/p/src/app.ts", Language::Ts),
+                mk_file_lang("/p/src/view.tsx", Language::Tsx),
+            ],
+        );
+        let out = DslRenderer::new(&idx, 8000).render(None, None);
+        let count = out.matches("## TypeScript").count();
+        assert_eq!(count, 1, "Ts and Tsx should merge into one ## TypeScript section, got {} occurrences:\n{}", count, out);
+        assert!(out.contains("s#0"), "should have Rust struct");
+        assert!(out.contains("C#1"), "should have TS class");
+        assert!(out.contains("C#2"), "should have TSX class");
+    }
+
+    #[test]
+    fn render_skips_empty_language_sections() {
+        let rust_sym = mk_sym(0, "Foo", Kind::Struct, 0);
+        let idx = mk_index(
+            vec![rust_sym],
+            vec![mk_file("/p/a.rs")],
+        );
+        let out = DslRenderer::new(&idx, 8000).render(None, None);
+        assert!(out.contains("## Rust"), "should have Rust section");
+        assert!(!out.contains("## TypeScript"), "should not have empty TypeScript section");
+        assert!(!out.contains("## Dart"), "should not have empty Dart section");
+    }
+
+    #[test]
+    fn render_with_language_filter_only_emits_that_section() {
+        let rust_sym = mk_sym(0, "Foo", Kind::Struct, 0);
+        let ts_sym = mk_sym(1, "Bar", Kind::Class, 1);
+        let idx = mk_index(
+            vec![rust_sym, ts_sym],
+            vec![
+                mk_file_lang("/p/a.rs", Language::Rust),
+                mk_file_lang("/p/b.tsx", Language::Tsx),
+            ],
+        );
+        let filter: Vec<u16> = vec![0];
+        let out = DslRenderer::new(&idx, 8000).render(Some(&filter), None);
+        assert!(out.contains("## Rust"), "should have Rust section");
+        assert!(!out.contains("## TypeScript"), "should not have TypeScript section when filtered");
+        assert!(out.contains("s#0"), "should have Rust struct");
+        assert!(!out.contains("C#1"), "should not have TS class");
+    }
+
+    #[test]
+    fn golden_test_struct_impl_method_nesting() {
+        let mut st = mk_sym(0, "DaemonState", Kind::Struct, 0);
+        st.signature = "pub struct DaemonState".to_string();
+        let mut k = mk_sym(1, "MAX", Kind::Const, 0);
+        k.signature = "const MAX: usize = 100;".to_string();
+        let mut field = mk_sym(2, "db", Kind::Field, 0);
+        field.parent = Some(0);
+        field.signature = "db: Arc<Database>".to_string();
+        let mut impl_sym = mk_sym(3, "impl DaemonState", Kind::Impl, 0);
+        impl_sym.signature = "impl DaemonState".to_string();
+        impl_sym.parent = None;
+        let mut method = mk_sym(4, "new", Kind::Method, 0);
+        method.parent = Some(3);
+        method.signature = "pub fn new(p: &Path) -> Self".to_string();
+
+        let idx = mk_index(
+            vec![st, k, field, impl_sym, method],
+            vec![mk_file("/p/crates/daemon/src/state.rs")],
+        );
+        let out = DslRenderer::new(&idx, 8000).render(None, None);
+
+        let expected = indoc::indoc! {"
+            Code AST. Use node #ID to fetch full code body.
+
+            ## Rust
+            Types: @=File, f=fn, m=method, s=struct, c=class/impl, t=trait, e=enum, v=var/field/variant, d=mod, k=const, y=typealias
+
+            @ crates/daemon/src/state.rs
+            s#0 DaemonState :1-1
+              v#2 db: Arc<Database> :3-3
+            k#1 MAX: usize = 100 :2-2
+            c#3 impl DaemonState :4-4
+              m#4 new(p: &Path) -> Self :5-5
+
+        "};
+        assert_eq!(out, expected);
     }
 }

@@ -65,13 +65,17 @@ mod tests {
         let s = symbols.iter().find(|s| s.name == "S").unwrap();
         assert_eq!(s.kind, Kind::Struct);
 
+        let impl_sym = symbols.iter().find(|s| s.name == "impl S").unwrap();
+        assert_eq!(impl_sym.kind, Kind::Impl);
+        assert_eq!(impl_sym.parent, None, "impl S is top-level");
+
         let foo = symbols.iter().find(|s| s.name == "foo").unwrap();
         assert_eq!(foo.kind, Kind::Method, "foo should be a method, not a fn");
-        assert_eq!(foo.parent, Some(s.id), "foo's parent should be S");
+        assert_eq!(foo.parent, Some(impl_sym.id), "foo's parent should be impl S");
 
         let bar = symbols.iter().find(|s| s.name == "bar").unwrap();
         assert_eq!(bar.kind, Kind::Method);
-        assert_eq!(bar.parent, Some(s.id));
+        assert_eq!(bar.parent, Some(impl_sym.id));
     }
 
     #[test]
@@ -83,10 +87,11 @@ mod tests {
             }
         "};
         let (symbols, _, _) = parse_rust(source);
-        let e = symbols.iter().find(|s| s.name == "E" && s.kind == Kind::Enum).unwrap();
+        let impl_sym = symbols.iter().find(|s| s.name == "impl E").unwrap();
+        assert_eq!(impl_sym.kind, Kind::Impl);
         let name = symbols.iter().find(|s| s.name == "name").unwrap();
         assert_eq!(name.kind, Kind::Method);
-        assert_eq!(name.parent, Some(e.id));
+        assert_eq!(name.parent, Some(impl_sym.id));
     }
 
     #[test]
@@ -122,11 +127,11 @@ mod tests {
             }
         "};
         let (symbols, _, _) = parse_rust(source);
-        let t = symbols.iter().find(|s| s.name == "T" && s.kind == Kind::Struct).unwrap();
         let hi = symbols.iter().filter(|s| s.name == "hi" && s.kind == Kind::Method).count();
         assert!(hi >= 1, "trait impl method `hi` should be captured");
-        let attached = symbols.iter().any(|s| s.name == "hi" && s.parent == Some(t.id));
-        assert!(attached, "trait impl method should have parent = T");
+        let impl_sym = symbols.iter().find(|s| s.name == "impl Greet for T").unwrap();
+        let attached = symbols.iter().any(|s| s.name == "hi" && s.parent == Some(impl_sym.id));
+        assert!(attached, "trait impl method should have parent = impl symbol");
     }
 
     #[test]
@@ -145,6 +150,24 @@ mod tests {
     }
 
     #[test]
+    fn rust_impl_emits_separate_symbol_with_methods_nested() {
+        let source = indoc::indoc! {"
+            struct Foo;
+            impl Foo { fn x() {} }
+        "};
+        let (symbols, _, _) = parse_rust(source);
+        let foo = symbols.iter().find(|s| s.name == "Foo" && s.kind == Kind::Struct).unwrap();
+        assert_eq!(foo.parent, None);
+        let impl_sym = symbols.iter().find(|s| s.name == "impl Foo").unwrap();
+        assert_eq!(impl_sym.name, "impl Foo");
+        assert_eq!(impl_sym.parent, None);
+        let x = symbols.iter().find(|s| s.name == "x").unwrap();
+        assert_eq!(x.kind, Kind::Method);
+        assert_eq!(x.parent, Some(impl_sym.id));
+        assert!(x.qualified.contains("Foo::x"), "qualified should be Foo::x, got: {}", x.qualified);
+    }
+
+    #[test]
     fn rust_line_comment_not_extracted() {
         let source = indoc::indoc! {"
             // regular comment
@@ -157,5 +180,52 @@ mod tests {
             "line comment should not be doc, got: {:?}",
             foo.doc
         );
+    }
+
+    #[test]
+    fn rust_impl_trait_for_type_name_includes_trait() {
+        let source = indoc::indoc! {"
+            pub struct Foo;
+            pub trait Bar { fn baz(&self); }
+            impl Bar for Foo {
+                fn baz(&self) {}
+            }
+        "};
+        let (symbols, _, _) = parse_rust(source);
+        let impl_sym = symbols.iter().find(|s| s.name == "impl Bar for Foo").unwrap();
+        assert_eq!(impl_sym.kind, Kind::Impl);
+        assert_eq!(impl_sym.parent, None);
+        let baz = symbols.iter().find(|s| s.name == "baz" && s.parent == Some(impl_sym.id)).unwrap();
+        assert_eq!(baz.kind, Kind::Method);
+    }
+
+    #[test]
+    fn rust_fn_inside_mod_is_not_retagged_as_method() {
+        let source = indoc::indoc! {"
+            mod tests {
+                fn helper() {}
+            }
+        "};
+        let (symbols, _, _) = parse_rust(source);
+        let helper = symbols.iter().find(|s| s.name == "helper").unwrap();
+        assert_eq!(helper.kind, Kind::Function, "fn inside mod should stay Function, got {:?}", helper.kind);
+    }
+
+    #[test]
+    fn rust_multiline_signature_captured_fully() {
+        let source = indoc::indoc! {"
+            pub fn bytes_encrypt<R: Rng>(
+                rng: &mut R,
+                bytes: &[u8],
+                pub_key: &PubKey,
+            ) -> Result<Vec<u8>, CipherError> {
+                todo!()
+            }
+        "};
+        let (symbols, _, _) = parse_rust(source);
+        let sym = symbols.iter().find(|s| s.name == "bytes_encrypt").unwrap();
+        assert!(sym.signature.contains("rng:"), "multiline sig should contain args, got: {}", sym.signature);
+        assert!(sym.signature.contains("Result<"), "multiline sig should contain return type, got: {}", sym.signature);
+        assert!(!sym.signature.contains('{'), "sig should not contain opening brace, got: {}", sym.signature);
     }
 }

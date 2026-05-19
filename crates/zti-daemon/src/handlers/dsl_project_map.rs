@@ -8,22 +8,21 @@ use crate::state::DaemonState;
 
 pub async fn handle(req: &ProjectMapReq, state: &DaemonState) -> Response {
     let project_root = req.project_root.clone();
-    let language = req.language.clone();
     let kinds = req.kinds.clone();
     let max_tokens = req.max_tokens.unwrap_or(8000);
 
     let result = with_project(state, &req.project_root, |project| async move {
         let index = ensure_dsl_index(&project, &project_root).await?;
 
-        let lang = parse_language(&language);
-        let file_filter: Option<Vec<u16>> = lang.map(|l| {
-            index
+        let file_filter: Option<Vec<u16>> = req.language.as_ref().and_then(|l| {
+            let lang = parse_language(l)?;
+            Some(index
                 .files
                 .iter()
                 .enumerate()
-                .filter(|(_, f)| f.language == l)
+                .filter(|(_, f)| f.language == lang)
                 .map(|(i, _)| i as u16)
-                .collect()
+                .collect())
         });
 
         let kind_filter = kinds.as_ref().map(|k| parse_kinds(k));

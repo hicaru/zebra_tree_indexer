@@ -19,4 +19,5 @@ pub struct ProjectIndex {
     pub reverse_edges: HashMap<u32, Vec<Edge>>,
     pub forward_edges: HashMap<u32, Vec<Edge>>,
     pub root: String,
+    pub manifest_paths: Vec<String>,
 }

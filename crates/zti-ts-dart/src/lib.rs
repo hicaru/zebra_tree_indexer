@@ -314,4 +314,27 @@ mod tests {
         let (_, _, imports) = parse_dart(source);
         assert!(!imports.is_empty(), "bare import should still produce an entry, got: {:?}", imports);
     }
+
+    #[test]
+    fn dart_app_localizations_class_is_skipped() {
+        let source = indoc::indoc! {"
+            class AppLocalizations {
+              String hello() => 'hi';
+            }
+            class Other {
+              void real() {}
+            }
+        "};
+        let (symbols, _, _) = parse_dart(source);
+        assert!(
+            symbols.iter().all(|s| s.name != "AppLocalizations"),
+            "AppLocalizations should be skipped, got: {:?}",
+            symbols
+        );
+        assert!(
+            symbols.iter().all(|s| s.name != "hello"),
+            "skipped class methods should also not appear"
+        );
+        assert!(symbols.iter().any(|s| s.name == "Other"));
+    }
 }

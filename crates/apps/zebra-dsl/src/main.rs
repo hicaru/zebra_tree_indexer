@@ -26,10 +26,10 @@ enum Commands {
         #[arg(short, long, help = "Glob pattern to filter files")]
         path_glob: Option<String>,
     },
-    #[command(about = "Show the DSL symbol map for one language")]
+    #[command(about = "Show the DSL symbol map, sectioned by language")]
     ProjectMap {
-        #[arg(short, long, help = "Language: rs|rust, ts|tsx|typescript, dart, sol|solidity")]
-        language: String,
+        #[arg(short, long, help = "Restrict to one language (rs|ts|tsx|dart|sol). Omit to include all.")]
+        language: Option<String>,
         #[arg(short, long, help = "Glob pattern to filter files")]
         path_glob: Option<String>,
         #[arg(short, long, help = "Filter by kinds: fn, method, struct, enum, class, const, module")]
@@ -84,12 +84,12 @@ fn main() -> Result<()> {
             print!("{}", render_files_only(&index, &file_indices));
         }
         Commands::ProjectMap { language, path_glob: _, kinds, max_tokens } => {
-            let lang = parse_language(&language);
-            let file_filter: Option<Vec<u16>> = lang.map(|l| {
-                index.files.iter().enumerate()
-                    .filter(|(_, f)| f.language == l)
+            let file_filter: Option<Vec<u16>> = language.as_ref().and_then(|l| {
+                let lang = parse_language(l)?;
+                Some(index.files.iter().enumerate()
+                    .filter(|(_, f)| f.language == lang)
                     .map(|(i, _)| i as u16)
-                    .collect()
+                    .collect())
             });
             let kind_filter: Option<Vec<zti_ts_core::types::Kind>> = kinds.as_ref().map(|k| parse_kinds(k));
             let renderer = DslRenderer::new(&index, max_tokens);

@@ -26,6 +26,7 @@ pub fn parse_file(
         source,
         fn_depth: 0,
         container_depth: 0,
+        scope_kinds: Vec::with_capacity(8),
     };
     let mut cursor = tree.root_node().walk();
     walk_node(&mut cursor, &mut symbols, &mut name_map, &mut state);
@@ -43,10 +44,11 @@ struct WalkState<'a> {
     source: &'a str,
     fn_depth: u16,
     container_depth: u16,
+    scope_kinds: Vec<Kind>,
 }
 
 impl<'a> WalkState<'a> {
-    fn push_scope(&mut self, id: u32, name: &str, is_container: bool, is_fn: bool) {
+    fn push_scope(&mut self, id: u32, name: &str, is_container: bool, is_fn: bool, kind: Kind) {
         self.scope_stack.push(id);
         if !self.qual_buf.is_empty() {
             self.qual_buf.push_str("::");
@@ -54,6 +56,7 @@ impl<'a> WalkState<'a> {
         let prev_len = self.qual_buf.len();
         self.qual_buf.push_str(name);
         self.qual_lens.push(prev_len);
+        self.scope_kinds.push(kind);
         if is_container {
             self.container_depth += 1;
         }
@@ -64,6 +67,7 @@ impl<'a> WalkState<'a> {
 
     fn pop_scope(&mut self, was_container: bool, was_fn: bool) {
         self.scope_stack.pop();
+        self.scope_kinds.pop();
         if let Some(prev_len) = self.qual_lens.pop() {
             self.qual_buf.truncate(prev_len);
         }
@@ -78,11 +82,13 @@ impl<'a> WalkState<'a> {
     fn push_transparent(&mut self, id: u32) {
         self.scope_stack.push(id);
         self.qual_lens.push(self.qual_buf.len());
+        self.scope_kinds.push(Kind::Module);
         self.container_depth += 1;
     }
 
     fn pop_transparent(&mut self) {
         self.scope_stack.pop();
+        self.scope_kinds.pop();
         let _ = self.qual_lens.pop();
         self.container_depth -= 1;
     }
@@ -107,6 +113,13 @@ impl<'a> WalkState<'a> {
 
     fn is_inside_container(&self) -> bool {
         self.container_depth > 0
+    }
+
+    fn is_inside_method_container(&self) -> bool {
+        self.scope_kinds.iter().any(|k| matches!(
+            k,
+            Kind::Struct | Kind::Enum | Kind::Class | Kind::Impl | Kind::Interface
+        ))
     }
 }
 
@@ -153,6 +166,80 @@ fn walk_node(
         }
     }
 
+    if let Some(impl_node_kind) = state.config.impl_node
+        && node.kind() == impl_node_kind
+    {
+        let type_name = node
+            .child_by_field_name("type")
+            .and_then(|c| c.utf8_text(state.source.as_bytes()).ok());
+
+        let trait_name = node
+            .child_by_field_name("trait")
+            .and_then(|c| c.utf8_text(state.source.as_bytes()).ok());
+
+        let Some(ty) = type_name else {
+            walk_children(cursor, symbols, name_map, state);
+            return;
+        };
+
+        let id = state.alloc_id();
+        let parent = state.parent_id();
+
+        let name = match trait_name {
+            Some(t) => {
+                let ty_clean = ty.replace('\n', " ");
+                let t_clean = t.replace('\n', " ");
+                let mut n = String::with_capacity(5 + t_clean.len() + 5 + ty_clean.len());
+                n.push_str("impl ");
+                n.push_str(&t_clean);
+                n.push_str(" for ");
+                n.push_str(&ty_clean);
+                n
+            }
+            None => {
+                let mut n = String::with_capacity(5 + ty.len());
+                n.push_str("impl ");
+                n.push_str(ty);
+                n
+            }
+        };
+
+        let qualified = if state.qual_buf.is_empty() {
+            name.clone()
+        } else {
+            let mut q = String::with_capacity(state.qual_buf.len() + 2 + name.len());
+            q.push_str(&state.qual_buf);
+            q.push_str("::");
+            q.push_str(&name);
+            q
+        };
+
+        let (line, end_line) = lines_of(&node);
+        let sig = collapse_signature(state.source, &node);
+
+        let is_container = true;
+        symbols.push(Symbol {
+            id,
+            kind: Kind::Impl,
+            name,
+            qualified,
+            file_idx: state.file_idx,
+            line,
+            end_line,
+            signature: sig,
+            doc: None,
+            base_classes: Vec::new(),
+            parent,
+            traits: Vec::new(),
+        });
+
+        state.push_scope(id, ty, is_container, false, Kind::Impl);
+        collect_edges(&node, state, id);
+        walk_children(cursor, symbols, name_map, state);
+        state.pop_scope(is_container, false);
+        return;
+    }
+
     if let Some(mut kind) = state.config.kind_for(&node) {
         if kind == Kind::Const && state.is_inside_fn() {
             walk_children(cursor, symbols, name_map, state);
@@ -178,7 +265,7 @@ fn walk_node(
         }
 
         if kind == Kind::Function
-            && state.is_inside_container()
+            && state.is_inside_method_container()
             && !state.config.no_retag_kinds.contains(&node.kind())
         {
             kind = Kind::Method;
@@ -188,6 +275,10 @@ fn walk_node(
             walk_children(cursor, symbols, name_map, state);
             return;
         };
+
+        if state.config.symbol_name_skip.contains(&name.as_str()) {
+            return;
+        }
 
         let id = state.alloc_id();
         let parent = state.parent_id();
@@ -204,13 +295,7 @@ fn walk_node(
 
         let (line, end_line) = lines_of(&node);
 
-        let sig = node
-            .utf8_text(state.source.as_bytes())
-            .unwrap_or("")
-            .lines()
-            .next()
-            .unwrap_or("")
-            .to_string();
+        let sig = collapse_signature(state.source, &node);
 
         let doc = extract_doc(&node, state.source, state.config);
 
@@ -239,7 +324,7 @@ fn walk_node(
             traits,
         });
 
-        state.push_scope(id, &symbols.last().unwrap().name, is_container, is_fn);
+        state.push_scope(id, &symbols.last().unwrap().name, is_container, is_fn, kind);
 
         collect_edges(&node, state, id);
 
@@ -256,6 +341,25 @@ fn lines_of(node: &Node) -> (u32, u32) {
     let start = node.start_position().row as u32 + 1;
     let end = node.end_position().row as u32 + 1;
     (start, end)
+}
+
+fn collapse_signature(source: &str, node: &Node) -> String {
+    let span = node.utf8_text(source.as_bytes()).unwrap_or("");
+    let end = span.find(['{', ';']).unwrap_or(span.len());
+    let mut sig = String::with_capacity(end.min(256));
+    let mut last_was_space = true;
+    for ch in span[..end].chars() {
+        if ch.is_whitespace() {
+            if !last_was_space {
+                sig.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            sig.push(ch);
+            last_was_space = false;
+        }
+    }
+    sig.trim_end().to_string()
 }
 
 fn is_doc_marker(text: &str) -> bool {
