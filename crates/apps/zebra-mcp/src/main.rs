@@ -216,6 +216,7 @@ impl ZebraMcpServer {
                 languages: None,
                 path_glob: None,
                 refresh_index: false,
+                exhaustive: false,
             }))
             .await
             .map_err(daemon_err)?;

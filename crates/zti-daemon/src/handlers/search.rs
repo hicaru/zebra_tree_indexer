@@ -25,17 +25,28 @@ pub async fn handle(req: &SearchReq, state: &DaemonState) -> Response {
             languages: req.languages.as_deref(),
             path_glob: req.path_glob.as_deref(),
         };
-        let reranker = TurboReranker::new(state.engine.dim())?;
-        let hits = zti_pipeline::search::search(
-            &query,
-            &state.engine,
-            &project.db,
-            &reranker,
-            &state.ann,
-            &pid,
-            &opts,
-        )
-        .await?;
+        let hits = if req.exhaustive {
+            zti_pipeline::search::search_exhaustive(
+                &query,
+                &state.engine,
+                &project.db,
+                &pid,
+                &opts,
+            )
+            .await?
+        } else {
+            let reranker = TurboReranker::new(state.engine.dim())?;
+            zti_pipeline::search::search(
+                &query,
+                &state.engine,
+                &project.db,
+                &reranker,
+                &state.ann,
+                &pid,
+                &opts,
+            )
+            .await?
+        };
 
         let chunks_table = project.db.chunks_table(state.engine.dim()).await?;
 

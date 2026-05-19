@@ -21,6 +21,8 @@ pub struct SearchReq {
     pub languages: Option<Vec<String>>,
     pub path_glob: Option<String>,
     pub refresh_index: bool,
+    #[serde(default)]
+    pub exhaustive: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

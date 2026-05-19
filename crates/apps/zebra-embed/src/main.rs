@@ -39,10 +39,12 @@ enum Commands {
         query: String,
         #[arg(short, long, default_value = "5")]
         limit: usize,
-        #[arg(short, long)]
+        #[arg(long)]
         lang: Option<String>,
-        #[arg(short, long)]
+        #[arg(long)]
         glob: Option<String>,
+        #[arg(long, default_value = "false")]
+        exhaustive: bool,
     },
     #[command(about = "Interactive chat (search loop)")]
     Chat {
@@ -158,7 +160,7 @@ async fn main() -> Result<()> {
                 other => eprintln!("Unexpected response: {:?}", other),
             }
         }
-        Commands::Search { root, query, limit, lang, glob } => {
+        Commands::Search { root, query, limit, lang, glob, exhaustive } => {
             let mut client = open_client(model).await?;
             let project_root = canon(&root)?;
             let resp = client
@@ -170,6 +172,7 @@ async fn main() -> Result<()> {
                     languages: lang.map(|l| l.split(',').map(String::from).collect()),
                     path_glob: glob,
                     refresh_index: false,
+                    exhaustive,
                 }))
                 .await?;
             match resp {
@@ -206,6 +209,7 @@ async fn main() -> Result<()> {
                         languages: None,
                         path_glob: None,
                         refresh_index: false,
+                        exhaustive: false,
                     }))
                     .await?;
                 match resp {

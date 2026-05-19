@@ -114,28 +114,8 @@ impl ChunksTable {
                 .refine_factor(params.refine_factor);
         }
 
-        let mut filters = Vec::new();
-
-        if let Some(langs) = languages
-            && !langs.is_empty()
-        {
-            let list = langs
-                .iter()
-                .map(|l| format!("'{}'", l))
-                .collect::<Vec<_>>()
-                .join(",");
-            filters.push(format!("language IN ({})", list));
-        }
-
-        if let Some(glob) = path_glob
-            && let Some(pattern) = glob_to_like(glob)
-        {
-            filters.push(format!("file_path LIKE '{}'", pattern));
-        }
-
-        if !filters.is_empty() {
-            let combined = filters.join(" AND ");
-            q = q.only_if(combined);
+        if let Some(filter) = build_lang_path_filter(languages, path_glob) {
+            q = q.only_if(filter);
         }
 
         let results = q.execute().await?;
@@ -190,28 +170,13 @@ impl ChunksTable {
             })
             .collect();
 
-        let mut filters = Vec::with_capacity(2);
-        filters.push(format!("chunk_id IN ({})", hex_parts.join(",")));
+        let chunk_filter = format!("chunk_id IN ({})", hex_parts.join(","));
+        let filter = match build_lang_path_filter(languages, path_glob) {
+            Some(lp) => format!("{} AND {}", chunk_filter, lp),
+            None => chunk_filter,
+        };
 
-        if let Some(langs) = languages
-            && !langs.is_empty()
-        {
-            let list = langs
-                .iter()
-                .map(|l| format!("'{}'", l))
-                .collect::<Vec<_>>()
-                .join(",");
-            filters.push(format!("language IN ({})", list));
-        }
-
-        if let Some(glob) = path_glob
-            && let Some(pattern) = glob_to_like(glob)
-        {
-            filters.push(format!("file_path LIKE '{}'", pattern));
-        }
-
-        let combined = filters.join(" AND ");
-        let results = self.table.query().only_if(combined).execute().await?;
+        let results = self.table.query().only_if(filter).execute().await?;
 
         let mut hits = Vec::with_capacity(ids.len());
         let mut stream = std::pin::pin!(results);
@@ -272,8 +237,53 @@ impl ChunksTable {
         Ok(count)
     }
 
+    pub async fn knn_exhaustive(
+        &self,
+        query: &[f32],
+        k: usize,
+        languages: Option<&[String]>,
+        path_glob: Option<&str>,
+    ) -> Result<Vec<ChunkHit>> {
+        let mut q = self
+            .table
+            .query()
+            .nearest_to(query)?
+            .distance_type(lancedb::DistanceType::Cosine)
+            .bypass_vector_index()
+            .limit(k);
+
+        if let Some(filter) = build_lang_path_filter(languages, path_glob) {
+            q = q.only_if(filter);
+        }
+
+        let results = q.execute().await?;
+
+        let mut hits = Vec::with_capacity(k);
+        let mut stream = std::pin::pin!(results);
+        while let Some(batch) = stream.next().await {
+            decode_batch(&batch?, true, &mut hits);
+        }
+        Ok(hits)
+    }
+
     pub async fn len(&self) -> Result<usize> {
         Ok(self.table.count_rows(None).await?)
+    }
+}
+
+fn build_lang_path_filter(languages: Option<&[String]>, path_glob: Option<&str>) -> Option<String> {
+    let mut filters = Vec::with_capacity(2);
+    if let Some(langs) = languages && !langs.is_empty() {
+        let list = langs.iter().map(|l| format!("'{}'", l)).collect::<Vec<_>>().join(",");
+        filters.push(format!("language IN ({})", list));
+    }
+    if let Some(glob) = path_glob && let Some(pattern) = glob_to_like(glob) {
+        filters.push(format!("file_path LIKE '{}'", pattern));
+    }
+    if filters.is_empty() {
+        None
+    } else {
+        Some(filters.join(" AND "))
     }
 }
 
@@ -323,7 +333,7 @@ fn decode_batch(batch: &RecordBatch, has_distance: bool, out: &mut Vec<ChunkHit>
     out.reserve(num_rows);
     for i in 0..num_rows {
         let d = distances.map(|a| a.value(i)).unwrap_or(0.0);
-        let score = 1.0 - d / 2.0;
+        let score = 1.0 - d;
         let appendix = appendix_sym_ids
             .and_then(|arr| {
                 if arr.is_null(i) {

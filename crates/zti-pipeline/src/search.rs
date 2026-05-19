@@ -67,10 +67,24 @@ pub async fn search(
             let mut topn: Vec<([u8; 16], f32)> = Vec::with_capacity(raw_k);
             graph.search(&query_emb, raw_k, opts.limit * 2, &mut topn);
 
+            let score_by_id: std::collections::HashMap<[u8; 16], f32> = topn
+                .iter()
+                .map(|(id, score)| (*id, *score))
+                .collect();
+
             let ids: Vec<[u8; 16]> = topn.iter().map(|(id, _)| *id).collect();
-            chunks_table
+            let mut fetched = chunks_table
                 .fetch_by_chunk_ids(&ids, opts.languages, opts.path_glob)
-                .await?
+                .await?;
+
+            for hit in &mut fetched {
+                let mut key = [0u8; 16];
+                key.copy_from_slice(&hit.chunk_id[..16]);
+                if let Some(s) = score_by_id.get(&key) {
+                    hit.score = *s;
+                }
+            }
+            fetched
         }
     };
 
@@ -109,6 +123,36 @@ fn diversify_by_parent_in_place(
     }
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
     ranked.truncate(k);
+}
+
+pub async fn search_exhaustive(
+    query: &str,
+    engine: &EmbedEngine,
+    db: &zti_store::Db,
+    pid: &[u8; 32],
+    opts: &SearchOpts<'_>,
+) -> Result<Vec<Hit>> {
+    let projects = db.projects_table().await?;
+    let _project = projects
+        .get(pid)
+        .await?
+        .ok_or_else(|| anyhow!("project not indexed"))?;
+
+    let query_emb = engine.embed_query_async(query).await?;
+    let raw_k = opts.limit.saturating_mul(KNN_OVERFETCH_MULT);
+
+    let candidates = db
+        .chunks_table(engine.dim())
+        .await?
+        .knn_exhaustive(&query_emb, raw_k, opts.languages, opts.path_glob)
+        .await?;
+
+    let mut hits: Vec<Hit> = Vec::with_capacity(candidates.len());
+    for c in candidates {
+        let score = c.score;
+        hits.push(Hit { chunk: c, score });
+    }
+    Ok(hits)
 }
 
 async fn rebuild(

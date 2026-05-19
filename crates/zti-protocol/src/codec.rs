@@ -68,6 +68,7 @@ mod tests {
             languages: Some(vec!["rust".to_string(), "typescript".to_string()]),
             path_glob: Some("src/**".to_string()),
             refresh_index: false,
+            exhaustive: false,
         });
         let got: Request = roundtrip(req.clone()).await;
         match (req, got) {
@@ -79,6 +80,7 @@ mod tests {
                 assert_eq!(a.languages, b.languages);
                 assert_eq!(a.path_glob, b.path_glob);
                 assert_eq!(a.refresh_index, b.refresh_index);
+                assert_eq!(a.exhaustive, b.exhaustive);
             }
             _ => panic!("variant mismatch"),
         }
