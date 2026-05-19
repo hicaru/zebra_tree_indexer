@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+use zti_dsl::chunking::DslChunker;
 use zti_dsl::render::dsl::{DslRenderer, render_files_only};
 use zti_dsl::render::tree::AsciiTreeRenderer;
 use zti_tree_sitter::{parse_kinds, parse_language};
@@ -49,6 +50,15 @@ enum Commands {
     SymbolBody {
         #[arg(short, long, help = "Symbol ID")]
         id: u32,
+    },
+    #[command(about = "Show chunks in embed or display format")]
+    Chunks {
+        #[arg(short, long, help = "File path relative to root (omit for all files)")]
+        file: Option<String>,
+        #[arg(long, help = "Use embed format (header-body-header) instead of display format")]
+        embed: bool,
+        #[arg(long, help = "Show template (manifest + legend) without chunking")]
+        template: bool,
     },
 }
 
@@ -102,6 +112,38 @@ fn main() -> Result<()> {
             let range = zti_common::line_byte_range(&content, sym.line, sym.end_line);
             println!("// File: {} | Lines: {}-{}", file.path, sym.line, sym.end_line);
             println!("{}", &content[range]);
+        }
+        Commands::Chunks { file, embed, template } => {
+            let manifest = zti_dsl::chunking::find_manifest(&cli.root);
+            let chunker = DslChunker::new(&index, manifest.as_deref());
+
+            if template {
+                print!("{}", chunker.manifest_header());
+                return Ok(());
+            }
+
+            let files: Vec<(String, String)> = match &file {
+                Some(path) => {
+                    let full = cli.root.join(path);
+                    vec![(full.display().to_string(), std::fs::read_to_string(&full)?)]
+                }
+                None => index
+                    .files
+                    .iter()
+                    .filter_map(|f| std::fs::read_to_string(&f.path).ok().map(|c| (f.path.clone(), c)))
+                    .collect(),
+            };
+
+            for (label, content) in &files {
+                for chunk in chunker.chunks_for_file(label, content) {
+                    if embed {
+                        println!("{}", chunk.embed_text());
+                    } else {
+                        println!("{}", chunk.display_text());
+                    }
+                    println!("---SEPARATOR---");
+                }
+            }
         }
     }
 

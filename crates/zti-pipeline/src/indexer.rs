@@ -107,17 +107,12 @@ pub async fn index_project(
         dsl_index.files.len(),
     );
 
-    let manifest = ["Cargo.toml", "pubspec.yaml", "package.json", "foundry.toml"]
-        .iter()
-        .find_map(|name| {
-            let p = root.join(name);
-            std::fs::read_to_string(&p).ok().map(|c| (name, c))
-        });
-    if let Some((name, _)) = &manifest {
-        info!("found project manifest: {}", name);
+    let manifest = zti_dsl::chunking::find_manifest(root);
+    if manifest.is_some() {
+        info!("found project manifest");
     }
 
-    let chunker = DslChunker::new(&dsl_index, manifest.as_ref().map(|(_, c)| c.as_str()));
+    let chunker = DslChunker::new(&dsl_index, manifest.as_deref());
 
     let mut all_pending: Vec<(zti_dsl::chunking::Chunk, Language)> = Vec::new();
     for rel in &need_reindex {
@@ -185,20 +180,6 @@ pub async fn index_project(
                 Some((c, l)) => batch_items.push((c, l)),
                 None => break,
             }
-        }
-
-        if total_embedded == 0 {
-            let sample = &batch_items[0].0;
-            tracing::info!(
-                "embed format sample: kind={} qualified={} file={}:{}-{}\n--- HEADER (top) ---\n{}\n--- BODY ---\n{}\n--- HEADER (bottom) ---",
-                sample.kind.as_str(),
-                sample.qualified,
-                sample.file,
-                sample.start_line,
-                sample.end_line,
-                sample.header,
-                sample.body,
-            );
         }
 
         let bodies: Vec<String> = batch_items.iter().map(|(c, _)| c.embed_text()).collect();
