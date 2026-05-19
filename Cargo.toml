@@ -20,6 +20,7 @@ members = [
   "crates/zti-store",
   "crates/zti-pipeline",
   "crates/zti-protocol",
+  "crates/zti-ann",
   "crates/zti-ipc-client",
   "crates/zti-daemon",
   "crates/apps/zebra-dsl",
@@ -64,6 +65,8 @@ ndarray     = "0.16"
 
 bitpolar = { version = "0.3", features = ["parallel","serde-support"] }
 
+hnsw_rs = "0.3"
+
 lancedb     = "0.29"
 arrow       = "58"
 arrow-array = "58"
@@ -97,4 +100,5 @@ zti-rerank       = { path = "crates/zti-rerank" }
 zti-store        = { path = "crates/zti-store" }
 zti-pipeline     = { path = "crates/zti-pipeline" }
 zti-protocol     = { path = "crates/zti-protocol" }
+zti-ann           = { path = "crates/zti-ann" }
 zti-ipc-client   = { path = "crates/zti-ipc-client" }

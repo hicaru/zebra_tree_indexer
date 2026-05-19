@@ -7,6 +7,8 @@ pub async fn handle(req: &RemoveProjectReq, state: &DaemonState) -> Response {
     let root_path = std::path::Path::new(&req.project_root);
     let pid = zti_common::ids::project_id(root_path);
 
+    state.ann.invalidate(&pid).await;
+
     let mut reg = state.registry.write().await;
     reg.remove(&pid);
 

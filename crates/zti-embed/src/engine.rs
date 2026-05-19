@@ -297,10 +297,10 @@ fn extract_pooled(
 
     let stride = seq * dim;
     let mut results = Vec::with_capacity(batch);
-    for i in 0..batch {
+    for (i, &count) in valid_counts.iter().enumerate().take(batch) {
         let row_start = i * stride;
         let row_data = &data[row_start..row_start + stride];
-        let mut pooled = pool_row(strategy, row_data, dim, valid_counts[i]);
+        let mut pooled = pool_row(strategy, row_data, dim, count);
         normalize_l2(&mut pooled);
         results.push(pooled);
     }

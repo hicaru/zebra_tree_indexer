@@ -1,10 +1,11 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use arrow::array::{
-    Array, BinaryArray, FixedSizeBinaryArray, Float32Array, ListArray, RecordBatch,
-    RecordBatchIterator, StringArray, UInt32Array,
+    Array, BinaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, ListArray,
+    RecordBatch, RecordBatchIterator, StringArray, UInt32Array,
 };
+use futures::StreamExt;
 use lancedb::index::Index;
-use lancedb::index::vector::IvfPqIndexBuilder;
+use lancedb::index::vector::IvfHnswSqIndexBuilder;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::Table;
 use std::fmt::Write as _;
@@ -45,22 +46,33 @@ impl ChunksTable {
         Ok(())
     }
 
-    pub async fn index_vector(&mut self) -> Result<()> {
+    pub async fn build_index(&mut self, params: &zti_ann::SearchParams) -> Result<()> {
         if self.index_created {
             return Ok(());
         }
-        let row_count = self.table.count_rows(None).await?;
-        if row_count == 0 {
+        let n = self.table.count_rows(None).await?;
+        if n == 0
+            || matches!(
+                params.method,
+                zti_ann::SearchMethod::Flat | zti_ann::SearchMethod::HnswRs
+            )
+        {
+            self.index_created = true;
             return Ok(());
         }
-        if row_count < 256 {
-            tracing::warn!(
-                "skipping IVF-PQ index: need >= 256 rows, got {row_count}"
-            );
+        if n < 256 {
+            tracing::warn!("skipping ANN index: need >= 256 rows, got {n}");
+            self.index_created = true;
             return Ok(());
         }
+
+        let builder = IvfHnswSqIndexBuilder::default()
+            .distance_type(lancedb::DistanceType::Cosine)
+            .num_partitions(params.num_partitions)
+            .num_edges(params.m)
+            .ef_construction(params.ef_construction);
         self.table
-            .create_index(&["embedding"], Index::IvfPq(IvfPqIndexBuilder::default()))
+            .create_index(&["embedding"], Index::IvfHnswSq(builder))
             .execute()
             .await?;
         self.index_created = true;
@@ -84,6 +96,7 @@ impl ChunksTable {
         &self,
         query: &[f32],
         k: usize,
+        params: &zti_ann::SearchParams,
         languages: Option<&[String]>,
         path_glob: Option<&str>,
     ) -> Result<Vec<ChunkHit>> {
@@ -91,7 +104,15 @@ impl ChunksTable {
             .table
             .query()
             .nearest_to(query)?
+            .distance_type(lancedb::DistanceType::Cosine)
             .limit(k);
+
+        if matches!(params.method, zti_ann::SearchMethod::IvfHnswSq) {
+            q = q
+                .nprobes(params.nprobes as usize)
+                .ef(params.ef_search as usize)
+                .refine_factor(params.refine_factor);
+        }
 
         let mut filters = Vec::new();
 
@@ -121,7 +142,6 @@ impl ChunksTable {
 
         let mut hits = Vec::with_capacity(k);
         let mut stream = std::pin::pin!(results);
-        use futures::StreamExt;
         while let Some(batch) = stream.next().await {
             decode_batch(&batch?, true, &mut hits);
         }
@@ -146,11 +166,110 @@ impl ChunksTable {
 
         let mut hits = Vec::with_capacity(ids.len());
         let mut stream = std::pin::pin!(results);
-        use futures::StreamExt;
         while let Some(batch) = stream.next().await {
             decode_batch(&batch?, false, &mut hits);
         }
         Ok(hits)
+    }
+
+    pub async fn fetch_by_chunk_ids(
+        &self,
+        ids: &[[u8; 16]],
+        languages: Option<&[String]>,
+        path_glob: Option<&str>,
+    ) -> Result<Vec<ChunkHit>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let hex_parts: Vec<String> = ids
+            .iter()
+            .map(|id| {
+                let hex: String = id.iter().map(|b| format!("{:02x}", b)).collect();
+                format!("'\\x{}'", hex)
+            })
+            .collect();
+
+        let mut filters = Vec::with_capacity(2);
+        filters.push(format!("chunk_id IN ({})", hex_parts.join(",")));
+
+        if let Some(langs) = languages
+            && !langs.is_empty()
+        {
+            let list = langs
+                .iter()
+                .map(|l| format!("'{}'", l))
+                .collect::<Vec<_>>()
+                .join(",");
+            filters.push(format!("language IN ({})", list));
+        }
+
+        if let Some(glob) = path_glob
+            && let Some(pattern) = glob_to_like(glob)
+        {
+            filters.push(format!("file_path LIKE '{}'", pattern));
+        }
+
+        let combined = filters.join(" AND ");
+        let results = self.table.query().only_if(combined).execute().await?;
+
+        let mut hits = Vec::with_capacity(ids.len());
+        let mut stream = std::pin::pin!(results);
+        while let Some(batch) = stream.next().await {
+            decode_batch(&batch?, false, &mut hits);
+        }
+        Ok(hits)
+    }
+
+    pub async fn iter_vectors<F>(&self, mut on_row: F) -> Result<usize>
+    where
+        F: FnMut(&[u8; 16], &[f32]),
+    {
+        let results = self
+            .table
+            .query()
+            .select(lancedb::query::Select::columns(&["chunk_id", "embedding"]))
+            .execute()
+            .await?;
+
+        let mut stream = std::pin::pin!(results);
+        let mut count = 0usize;
+        while let Some(batch) = stream.next().await {
+            let b = batch?;
+
+            let ids = b
+                .column_by_name("chunk_id")
+                .ok_or_else(|| anyhow!("missing column 'chunk_id'"))?
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .ok_or_else(|| anyhow!("chunk_id is not FixedSizeBinary"))?;
+
+            let embs = b
+                .column_by_name("embedding")
+                .ok_or_else(|| anyhow!("missing column 'embedding'"))?
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .ok_or_else(|| anyhow!("embedding is not FixedSizeList"))?;
+
+            let values = embs
+                .values()
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| anyhow!("embedding values not Float32"))?
+                .values();
+            let dim = embs.value_length() as usize;
+
+            for i in 0..b.num_rows() {
+                let raw = ids.value(i);
+                let id: &[u8; 16] = raw
+                    .try_into()
+                    .map_err(|_| anyhow!("chunk_id length != 16"))?;
+                let start = i * dim;
+                on_row(id, &values[start..start + dim]);
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     pub async fn len(&self) -> Result<usize> {
@@ -222,7 +341,11 @@ fn decode_batch(batch: &RecordBatch, has_distance: bool, out: &mut Vec<ChunkHit>
             })
             .unwrap_or_default();
         let parent_sym_id = parent_sym_ids.and_then(|a| {
-            if a.is_null(i) { None } else { Some(a.value(i)) }
+            if a.is_null(i) {
+                None
+            } else {
+                Some(a.value(i))
+            }
         });
         out.push(ChunkHit {
             chunk_id: chunk_ids
@@ -279,7 +402,6 @@ mod tests {
 
     #[test]
     fn glob_to_like_rejects_sql_injection() {
-        // Single quote, backslash, and raw SQL wildcards are not user-safe.
         assert!(glob_to_like("' OR 1=1 --").is_none());
         assert!(glob_to_like(r"back\slash").is_none());
         assert!(glob_to_like("raw_underscore").is_none());

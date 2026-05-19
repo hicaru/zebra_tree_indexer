@@ -1,15 +1,20 @@
-use anyhow::Result;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 
+use anyhow::{anyhow, Result};
+
+use zti_ann::{AnnCache, AnnHandle, SearchMethod, SearchParams};
 use zti_embed::EmbedEngine;
 use zti_rerank::TurboReranker;
 use zti_store::chunks_table::ChunkHit;
 
-const KNN_OVERFETCH_MULT: usize = 3;
+const KNN_OVERFETCH_MULT: usize = 4;
+const DIVERSITY_PENALTY: f32 = 0.04;
 
-pub struct SearchOpts {
+pub struct SearchOpts<'a> {
     pub limit: usize,
-    pub languages: Option<Vec<String>>,
-    pub path_glob: Option<String>,
+    pub languages: Option<&'a [String]>,
+    pub path_glob: Option<&'a str>,
 }
 
 pub struct Hit {
@@ -22,39 +27,105 @@ pub async fn search(
     engine: &EmbedEngine,
     db: &zti_store::Db,
     reranker: &TurboReranker,
-    opts: &SearchOpts,
+    ann_cache: &AnnCache,
+    pid: &[u8; 32],
+    opts: &SearchOpts<'_>,
 ) -> Result<Vec<Hit>> {
-    let query_emb = engine.embed_query_async(query).await?;
+    let projects = db.projects_table().await?;
+    let project = projects.get(pid).await?
+        .ok_or_else(|| anyhow!("project not indexed"))?;
 
-    let raw_k = opts.limit.saturating_mul(KNN_OVERFETCH_MULT);
+    let previous: Option<SearchParams> = project.search_params.as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
+
+    let params: SearchParams = match previous {
+        Some(p) => p,
+        None => zti_ann::choose_method(
+            project.total_chunks as usize,
+            engine.dim(),
+            &zti_hw::probe(),
+            None,
+        ),
+    };
+
+    let query_emb = engine.embed_query_async(query).await?;
     let chunks_table = db.chunks_table(engine.dim()).await?;
-    let candidates = chunks_table
-        .knn(
-            &query_emb,
-            raw_k,
-            opts.languages.as_deref(),
-            opts.path_glob.as_deref(),
-        )
-        .await?;
+    let raw_k = opts.limit.saturating_mul(KNN_OVERFETCH_MULT);
+
+    let mut candidates: Vec<ChunkHit> = match params.method {
+        SearchMethod::IvfHnswSq | SearchMethod::Flat => {
+            chunks_table
+                .knn(&query_emb, raw_k, &params, opts.languages, opts.path_glob)
+                .await?
+        }
+        SearchMethod::HnswRs => {
+            let graph: AnnHandle = ann_cache
+                .get_or_build(*pid, || rebuild(&chunks_table, engine.dim(), &params))
+                .await
+                .map_err(|e: anyhow::Error| e)?;
+
+            let mut topn: Vec<([u8; 16], f32)> = Vec::with_capacity(raw_k);
+            graph.search(&query_emb, raw_k, opts.limit * 2, &mut topn);
+
+            let ids: Vec<[u8; 16]> = topn.iter().map(|(id, _)| *id).collect();
+            chunks_table
+                .fetch_by_chunk_ids(&ids, opts.languages, opts.path_glob)
+                .await?
+        }
+    };
 
     let rerank_input: Vec<(&[u8], f32)> = candidates
         .iter()
         .map(|c| (c.turbo_code.as_slice(), c.score))
         .collect();
+    let mut ranked = reranker.rerank(&rerank_input, &query_emb);
 
-    let ranked = reranker.rerank(&rerank_input, &query_emb);
+    diversify_by_parent_in_place(&mut ranked, &candidates, opts.limit);
 
-    let mut hits: Vec<Hit> = ranked
-        .into_iter()
-        .filter_map(|(idx, score)| {
-            candidates.get(idx).map(|c| Hit {
-                chunk: c.clone(),
-                score,
-            })
-        })
-        .collect();
-
-    hits.truncate(opts.limit);
-
+    let mut slots: Vec<Option<ChunkHit>> = candidates.drain(..).map(Some).collect();
+    let mut hits: Vec<Hit> = Vec::with_capacity(ranked.len());
+    for (idx, score) in ranked {
+        if let Some(c) = slots.get_mut(idx).and_then(Option::take) {
+            hits.push(Hit { chunk: c, score });
+        }
+    }
     Ok(hits)
+}
+
+#[inline]
+fn diversify_by_parent_in_place(
+    ranked: &mut Vec<(usize, f32)>,
+    candidates: &[ChunkHit],
+    k: usize,
+) {
+    let mut parents_seen: HashMap<u32, u32> = HashMap::with_capacity(ranked.len());
+    for entry in ranked.iter_mut() {
+        let parent = candidates.get(entry.0).and_then(|c| c.parent_sym_id);
+        if let Some(p) = parent {
+            let n = parents_seen.entry(p).or_insert(0);
+            entry.1 -= (*n as f32) * DIVERSITY_PENALTY;
+            *n += 1;
+        }
+    }
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+    ranked.truncate(k);
+}
+
+async fn rebuild(
+    chunks: &zti_store::chunks_table::ChunksTable,
+    dim: usize,
+    params: &SearchParams,
+) -> Result<zti_ann::hnsw::HnswGraph> {
+    let n = params.indexed_chunks as usize;
+    let mut flat: Vec<f32> = Vec::with_capacity(n * dim);
+    let mut chunk_ids: Vec<[u8; 16]> = Vec::with_capacity(n);
+
+    chunks
+        .iter_vectors(|id, v| {
+            flat.extend_from_slice(v);
+            chunk_ids.push(*id);
+        })
+        .await?;
+
+    Ok(zti_ann::hnsw::HnswGraph::build(dim, &flat, chunk_ids, params))
 }

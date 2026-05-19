@@ -12,4 +12,5 @@ lancedb.workspace = true
 arrow.workspace = true
 arrow-array.workspace = true
 zti-common.workspace = true
+zti-ann.workspace = true
 futures.workspace = true

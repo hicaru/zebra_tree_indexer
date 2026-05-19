@@ -1,6 +1,8 @@
-use anyhow::Result;
-use arrow::array::{RecordBatch, RecordBatchIterator, StringArray, UInt32Array, UInt64Array};
-use lancedb::query::{ExecutableQuery, QueryBase};
+use anyhow::{Result, anyhow};
+use arrow::array::{FixedSizeBinaryArray, RecordBatch, RecordBatchIterator, StringArray, UInt32Array, UInt64Array};
+use arrow_array::Array;
+use futures::StreamExt;
+use lancedb::query::ExecutableQuery;
 use lancedb::table::Table;
 use std::sync::Arc;
 
@@ -23,17 +25,21 @@ impl ProjectsTable {
     }
 
     pub async fn get(&self, project_id: &[u8; 32]) -> Result<Option<ProjectRow>> {
-        let hex_id: String = project_id.iter().map(|b| format!("{:02x}", b)).collect();
-        let filter = format!("project_id = '\\x{}'", hex_id);
-        let results = self.table.query().only_if(filter).execute().await?;
-
+        let results = self.table.query().execute().await?;
         let mut stream = std::pin::pin!(results);
-        use futures::StreamExt;
         while let Some(batch) = stream.next().await {
             let batch = batch?;
             if batch.num_rows() == 0 {
                 continue;
             }
+
+            let ids = batch
+                .column_by_name("project_id")
+                .and_then(|c| c.as_any().downcast_ref::<FixedSizeBinaryArray>())
+                .ok_or_else(|| anyhow!("missing/bad column 'project_id'"))?;
+
+            let row = (0..batch.num_rows()).find(|&i| ids.value(i) == project_id.as_slice());
+            let Some(i) = row else { continue };
 
             let root_paths = batch
                 .column_by_name("root_path")
@@ -56,8 +62,13 @@ impl ProjectsTable {
             let created_at = batch
                 .column_by_name("created_at_ns")
                 .and_then(|c| c.as_any().downcast_ref::<UInt64Array>());
+            let search_method = batch
+                .column_by_name("search_method")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+            let search_params = batch
+                .column_by_name("search_params")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
 
-            let i = 0;
             return Ok(Some(ProjectRow {
                 project_id: project_id.to_vec(),
                 root_path: root_paths
@@ -71,6 +82,12 @@ impl ProjectsTable {
                 total_files: total_files.map(|a| a.value(i)).unwrap_or(0),
                 last_indexed_ns: last_indexed.map(|a| a.value(i)).unwrap_or(0),
                 created_at_ns: created_at.map(|a| a.value(i)).unwrap_or(0),
+                search_method: search_method.and_then(|a| {
+                    if a.is_null(i) { None } else { Some(a.value(i).to_string()) }
+                }),
+                search_params: search_params.and_then(|a| {
+                    if a.is_null(i) { None } else { Some(a.value(i).to_string()) }
+                }),
             }));
         }
         Ok(None)
@@ -104,4 +121,6 @@ pub struct ProjectRow {
     pub total_files: u64,
     pub last_indexed_ns: u64,
     pub created_at_ns: u64,
+    pub search_method: Option<String>,
+    pub search_params: Option<String>,
 }

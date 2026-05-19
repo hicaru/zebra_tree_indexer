@@ -24,7 +24,5 @@ pub fn register() -> Vec<ExecutionProviderDispatch> {
     }
 
     tracing::debug!("configuring CoreML execution provider (ALL compute units, MLProgram)");
-    let mut out = Vec::with_capacity(1);
-    out.push(ep.build());
-    out
+    vec![ep.build()]
 }

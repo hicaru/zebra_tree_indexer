@@ -314,13 +314,25 @@ pub async fn index_project(
         reporter.inc(batch_size as u64);
     }
 
-    chunks_table.index_vector().await?;
+    let hw = zti_hw::probe();
+    let previous_row = db.projects_table().await?.get(&pid).await.ok().flatten();
+    let previous_params: Option<zti_ann::SearchParams> = previous_row
+        .as_ref()
+        .and_then(|r| r.search_params.as_deref())
+        .and_then(|s| serde_json::from_str(s).ok());
+    let params = zti_ann::choose_method(total_embedded, engine.dim(), &hw, previous_params.as_ref());
+    info!(
+        "search method: {:?} (n={}, dim={}, ram_avail={} MB)",
+        params.method, total_embedded, engine.dim(), hw.mem_avail >> 20
+    );
+
+    chunks_table.build_index(&params).await?;
 
     upsert_files(&files_table, &snapshots, &need_reindex).await?;
 
     let languages: HashSet<Language> = snapshots.values().map(|s| s.language).collect();
     let languages: Vec<&Language> = languages.iter().collect();
-    upsert_project(db, &pid, root_str, total_embedded, snapshots.len(), &languages, engine).await?;
+    upsert_project(db, &pid, root_str, total_embedded, snapshots.len(), &languages, engine, &params).await?;
 
     reporter.finish_with_message(&format!("embedded {} passages", total_embedded));
 
@@ -385,6 +397,7 @@ async fn upsert_files(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upsert_project(
     db: &Db,
     pid: &[u8; 32],
@@ -393,6 +406,7 @@ async fn upsert_project(
     total_files: usize,
     languages: &[&Language],
     engine: &EmbedEngine,
+    choice: &zti_ann::SearchParams,
 ) -> Result<()> {
     let projects_table = db.projects_table().await?;
     let now_ns = std::time::SystemTime::now()
@@ -417,6 +431,9 @@ async fn upsert_project(
         None,
     );
 
+    let search_method = StringArray::from(vec![choice.method.as_str()]);
+    let search_params = StringArray::from(vec![serde_json::to_string(&choice)?]);
+
     let record = RecordBatch::try_new(
         Arc::new(zti_store::schema::projects_schema()),
         vec![
@@ -429,6 +446,8 @@ async fn upsert_project(
             Arc::new(UInt64Array::from(vec![total_files as u64])),
             Arc::new(UInt64Array::from(vec![now_ns])),
             Arc::new(UInt64Array::from(vec![now_ns])),
+            Arc::new(search_method),
+            Arc::new(search_params),
         ],
     )?;
 

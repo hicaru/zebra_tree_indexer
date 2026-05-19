@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use tokio::sync::{Mutex, RwLock, watch};
 
+use zti_ann::AnnCache;
 use zti_common::ids;
 use zti_dsl::ProjectIndex;
 use zti_embed::EmbedEngine;
@@ -21,6 +22,7 @@ pub struct DaemonState {
     pub engine: Arc<EmbedEngine>,
     pub hardware: Hardware,
     pub registry: RwLock<HashMap<[u8; 32], Arc<LoadedProject>>>,
+    pub ann: Arc<AnnCache>,
     pub started_at_ns: u64,
     pub started_at: Instant,
     pub shutdown_tx: watch::Sender<bool>,
@@ -41,6 +43,7 @@ impl DaemonState {
             engine: Arc::new(engine),
             hardware,
             registry: RwLock::new(HashMap::new()),
+            ann: Arc::new(AnnCache::default()),
             started_at_ns,
             started_at: Instant::now(),
             shutdown_tx,
