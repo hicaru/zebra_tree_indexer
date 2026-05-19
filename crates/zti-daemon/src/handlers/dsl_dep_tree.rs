@@ -16,7 +16,7 @@ pub async fn handle(req: &DepTreeReq, state: &DaemonState) -> Response {
         let renderer = zti_dsl::AsciiTreeRenderer::new(&index);
         let text = match direction.as_str() {
             "callers" => renderer.render_callers(symbol_id, depth),
-            "callees" => renderer.render_callees(symbol_id, depth),
+            "callees" => renderer.render_callees(symbol_id, depth, false),
             other => {
                 anyhow::bail!("direction must be 'callers' or 'callees', got '{}'", other);
             }

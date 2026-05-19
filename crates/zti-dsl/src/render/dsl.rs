@@ -6,7 +6,7 @@ use zti_ts_core::types::{Edge, EdgeKind, Kind, Target};
 
 use crate::model::ProjectIndex;
 
-pub const LEGEND_LINE: &str = "# k short = Kind   f#=fn m#=method s#=struct e#=enum C#=class I#=iface t#=typealias c#=const v#=static .=field/variant E#=event X#=error M#=mod";
+pub const LEGEND_LINE: &str = "# k short = Kind   f#=fn m#=method s#=struct e#=enum C#=class I#=iface t#=typealias c#=const v#=static .=field/variant E#=event X#=error M#=mod   PKG = project manifest";
 
 /// One-pass: for every symbol with a `parent`, push its id under that
 /// parent. Used by `render_symbol_rich` so the ≈ siblings line is O(siblings)
@@ -131,11 +131,10 @@ pub fn render_symbol_inline(
     );
 }
 
-/// Multi-line rich rendering for chat-style output. Produces:
+/// Multi-line rich rendering for chunk headers. Produces:
 /// ```text
 /// {kind#id} {name}  {rel_path}:{line}-{end_line} "doc?"
-///     sig {signature?}
-///     → {call targets}
+///     ├─ {callee tree (depth 2)}
 ///     > {ref targets}
 ///     ≈ {sibling names}
 /// ```
@@ -181,14 +180,20 @@ pub fn render_symbol_rich(
         }
     }
 
-    // Line 2: sig <signature>
-    if !sym.signature.is_empty() {
-        out.push_str("\n  sig ");
-        out.push_str(sym.signature.trim());
+    // Callees tree (depth 2)
+    let tree = super::tree::AsciiTreeRenderer::new(index).render_callees_with_ids(id, 2, true, false);
+    let tree = tree.trim();
+    if !tree.is_empty() {
+        let mut first = true;
+        for line in tree.lines() {
+            if first {
+                first = false;
+                continue;
+            }
+            out.push_str("\n  ");
+            out.push_str(line);
+        }
     }
-
-    // Line 3: → calls
-    write_rich_edge_line(out, index, id, EdgeKind::Call, "\n  → ", max_targets);
 
     // Line 4: > uses
     write_rich_edge_line(out, index, id, EdgeKind::Ref, "\n  > ", max_targets);

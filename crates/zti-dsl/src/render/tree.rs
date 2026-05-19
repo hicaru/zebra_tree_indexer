@@ -31,17 +31,27 @@ impl<'a> AsciiTreeRenderer<'a> {
             &mut prefix,
             &mut visited,
             Direction::Callers,
+            false,
+            true,
         );
         out
     }
 
-    pub fn render_callees(&self, id: u32, max_depth: usize) -> String {
+    pub fn render_callees(&self, id: u32, max_depth: usize, local_only: bool) -> String {
+        self.render_callees_with_ids(id, max_depth, local_only, true)
+    }
+
+    pub fn render_callees_with_ids(&self, id: u32, max_depth: usize, local_only: bool, show_ids: bool) -> String {
         let mut out = String::new();
         let sym = match self.index.symbols.get(id as usize) {
             Some(s) => s,
             None => return format!("Symbol {} not found\n", id),
         };
-        let _ = writeln!(out, "{}#{} {} (callees)", sym.kind.short(), id, sym.qualified);
+        if show_ids {
+            let _ = writeln!(out, "{}#{} {} (callees)", sym.kind.short(), id, sym.qualified);
+        } else {
+            let _ = writeln!(out, "{} {} (callees)", sym.kind.short(), sym.qualified);
+        }
         let mut prefix = String::new();
         let mut visited = HashSet::new();
         self.recurse(
@@ -52,6 +62,8 @@ impl<'a> AsciiTreeRenderer<'a> {
             &mut prefix,
             &mut visited,
             Direction::Callees,
+            local_only,
+            show_ids,
         );
         out
     }
@@ -70,32 +82,36 @@ impl<'a> AsciiTreeRenderer<'a> {
         prefix: &mut String,
         visited: &mut HashSet<u32>,
         direction: Direction,
+        local_only: bool,
+        show_ids: bool,
     ) {
         if depth >= max_depth || !visited.insert(id) {
             return;
         }
 
-        // Forward and reverse maps were built once in `build_index` — using
-        // them (rather than scanning `index.edges`) keeps render O(fanout)
-        // per symbol instead of O(E).
         let edges_for_id: &[Edge] = match direction {
             Direction::Callers => self.index.reverse_edges.get(&id).map(Vec::as_slice).unwrap_or(&[]),
             Direction::Callees => self.index.forward_edges.get(&id).map(Vec::as_slice).unwrap_or(&[]),
         };
 
-        let total = edges_for_id
+        let filtered: Vec<&Edge> = edges_for_id
             .iter()
             .filter(|e| e.kind == EdgeKind::Call)
-            .count();
+            .filter(|e| {
+                if local_only {
+                    matches!(e.to, Target::Resolved(_))
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        let total = filtered.len();
         if total == 0 {
             return;
         }
 
-        for (i, edge) in edges_for_id
-            .iter()
-            .filter(|e| e.kind == EdgeKind::Call)
-            .enumerate()
-        {
+        for (i, edge) in filtered.iter().enumerate() {
             let is_last = i + 1 == total;
             let branch = if is_last { "└── " } else { "├── " };
             let child_segment = if is_last { "    " } else { "│   " };
@@ -105,10 +121,13 @@ impl<'a> AsciiTreeRenderer<'a> {
 
             match direction {
                 Direction::Callers => {
-                    // reverse edges store the original caller as `Target::Resolved(edge.to)`.
                     if let Target::Resolved(from_id) = edge.to {
                         if let Some(sym) = self.index.symbols.get(from_id as usize) {
-                            let _ = writeln!(out, "{}#{} {}", sym.kind.short(), from_id, sym.qualified);
+                            if show_ids {
+                                let _ = writeln!(out, "{}#{} {}", sym.kind.short(), from_id, sym.qualified);
+                            } else {
+                                let _ = writeln!(out, "{} {}", sym.kind.short(), sym.qualified);
+                            }
                             let saved = prefix.len();
                             prefix.push_str(child_segment);
                             self.recurse(
@@ -119,6 +138,8 @@ impl<'a> AsciiTreeRenderer<'a> {
                                 prefix,
                                 visited,
                                 direction,
+                                local_only,
+                                show_ids,
                             );
                             prefix.truncate(saved);
                         } else {
@@ -131,7 +152,11 @@ impl<'a> AsciiTreeRenderer<'a> {
                 Direction::Callees => match &edge.to {
                     Target::Resolved(to_id) => {
                         if let Some(sym) = self.index.symbols.get(*to_id as usize) {
-                            let _ = writeln!(out, "{}#{} {}", sym.kind.short(), to_id, sym.qualified);
+                            if show_ids {
+                                let _ = writeln!(out, "{}#{} {}", sym.kind.short(), to_id, sym.qualified);
+                            } else {
+                                let _ = writeln!(out, "{} {}", sym.kind.short(), sym.qualified);
+                            }
                             let saved = prefix.len();
                             prefix.push_str(child_segment);
                             self.recurse(
@@ -142,6 +167,8 @@ impl<'a> AsciiTreeRenderer<'a> {
                                 prefix,
                                 visited,
                                 direction,
+                                local_only,
+                                show_ids,
                             );
                             prefix.truncate(saved);
                         } else {

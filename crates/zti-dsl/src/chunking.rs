@@ -6,9 +6,10 @@ use zti_common::line_byte_range;
 use zti_ts_core::types::Kind;
 
 use crate::model::ProjectIndex;
-use crate::render::{build_children_by_parent, render_symbol_rich};
+use crate::render::{build_children_by_parent, render_symbol_rich, LEGEND_LINE};
 
 const RICH_MAX_TARGETS: usize = 24;
+const MANIFEST_CAP: usize = 2048;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
@@ -35,13 +36,33 @@ impl Chunk {
 pub struct DslChunker<'a> {
     index: &'a ProjectIndex,
     children_by_parent: HashMap<u32, Vec<u32>>,
+    manifest_header: String,
 }
 
 impl<'a> DslChunker<'a> {
-    pub fn new(index: &'a ProjectIndex) -> Self {
+    pub fn new(index: &'a ProjectIndex, manifest_content: Option<&str>) -> Self {
+        let mut manifest_header = String::with_capacity(MANIFEST_CAP + 256);
+        if let Some(content) = manifest_content {
+            let capped = if content.len() > MANIFEST_CAP {
+                &content[..content.ceil_char_boundary(MANIFEST_CAP)]
+            } else {
+                content
+            };
+            if !capped.is_empty() {
+                manifest_header.push_str("PKG ");
+                manifest_header.push_str(capped);
+                if capped.len() < content.len() {
+                    manifest_header.push_str("\n...");
+                }
+                manifest_header.push('\n');
+            }
+        }
+        manifest_header.push_str("LEGEND ");
+        manifest_header.push_str(LEGEND_LINE);
         Self {
             index,
             children_by_parent: build_children_by_parent(index),
+            manifest_header,
         }
     }
 
@@ -91,7 +112,9 @@ impl<'a> DslChunker<'a> {
         }
         let body = source[range].to_string();
 
-        let mut header = String::with_capacity(384);
+        let mut header = String::with_capacity(384 + self.manifest_header.len());
+        header.push_str(&self.manifest_header);
+        header.push('\n');
         render_symbol_rich(
             self.index,
             sym.id,

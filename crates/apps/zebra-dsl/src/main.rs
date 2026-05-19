@@ -89,7 +89,7 @@ fn main() -> Result<()> {
             let renderer = AsciiTreeRenderer::new(&index);
             match direction.as_str() {
                 "callers" => print!("{}", renderer.render_callers(id, depth)),
-                "callees" => print!("{}", renderer.render_callees(id, depth)),
+                "callees" => print!("{}", renderer.render_callees(id, depth, false)),
                 _ => return Err(anyhow::anyhow!("direction must be 'callers' or 'callees'")),
             }
         }
