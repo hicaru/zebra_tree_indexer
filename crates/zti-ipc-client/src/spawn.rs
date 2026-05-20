@@ -7,7 +7,12 @@ use tokio::time;
 
 use zti_common::paths;
 
-pub async fn connect_or_spawn(timeout: Duration, model: Option<&str>, variant: Option<&str>) -> Result<UnixStream> {
+pub async fn connect_or_spawn(
+    timeout: Duration,
+    model: Option<&str>,
+    variant: Option<&str>,
+    query_prefix: Option<&str>,
+) -> Result<UnixStream> {
     let socket_path = paths::daemon_socket()?;
 
     if let Ok(stream) = UnixStream::connect(&socket_path).await {
@@ -19,11 +24,15 @@ pub async fn connect_or_spawn(timeout: Duration, model: Option<&str>, variant: O
         Some(m) => tracing::info!("daemon not running, spawning with model {m}..."),
         None => tracing::info!("daemon not running, spawning with daemon default model..."),
     }
-    spawn_daemon(model, variant)?;
+    spawn_daemon(model, variant, query_prefix)?;
     wait_for_socket(&socket_path, timeout).await
 }
 
-fn spawn_daemon(model: Option<&str>, variant: Option<&str>) -> Result<()> {
+fn spawn_daemon(
+    model: Option<&str>,
+    variant: Option<&str>,
+    query_prefix: Option<&str>,
+) -> Result<()> {
     let exe = std::env::current_exe()?;
     let dir = exe
         .parent()
@@ -42,6 +51,9 @@ fn spawn_daemon(model: Option<&str>, variant: Option<&str>) -> Result<()> {
     }
     if let Some(v) = variant {
         cmd.args(["--variant", v]);
+    }
+    if let Some(p) = query_prefix {
+        cmd.args(["--query-prefix", p]);
     }
     cmd.spawn()?;
 

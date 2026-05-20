@@ -13,6 +13,21 @@ use crate::pooling::{PoolingStrategy, pool_row};
 use crate::tokenizer::Tokenizer;
 use zti_hw::{Hardware, probe, register};
 
+#[derive(Debug, Clone, Copy)]
+pub struct LoadOverrides<'a> {
+    pub variant: OnnxVariant,
+    pub query_prefix: Option<&'a str>,
+}
+
+impl<'a> Default for LoadOverrides<'a> {
+    fn default() -> Self {
+        Self {
+            variant: OnnxVariant::Auto,
+            query_prefix: None,
+        }
+    }
+}
+
 pub struct EmbedEngine {
     session: Arc<Mutex<Session>>,
     tokenizer: Tokenizer,
@@ -36,19 +51,15 @@ impl EmbedEngine {
     pub fn load(model_id: &str) -> Result<Self> {
         let hw = probe();
         tracing::info!(device = ?hw.device, cpus = hw.cpus, "probing hardware");
-        Self::load_with_variant(model_id, &hw, OnnxVariant::Auto)
+        Self::load_with(model_id, &hw, &LoadOverrides::default())
     }
 
     pub fn load_with_device(model_id: &str, hw: &Hardware) -> Result<Self> {
-        Self::load_with_variant(model_id, hw, OnnxVariant::Auto)
+        Self::load_with(model_id, hw, &LoadOverrides::default())
     }
 
-    pub fn load_with_variant(
-        model_id: &str,
-        hw: &Hardware,
-        variant: OnnxVariant,
-    ) -> Result<Self> {
-        let mut profile = resolve_profile(model_id, variant, hw)?;
+    pub fn load_with(model_id: &str, hw: &Hardware, opts: &LoadOverrides<'_>) -> Result<Self> {
+        let mut profile = resolve_profile(model_id, opts.variant, hw, opts.query_prefix)?;
 
         tracing::info!(path = %profile.onnx_path.display(), "loading ONNX model");
 

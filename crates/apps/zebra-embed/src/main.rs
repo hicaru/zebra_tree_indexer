@@ -26,6 +26,9 @@ struct Cli {
     #[arg(long, value_enum, global = true)]
     variant: Option<OnnxVariant>,
 
+    #[arg(long, global = true)]
+    query_prefix: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -84,8 +87,12 @@ enum Commands {
 /// Connect to the daemon (auto-spawning if needed) and complete the mandatory
 /// handshake. Every subcommand uses this — including `Stop`. Replaces what was
 /// previously ~10 lines of duplicated boilerplate per command.
-async fn open_client(model: Option<&str>, variant: Option<&str>) -> Result<Client> {
-    let mut client = Client::connect(Duration::from_secs(10), model, variant).await?;
+async fn open_client(
+    model: Option<&str>,
+    variant: Option<&str>,
+    query_prefix: Option<&str>,
+) -> Result<Client> {
+    let mut client = Client::connect(Duration::from_secs(10), model, variant, query_prefix).await?;
     client.handshake().await?;
     Ok(client)
 }
@@ -115,9 +122,11 @@ async fn main() -> Result<()> {
         OnnxVariant::Auto => None,
         other => Some(other.as_str()),
     });
+    let query_prefix = cli.query_prefix.as_deref();
+    let open = || open_client(model, variant, query_prefix);
     match cli.command {
         Commands::Index { root, refresh } => {
-            let mut client = open_client(model, variant).await?;
+            let mut client = open().await?;
             let project_root = canon(&root)?;
             let bar = RefCell::new(None::<ProgressBar>);
 
@@ -179,7 +188,7 @@ async fn main() -> Result<()> {
             glob,
             exhaustive,
         } => {
-            let mut client = open_client(model, variant).await?;
+            let mut client = open().await?;
             let project_root = canon(&root)?;
             let resp = client
                 .request(Request::Search(SearchReq {
@@ -203,7 +212,7 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Chat { root, limit } => {
-            let mut client = open_client(model, variant).await?;
+            let mut client = open().await?;
             let project_root = canon(&root)?;
             let mut rl = rustyline::DefaultEditor::new()?;
             println!("zebra-embed chat — type a query, :q or Ctrl-D to exit.");
@@ -240,7 +249,7 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Status { root } => {
-            let mut client = open_client(model, variant).await?;
+            let mut client = open().await?;
             let project_root = canon_opt(root)?;
             let resp = client
                 .request(Request::ProjectStatus(ProjectStatusReq { project_root }))
@@ -257,7 +266,7 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Doctor { root } => {
-            let mut client = open_client(model, variant).await?;
+            let mut client = open().await?;
             let project_root = canon_opt(root)?;
             let resp = client
                 .request(Request::Doctor(DoctorReq { project_root }))
@@ -279,7 +288,7 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Env => {
-            let mut client = open_client(model, variant).await?;
+            let mut client = open().await?;
             let resp = client.request(Request::DaemonEnv).await?;
             match resp {
                 Response::DaemonEnv(env) => {
@@ -294,14 +303,14 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Stop => {
-            let mut client = open_client(model, variant).await?;
+            let mut client = open().await?;
             let resp = client.request(Request::Stop).await?;
             if matches!(resp, Response::Stop(())) {
                 println!("Daemon stopped.");
             }
         }
         Commands::Remove { root } => {
-            let mut client = open_client(model, variant).await?;
+            let mut client = open().await?;
             let project_root = canon(&root)?;
             let resp = client
                 .request(Request::RemoveProject(RemoveProjectReq { project_root }))

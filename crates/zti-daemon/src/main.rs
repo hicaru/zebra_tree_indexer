@@ -6,7 +6,7 @@ use clap::Parser;
 use fs2::FileExt;
 use tokio::net::UnixListener;
 use tracing_subscriber::EnvFilter;
-use zti_embed::{EmbedEngine, OnnxVariant};
+use zti_embed::{EmbedEngine, LoadOverrides, OnnxVariant};
 use zti_hw::Hardware;
 
 mod handlers;
@@ -24,10 +24,17 @@ struct Cli {
 
     #[arg(long, value_enum, default_value_t = OnnxVariant::Auto)]
     variant: OnnxVariant,
+
+    #[arg(long)]
+    query_prefix: Option<String>,
 }
 
 fn main() -> Result<()> {
-    let Cli { model, variant } = Cli::parse();
+    let Cli {
+        model,
+        variant,
+        query_prefix,
+    } = Cli::parse();
 
     let pid_path = zti_common::paths::daemon_pid()?;
     let mut pid_file = std::fs::OpenOptions::new()
@@ -73,7 +80,12 @@ fn main() -> Result<()> {
     tracing::info!("loading model: {}", model);
     let hw = zti_hw::probe();
     tracing::info!(device = ?hw.device, "hardware detected");
-    let engine = EmbedEngine::load_with_variant(&model, &hw, variant)?;
+
+    let opts = LoadOverrides {
+        variant,
+        query_prefix: query_prefix.as_deref(),
+    };
+    let engine = EmbedEngine::load_with(&model, &hw, &opts)?;
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async_main(engine, hw, pid_file, pid_path, socket_path))

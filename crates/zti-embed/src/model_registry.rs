@@ -63,7 +63,11 @@ impl ModelConfig {
 impl<'de> serde::Deserialize<'de> for ModelConfig {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> std::result::Result<Self, D::Error> {
         let v = serde_json::Value::deserialize(de)?;
-        fn u64_or<E: serde::de::Error>(v: &serde_json::Value, primary: &str, alt: &str) -> std::result::Result<u64, E> {
+        fn u64_or<E: serde::de::Error>(
+            v: &serde_json::Value,
+            primary: &str,
+            alt: &str,
+        ) -> std::result::Result<u64, E> {
             v.get(primary)
                 .or_else(|| v.get(alt))
                 .and_then(|v| v.as_u64())
@@ -126,16 +130,16 @@ pub enum OnnxVariant {
 impl OnnxVariant {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Auto      => "auto",
-            Self::Fp32      => "fp32",
-            Self::Fp16      => "fp16",
-            Self::O4        => "o4",
-            Self::Int8      => "int8",
-            Self::Uint8     => "uint8",
+            Self::Auto => "auto",
+            Self::Fp32 => "fp32",
+            Self::Fp16 => "fp16",
+            Self::O4 => "o4",
+            Self::Int8 => "int8",
+            Self::Uint8 => "uint8",
             Self::Quantized => "quantized",
-            Self::Q4        => "q4",
-            Self::Q4f16     => "q4f16",
-            Self::Bnb4      => "bnb4",
+            Self::Q4 => "q4",
+            Self::Q4f16 => "q4f16",
+            Self::Bnb4 => "bnb4",
         }
     }
 }
@@ -161,13 +165,13 @@ fn classify(lower_filename: &str) -> Option<OnnxVariant> {
     let mut best: Option<(OnnxVariant, u8)> = None;
     for tok in body.split(['_', '-', '.']) {
         let cur = match tok {
-            "q4f16"               => (Q4f16, 0),
-            "bnb4"                => (Bnb4, 1),
-            "q4"                  => (Q4, 2),
-            "fp16"                => (Fp16, 3),
-            "uint8"               => (Uint8, 4),
-            "int8" | "qint8"     => (Int8, 5),
-            "o4"                  => (O4, 6),
+            "q4f16" => (Q4f16, 0),
+            "bnb4" => (Bnb4, 1),
+            "q4" => (Q4, 2),
+            "fp16" => (Fp16, 3),
+            "uint8" => (Uint8, 4),
+            "int8" | "qint8" => (Int8, 5),
+            "o4" => (O4, 6),
             t if t.starts_with("quant") => (Quantized, 7),
             _ => continue,
         };
@@ -184,14 +188,14 @@ fn auto_variant_order(hw: &Hardware) -> &'static [OnnxVariant] {
     use OnnxVariant::*;
 
     match hw.device {
-        Device::Cuda   => &[O4, Fp16, Q4f16, Q4, Int8, Quantized, Fp32],
-        Device::Metal  => &[O4, Fp16, Q4f16, Int8, Quantized, Fp32],
+        Device::Cuda => &[O4, Fp16, Q4f16, Q4, Int8, Quantized, Fp32],
+        Device::Metal => &[O4, Fp16, Q4f16, Int8, Quantized, Fp32],
         Device::Vulkan => &[O4, Fp16, Q4f16, Int8, Quantized, Fp32],
-        Device::Npu    => &[Int8, Uint8, Quantized, Fp16, O4, Fp32],
+        Device::Npu => &[Int8, Uint8, Quantized, Fp16, O4, Fp32],
         Device::Cpu => match hw.mem_total {
-            m if m <  4 * GIB => &[Q4, Q4f16, Int8, Uint8, Quantized, Fp16, Fp32],
-            m if m <  8 * GIB => &[Int8, Quantized, Q4f16, Fp16, Fp32],
-            _                 => &[Int8, Quantized, Fp16, Fp32],
+            m if m < 4 * GIB => &[Q4, Q4f16, Int8, Uint8, Quantized, Fp16, Fp32],
+            m if m < 8 * GIB => &[Int8, Quantized, Q4f16, Fp16, Fp32],
+            _ => &[Int8, Quantized, Fp16, Fp32],
         },
     }
 }
@@ -199,11 +203,9 @@ fn auto_variant_order(hw: &Hardware) -> &'static [OnnxVariant] {
 const TOKENIZER_CANDIDATES: &[&str] = &["tokenizer.json", "onnx/tokenizer.json"];
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = std::io::BufReader::new(file);
-    serde_json::from_reader(reader)
-        .with_context(|| format!("parsing {}", path.display()))
+    serde_json::from_reader(reader).with_context(|| format!("parsing {}", path.display()))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -212,23 +214,54 @@ struct PoolingConfig {
     pooling_mode_cls_token: Option<bool>,
     #[serde(default)]
     pooling_mode_mean_tokens: Option<bool>,
+    #[serde(default)]
+    pooling_mode_max_tokens: Option<bool>,
+    #[serde(default)]
+    pooling_mode_lasttoken: Option<bool>,
+    #[serde(default)]
+    pooling_mode_mean_sqrt_len_tokens: Option<bool>,
+    #[serde(default)]
+    pooling_mode_weightedmean_tokens: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct StConfig {
     #[serde(default)]
-    prompts: Option<serde_json::Value>,
+    prompts: Option<StPrompts>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StPrompts {
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    passage: Option<String>,
 }
 
 fn read_pooling_from_metadata(dir: &Path) -> PoolingStrategyEnum {
     let pooling_path = dir.join("1_Pooling").join("config.json");
-    if let Ok(cfg) = read_json::<PoolingConfig>(&pooling_path) {
-        if cfg.pooling_mode_cls_token == Some(true) {
-            return PoolingStrategyEnum::Cls;
-        }
-        if cfg.pooling_mode_mean_tokens == Some(true) {
-            return PoolingStrategyEnum::Mean;
-        }
+    let Ok(cfg) = read_json::<PoolingConfig>(&pooling_path) else {
+        return PoolingStrategyEnum::Mean;
+    };
+
+    if cfg.pooling_mode_cls_token == Some(true) {
+        return PoolingStrategyEnum::Cls;
+    }
+    if cfg.pooling_mode_mean_tokens == Some(true) {
+        return PoolingStrategyEnum::Mean;
+    }
+
+    let unsupported = cfg.pooling_mode_max_tokens == Some(true)
+        || cfg.pooling_mode_lasttoken == Some(true)
+        || cfg.pooling_mode_mean_sqrt_len_tokens == Some(true)
+        || cfg.pooling_mode_weightedmean_tokens == Some(true);
+    if unsupported {
+        tracing::warn!(
+            path = %pooling_path.display(),
+            "model declares an unsupported pooling mode \
+             (max / lasttoken / weightedmean / mean_sqrt_len); falling back to Mean",
+        );
     }
     PoolingStrategyEnum::Mean
 }
@@ -236,16 +269,15 @@ fn read_pooling_from_metadata(dir: &Path) -> PoolingStrategyEnum {
 fn read_query_prefix_from_metadata(dir: &Path) -> Option<String> {
     let st_path = dir.join("config_sentence_transformers.json");
     let cfg = read_json::<StConfig>(&st_path).ok()?;
-    let prompts = cfg.prompts?;
-    if let Some(obj) = prompts.as_object()
-        && let Some(query_prompt) = obj.get("query").and_then(|v| v.as_str())
-    {
-        return Some(query_prompt.to_string());
-    }
-    None
+    cfg.prompts.and_then(|p| p.query)
 }
 
-pub fn resolve_profile(model_id: &str, variant: OnnxVariant, hw: &Hardware) -> Result<ModelProfile> {
+pub fn resolve_profile(
+    model_id: &str,
+    variant: OnnxVariant,
+    hw: &Hardware,
+    query_prefix_override: Option<&str>,
+) -> Result<ModelProfile> {
     let files = resolve_model_files(model_id, variant, hw)?;
     let cfg: ModelConfig = read_json(&files.config_path)?;
 
@@ -271,9 +303,16 @@ pub fn resolve_profile(model_id: &str, variant: OnnxVariant, hw: &Hardware) -> R
         "resolved max_length",
     );
 
-    let onnx_dir = files.onnx_path.parent().unwrap_or(files.config_path.parent().unwrap_or(Path::new(".")));
-    let pooling = read_pooling_from_metadata(onnx_dir);
-    let query_prefix = read_query_prefix_from_metadata(onnx_dir);
+    let metadata_dir = files.config_path.parent().unwrap_or(Path::new("."));
+    let pooling = read_pooling_from_metadata(metadata_dir);
+
+    let query_prefix = match query_prefix_override {
+        Some(p) => {
+            tracing::info!(prefix = p, "applying CLI query_prefix override");
+            Some(p.to_owned())
+        }
+        None => read_query_prefix_from_metadata(metadata_dir),
+    };
 
     Ok(ModelProfile {
         model_id: model_id.to_string(),
@@ -290,7 +329,11 @@ pub fn resolve_profile(model_id: &str, variant: OnnxVariant, hw: &Hardware) -> R
     })
 }
 
-pub fn resolve_model_files(model_id: &str, variant: OnnxVariant, hw: &Hardware) -> Result<ResolvedModel> {
+pub fn resolve_model_files(
+    model_id: &str,
+    variant: OnnxVariant,
+    hw: &Hardware,
+) -> Result<ResolvedModel> {
     let p = Path::new(model_id);
     if p.exists() {
         resolve_local(p, variant, hw)
@@ -326,7 +369,11 @@ fn resolve_local(p: &Path, variant: OnnxVariant, hw: &Hardware) -> Result<Resolv
     }
 
     let tok_cfg = dir.join("tokenizer_config.json");
-    let tokenizer_config_path = if tok_cfg.exists() { Some(tok_cfg) } else { None };
+    let tokenizer_config_path = if tok_cfg.exists() {
+        Some(tok_cfg)
+    } else {
+        None
+    };
 
     tracing::info!(
         onnx = %onnx_path.display(),
@@ -542,11 +589,7 @@ fn resolve_hf(model_id: &str, variant: OnnxVariant, hw: &Hardware) -> Result<Res
             "HF repo cloned",
         );
 
-        let marker_content = if sha.is_empty() {
-            "unknown"
-        } else {
-            &sha
-        };
+        let marker_content = if sha.is_empty() { "unknown" } else { &sha };
         std::fs::write(&marker, marker_content.as_bytes())
             .with_context(|| format!("writing {}", marker.display()))?;
     } else {

@@ -10,6 +10,7 @@ use rmcp::transport::stdio;
 use rmcp::{ErrorData, ServiceExt, tool};
 use tracing_subscriber::EnvFilter;
 
+use zti_embed::OnnxVariant;
 use zti_ipc_client::Client;
 use zti_protocol::format_search_results;
 use zti_protocol::request::*;
@@ -21,8 +22,11 @@ struct Cli {
     #[arg(short, long)]
     model: Option<String>,
 
-    #[arg(short, long)]
-    variant: Option<String>,
+    #[arg(long, value_enum)]
+    variant: Option<OnnxVariant>,
+
+    #[arg(long)]
+    query_prefix: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -77,26 +81,37 @@ struct ZebraMcpServer {
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
     model: Option<String>,
-    variant: Option<String>,
+    variant: Option<OnnxVariant>,
+    query_prefix: Option<String>,
 }
 
 impl ZebraMcpServer {
-    fn new(model: Option<String>, variant: Option<String>) -> Self {
+    fn new(
+        model: Option<String>,
+        variant: Option<OnnxVariant>,
+        query_prefix: Option<String>,
+    ) -> Self {
         Self {
             tool_router: Self::tool_router(),
             model,
             variant,
+            query_prefix,
         }
     }
 
     async fn client(&self) -> Result<Client, ErrorData> {
+        let variant: Option<&'static str> = self.variant.and_then(|v| match v {
+            OnnxVariant::Auto => None,
+            other => Some(other.as_str()),
+        });
         let mut client = Client::connect(
-        Duration::from_secs(10),
-        self.model.as_deref(),
-        self.variant.as_deref(),
-    )
-            .await
-            .map_err(daemon_err)?;
+            Duration::from_secs(10),
+            self.model.as_deref(),
+            variant,
+            self.query_prefix.as_deref(),
+        )
+        .await
+        .map_err(daemon_err)?;
         client.handshake().await.map_err(daemon_err)?;
         Ok(client)
     }
@@ -413,8 +428,12 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .init();
 
-    let Cli { model, variant } = Cli::parse();
-    let server = ZebraMcpServer::new(model, variant);
+    let Cli {
+        model,
+        variant,
+        query_prefix,
+    } = Cli::parse();
+    let server = ZebraMcpServer::new(model, variant, query_prefix);
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
 
