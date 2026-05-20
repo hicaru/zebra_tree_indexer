@@ -48,6 +48,7 @@ bincode    = { version = "2", features = ["derive", "serde"] }
 
 blake3 = "1"
 ignore = "0.4"
+walkdir = "2"
 dirs   = "5"
 fs2    = "0.4"
 sysinfo = "0.39"

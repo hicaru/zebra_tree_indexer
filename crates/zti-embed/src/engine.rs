@@ -72,8 +72,8 @@ impl EmbedEngine {
         {
             profile.dim = last_dim as usize;
         }
-        if let Some(max_len) = tokenizer.truncation_max_length() {
-            profile.max_length = max_len;
+        if let Some(tok_limit) = tokenizer.truncation_max_length() {
+            profile.max_length = profile.max_length.min(tok_limit);
         }
         if profile.dim == 0 {
             // Shape was dynamic. Probe by running a single token through the
@@ -166,6 +166,10 @@ impl EmbedEngine {
 
     pub fn hardware(&self) -> &Hardware {
         &self.hardware
+    }
+
+    pub fn recommended_batch_size(&self) -> usize {
+        crate::batch::recommended_batch_size(&self.profile, &self.hardware)
     }
 }
 

@@ -170,23 +170,40 @@ pub async fn index_project(
 
     reporter.start(all_pending.len() as u64);
 
-    let batch_size = 32;
+    let batch_size = engine.recommended_batch_size();
+    let hw = engine.hardware();
+    info!(
+        batch_size,
+        device = ?hw.device,
+        mem_avail_mb = hw.mem_avail >> 20,
+        max_length = engine.profile().max_length,
+        "computed embed batch_size",
+    );
+
     let mut total_embedded = 0usize;
     let reranker = TurboReranker::new(engine.dim())?;
     let mut chunks_table = db.chunks_table(engine.dim()).await?;
 
     let mut iter = all_pending.into_iter();
-    while let Some((first_chunk, first_lang)) = iter.next() {
-        let mut batch_items = vec![(first_chunk, first_lang)];
-        while batch_items.len() < batch_size {
+    loop {
+        let mut batch_items: Vec<(zti_dsl::chunking::Chunk, Language)> =
+            Vec::with_capacity(batch_size);
+        for _ in 0..batch_size {
             match iter.next() {
-                Some((c, l)) => batch_items.push((c, l)),
+                Some(item) => batch_items.push(item),
                 None => break,
             }
         }
+        if batch_items.is_empty() {
+            break;
+        }
 
-        let bodies: Vec<String> = batch_items.iter().map(|(c, _)| c.embed_text()).collect();
-        let bodies_ref: Vec<&str> = bodies.iter().map(|s| s.as_str()).collect();
+        let n_batch = batch_items.len();
+
+        let mut bodies: Vec<String> = Vec::with_capacity(batch_items.len());
+        bodies.extend(batch_items.iter().map(|(c, _)| c.embed_text()));
+        let mut bodies_ref: Vec<&str> = Vec::with_capacity(bodies.len());
+        bodies_ref.extend(bodies.iter().map(|s| s.as_str()));
 
         match engine.embed_batch_async(&bodies_ref).await {
             Ok(embs) => {
@@ -319,17 +336,17 @@ pub async fn index_project(
                 tracing::warn!("embed_batch failed: {}", e);
             }
         }
-        reporter.inc(batch_size as u64);
+        reporter.inc(n_batch as u64);
     }
 
-    let hw = zti_hw::probe();
+    let hw = engine.hardware();
     let previous_row = db.projects_table().await?.get(&pid).await.ok().flatten();
     let previous_params: Option<zti_ann::SearchParams> = previous_row
         .as_ref()
         .and_then(|r| r.search_params.as_deref())
         .and_then(|s| serde_json::from_str(s).ok());
     let params =
-        zti_ann::choose_method(total_embedded, engine.dim(), &hw, previous_params.as_ref());
+        zti_ann::choose_method(total_embedded, engine.dim(), hw, previous_params.as_ref());
     info!(
         "search method: {:?} (n={}, dim={}, ram_avail={} MB)",
         params.method,

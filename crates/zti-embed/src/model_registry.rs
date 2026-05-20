@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::pooling::PoolingStrategy;
@@ -14,6 +14,11 @@ pub struct ModelProfile {
     pub max_length: usize,
     pub pooling: PoolingStrategyEnum,
     pub query_prefix: Option<String>,
+
+    pub hidden_size: usize,
+    pub num_hidden_layers: usize,
+    pub intermediate_size: usize,
+    pub num_attention_heads: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -34,6 +39,72 @@ impl From<PoolingStrategyEnum> for PoolingStrategy {
 pub struct ResolvedModel {
     pub onnx_path: PathBuf,
     pub tokenizer_path: PathBuf,
+    pub config_path: PathBuf,
+    pub tokenizer_config_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelConfig {
+    pub hidden_size: usize,
+    pub num_hidden_layers: usize,
+    pub intermediate_size: Option<usize>,
+    pub max_position_embeddings: usize,
+    pub num_attention_heads: usize,
+}
+
+impl ModelConfig {
+    #[inline]
+    pub fn ffn_size(&self) -> usize {
+        self.intermediate_size.unwrap_or(self.hidden_size * 4)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ModelConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> std::result::Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(de)?;
+        fn u64_or<E: serde::de::Error>(v: &serde_json::Value, primary: &str, alt: &str) -> std::result::Result<u64, E> {
+            v.get(primary)
+                .or_else(|| v.get(alt))
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| E::custom(format!("missing field `{}` or `{}`", primary, alt)))
+        }
+        Ok(ModelConfig {
+            hidden_size: u64_or(&v, "hidden_size", "n_embd")? as usize,
+            num_hidden_layers: u64_or(&v, "num_hidden_layers", "n_layer")? as usize,
+            intermediate_size: v
+                .get("intermediate_size")
+                .or_else(|| v.get("n_inner"))
+                .or_else(|| v.get("inner_dim"))
+                .or_else(|| v.get("dim_feedforward"))
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize),
+            max_position_embeddings: u64_or(&v, "max_position_embeddings", "n_positions")? as usize,
+            num_attention_heads: u64_or(&v, "num_attention_heads", "n_head")? as usize,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenizerCfg {
+    #[serde(default)]
+    pub model_max_length: Option<serde_json::Value>,
+}
+
+impl TokenizerCfg {
+    pub fn effective_max_length(&self) -> Option<usize> {
+        let v = self.model_max_length.as_ref()?;
+        if let Some(u) = v.as_u64() {
+            return (u <= i64::MAX as u64).then_some(u as usize);
+        }
+        if let Some(f) = v.as_f64()
+            && f.is_finite()
+            && f >= 1.0
+            && f <= i64::MAX as f64
+        {
+            return Some(f as usize);
+        }
+        None
+    }
 }
 
 struct FamilyQuirks {
@@ -48,6 +119,14 @@ const BERT_FAMILY_PREFIXES: &[&str] = &["bge-", "mxbai-", "gte-", "e5-"];
 const ONNX_CANDIDATES: &[&str] = &["onnx/model.onnx", "model.onnx", "onnx/model_quantized.onnx"];
 
 const TOKENIZER_CANDIDATES: &[&str] = &["tokenizer.json", "onnx/tokenizer.json"];
+
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let reader = std::io::BufReader::new(file);
+    serde_json::from_reader(reader)
+        .with_context(|| format!("parsing {}", path.display()))
+}
 
 fn lookup_quirks(model_name: &str) -> Option<FamilyQuirks> {
     let lower = model_name.to_lowercase();
@@ -78,24 +157,49 @@ fn lookup_quirks(model_name: &str) -> Option<FamilyQuirks> {
 
 pub fn resolve_profile(model_id: &str) -> Result<ModelProfile> {
     let files = resolve_model_files(model_id)?;
-    let quirks = lookup_quirks(model_id);
+    let cfg: ModelConfig = read_json(&files.config_path)?;
 
+    let tok_cfg_limit: usize = files
+        .tokenizer_config_path
+        .as_deref()
+        .and_then(|p| read_json::<TokenizerCfg>(p).ok())
+        .and_then(|t| t.effective_max_length())
+        .unwrap_or(usize::MAX);
+
+    let max_length = cfg.max_position_embeddings.min(tok_cfg_limit);
+
+    let source = if tok_cfg_limit < cfg.max_position_embeddings {
+        "tokenizer_config"
+    } else {
+        "config.max_position_embeddings"
+    };
+    tracing::info!(
+        max_length,
+        source,
+        config_limit = cfg.max_position_embeddings,
+        tok_cfg_limit,
+        "resolved max_length",
+    );
+
+    let quirks = lookup_quirks(model_id);
     let pooling = quirks
         .as_ref()
         .map(|q| q.pooling)
         .unwrap_or(PoolingStrategyEnum::Mean);
     let query_prefix = quirks.and_then(|q| q.query_prefix.map(String::from));
 
-    // dim and max_length are placeholders; engine overrides them after the
-    // ONNX session and tokenizer are loaded.
     Ok(ModelProfile {
         model_id: model_id.to_string(),
         onnx_path: files.onnx_path,
         tokenizer_path: files.tokenizer_path,
         dim: 0,
-        max_length: 512,
+        max_length,
         pooling,
         query_prefix,
+        hidden_size: cfg.hidden_size,
+        num_hidden_layers: cfg.num_hidden_layers,
+        intermediate_size: cfg.ffn_size(),
+        num_attention_heads: cfg.num_attention_heads,
     })
 }
 
@@ -110,31 +214,45 @@ pub fn resolve_model_files(model_id: &str) -> Result<ResolvedModel> {
 
 fn resolve_local(p: &Path) -> Result<ResolvedModel> {
     let (dir, explicit_onnx) = if p.is_dir() {
-        (p.to_path_buf(), None)
+        (p, None)
     } else if p.extension().and_then(|s| s.to_str()) == Some("onnx") {
         let parent = p
             .parent()
             .ok_or_else(|| anyhow::anyhow!("path has no parent: {}", p.display()))?;
-        (parent.to_path_buf(), Some(p.to_path_buf()))
+        (parent, Some(p))
     } else {
         anyhow::bail!("{} is neither a directory nor a .onnx file", p.display());
     };
 
     let onnx_path = match explicit_onnx {
-        Some(file) => file,
-        None => find_onnx_in(&dir)?,
+        Some(file) => file.to_path_buf(),
+        None => find_onnx_in(dir)?,
     };
-    let tokenizer_path = find_tokenizer_in(&dir)?;
+    let tokenizer_path = find_tokenizer_in(dir)?;
+
+    let config_path = dir.join("config.json");
+    if !config_path.exists() {
+        anyhow::bail!(
+            "missing config.json in {} (the HF clone step should have placed it there)",
+            dir.display()
+        );
+    }
+
+    let tok_cfg = dir.join("tokenizer_config.json");
+    let tokenizer_config_path = if tok_cfg.exists() { Some(tok_cfg) } else { None };
 
     tracing::info!(
         onnx = %onnx_path.display(),
         tokenizer = %tokenizer_path.display(),
+        config = %config_path.display(),
         "using local model files"
     );
 
     Ok(ResolvedModel {
         onnx_path,
         tokenizer_path,
+        config_path,
+        tokenizer_config_path,
     })
 }
 
@@ -178,64 +296,106 @@ fn find_tokenizer_in(dir: &Path) -> Result<PathBuf> {
     )
 }
 
-fn resolve_hf(model_id: &str) -> Result<ResolvedModel> {
-    let model_dir = zti_common::paths::models_dir()?.join(model_id.replace('/', "_"));
-    std::fs::create_dir_all(&model_dir)?;
-
-    let onnx_path = model_dir.join("model.onnx");
-    let tokenizer_path = model_dir.join("tokenizer.json");
-
-    let parts: Vec<&str> = model_id.splitn(2, '/').collect();
-    let (owner, name) = match parts.as_slice() {
-        [o, n] => (*o, *n),
+fn split_model_id(model_id: &str) -> Result<(&str, &str)> {
+    let mut parts = model_id.splitn(2, '/');
+    match (parts.next(), parts.next()) {
+        (Some(o), Some(n)) if !o.is_empty() && !n.is_empty() => Ok((o, n)),
         _ => anyhow::bail!(
             "invalid model_id: expected 'owner/name', got '{}'",
             model_id
         ),
-    };
-
-    if !onnx_path.exists() {
-        tracing::info!("downloading ONNX model for {}", model_id);
-        let client = hf_hub::HFClientSync::new()?;
-        let repo = client.model(owner, name);
-        let downloaded = try_download(&repo, ONNX_CANDIDATES)?;
-        std::fs::copy(&downloaded, &onnx_path)?;
     }
-
-    if !tokenizer_path.exists() {
-        tracing::info!("downloading tokenizer for {}", model_id);
-        let client = hf_hub::HFClientSync::new()?;
-        let repo = client.model(owner, name);
-        let downloaded = try_download(&repo, TOKENIZER_CANDIDATES)?;
-        std::fs::copy(&downloaded, &tokenizer_path)?;
-    }
-
-    Ok(ResolvedModel {
-        onnx_path,
-        tokenizer_path,
-    })
 }
 
-fn try_download(
-    repo: &hf_hub::HFRepositorySync<hf_hub::RepoTypeModel>,
-    candidates: &[&str],
-) -> Result<PathBuf> {
-    let mut last_err: Option<String> = None;
-    for fname in candidates {
-        match repo.download_file().filename(fname.to_string()).send() {
-            Ok(p) => {
-                tracing::debug!(filename = fname, "downloaded {}", p.display());
-                return Ok(p);
+fn resolve_hf(model_id: &str) -> Result<ResolvedModel> {
+    let (owner, name) = split_model_id(model_id)?;
+
+    let model_dir = zti_common::paths::models_dir()?.join(model_id.replace('/', "_"));
+    std::fs::create_dir_all(&model_dir)?;
+
+    let marker = model_dir.join(".zti_clone_complete");
+
+    let need_clone = if marker.exists() {
+        let local_sha = std::fs::read_to_string(&marker)
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        match local_sha {
+            Some(local_sha) => {
+                let client = hf_hub::HFClientSync::new()?;
+                let repo = client.model(owner, name);
+                match repo.info().send() {
+                    Ok(info) => match info.sha {
+                        Some(ref remote_sha) if remote_sha != &local_sha => {
+                            tracing::info!(
+                                local = %local_sha,
+                                remote = %remote_sha,
+                                "HF revision changed, re-cloning"
+                            );
+                            true
+                        }
+                        _ => false,
+                    },
+                    Err(e) => {
+                        tracing::debug!(error = %e, "skip SHA check (offline?)");
+                        false
+                    }
+                }
             }
-            Err(e) => {
-                tracing::debug!(filename = fname, "candidate not found: {}", e);
-                last_err = Some(format!("{} -> {}", fname, e));
-            }
+            None => false,
         }
+    } else {
+        !(model_dir.join("config.json").exists()
+            && find_tokenizer_in(&model_dir).is_ok()
+            && find_onnx_in(&model_dir).is_ok())
+    };
+
+    if need_clone {
+        let client = hf_hub::HFClientSync::new()?;
+        let repo = client.model(owner, name);
+
+        let info = repo
+            .info()
+            .send()
+            .with_context(|| format!("fetching HF repo info for {}", model_id))?;
+        let sha = info.sha.clone().unwrap_or_default();
+
+        tracing::info!(model = model_id, sha = %sha, "cloning HF repo (full)");
+
+        let sha_opt = if sha.is_empty() {
+            None
+        } else {
+            Some(sha.clone())
+        };
+        repo.snapshot_download()
+            .maybe_revision(sha_opt)
+            .local_dir(model_dir.clone())
+            .send()
+            .with_context(|| format!("downloading HF repo for {}", model_id))?;
+
+        let bytes: u64 = walkdir::WalkDir::new(&model_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.len())
+            .sum();
+        tracing::info!(
+            model = model_id,
+            size_mb = bytes >> 20,
+            dir = %model_dir.display(),
+            "HF repo cloned",
+        );
+
+        let marker_content = if sha.is_empty() {
+            "unknown"
+        } else {
+            &sha
+        };
+        std::fs::write(&marker, marker_content.as_bytes())
+            .with_context(|| format!("writing {}", marker.display()))?;
+    } else {
+        tracing::debug!(model = model_id, "HF repo already cloned, skipping");
     }
-    anyhow::bail!(
-        "none of {:?} could be downloaded ({})",
-        candidates,
-        last_err.unwrap_or_else(|| "no attempts".to_string())
-    )
+
+    resolve_local(&model_dir)
 }
