@@ -16,13 +16,15 @@ pub async fn handle(req: &ProjectMapReq, state: &DaemonState) -> Response {
 
         let file_filter: Option<Vec<u16>> = req.language.as_ref().and_then(|l| {
             let lang = parse_language(l)?;
-            Some(index
-                .files
-                .iter()
-                .enumerate()
-                .filter(|(_, f)| f.language == lang)
-                .map(|(i, _)| i as u16)
-                .collect())
+            Some(
+                index
+                    .files
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| f.language == lang)
+                    .map(|(i, _)| i as u16)
+                    .collect(),
+            )
         });
 
         let kind_filter = kinds.as_ref().map(|k| parse_kinds(k));

@@ -31,7 +31,9 @@ fn collect_ts_imports(node: Node, source: &str, imports: &mut HashMap<String, St
                     if cc.kind() == "identifier"
                         && let Ok(name) = cc.utf8_text(source.as_bytes())
                     {
-                        imports.entry(name.to_string()).or_insert_with(|| text.clone());
+                        imports
+                            .entry(name.to_string())
+                            .or_insert_with(|| text.clone());
                     }
                     if cc.kind() == "named_imports" || cc.kind() == "import_list" {
                         for specifier in cc.children(&mut cc.walk()) {
@@ -42,7 +44,9 @@ fn collect_ts_imports(node: Node, source: &str, imports: &mut HashMap<String, St
                                 if let Some(kn) = key_node
                                     && let Ok(name) = kn.utf8_text(source.as_bytes())
                                 {
-                                    imports.entry(name.to_string()).or_insert_with(|| text.clone());
+                                    imports
+                                        .entry(name.to_string())
+                                        .or_insert_with(|| text.clone());
                                 }
                             }
                         }
@@ -50,17 +54,23 @@ fn collect_ts_imports(node: Node, source: &str, imports: &mut HashMap<String, St
                     if cc.kind() == "namespace_import" {
                         if let Some(id) = cc.child_by_field_name("name") {
                             if let Ok(name) = id.utf8_text(source.as_bytes()) {
-                                imports.entry(name.to_string()).or_insert_with(|| text.clone());
+                                imports
+                                    .entry(name.to_string())
+                                    .or_insert_with(|| text.clone());
                             }
                         } else {
                             let mut saw_star = false;
                             for nc in cc.children(&mut cc.walk()) {
                                 if nc.kind() == "*" {
                                     saw_star = true;
-                                } else if saw_star && nc.kind() == "identifier"
-                                    && let Ok(name) = nc.utf8_text(source.as_bytes()) {
-                                        imports.entry(name.to_string()).or_insert_with(|| text.clone());
-                                    }
+                                } else if saw_star
+                                    && nc.kind() == "identifier"
+                                    && let Ok(name) = nc.utf8_text(source.as_bytes())
+                                {
+                                    imports
+                                        .entry(name.to_string())
+                                        .or_insert_with(|| text.clone());
+                                }
                             }
                         }
                     }
@@ -243,8 +253,7 @@ mod tests {
         let fn_sym = symbols.iter().find(|s| s.name == "add").unwrap();
         assert_eq!(fn_sym.kind, Kind::Function);
         let calls_helper = edges.iter().any(|e| {
-            e.from == fn_sym.id
-                && matches!(e.to, Target::Unresolved(ref name) if name == "helper")
+            e.from == fn_sym.id && matches!(e.to, Target::Unresolved(ref name) if name == "helper")
         });
         assert!(calls_helper);
     }
@@ -258,7 +267,9 @@ mod tests {
         let (symbols, _, _) = parse_ts(source);
         let foo = symbols.iter().find(|s| s.name == "foo").unwrap();
         assert!(
-            foo.doc.as_ref().is_some_and(|d| d.contains("JSDoc description")),
+            foo.doc
+                .as_ref()
+                .is_some_and(|d| d.contains("JSDoc description")),
             "expected JSDoc, got: {:?}",
             foo.doc
         );
@@ -268,38 +279,62 @@ mod tests {
     fn named_imports() {
         let source = "import { Foo, Bar } from './module';";
         let (_, _, imports) = parse_ts(source);
-        assert_eq!(imports.get("Foo"), Some(&"import { Foo, Bar } from './module';".to_string()));
-        assert_eq!(imports.get("Bar"), Some(&"import { Foo, Bar } from './module';".to_string()));
+        assert_eq!(
+            imports.get("Foo"),
+            Some(&"import { Foo, Bar } from './module';".to_string())
+        );
+        assert_eq!(
+            imports.get("Bar"),
+            Some(&"import { Foo, Bar } from './module';".to_string())
+        );
     }
 
     #[test]
     fn default_import() {
         let source = "import React from 'react';";
         let (_, _, imports) = parse_ts(source);
-        assert_eq!(imports.get("React"), Some(&"import React from 'react';".to_string()));
+        assert_eq!(
+            imports.get("React"),
+            Some(&"import React from 'react';".to_string())
+        );
     }
 
     #[test]
     fn namespace_import() {
         let source = "import * as fs from 'fs';";
         let (_, _, imports) = parse_ts(source);
-        assert_eq!(imports.get("fs"), Some(&"import * as fs from 'fs';".to_string()));
+        assert_eq!(
+            imports.get("fs"),
+            Some(&"import * as fs from 'fs';".to_string())
+        );
     }
 
     #[test]
     fn mixed_import() {
         let source = "import React, { useState, useEffect } from 'react';";
         let (_, _, imports) = parse_ts(source);
-        assert_eq!(imports.get("React"), Some(&"import React, { useState, useEffect } from 'react';".to_string()));
-        assert_eq!(imports.get("useState"), Some(&"import React, { useState, useEffect } from 'react';".to_string()));
-        assert_eq!(imports.get("useEffect"), Some(&"import React, { useState, useEffect } from 'react';".to_string()));
+        assert_eq!(
+            imports.get("React"),
+            Some(&"import React, { useState, useEffect } from 'react';".to_string())
+        );
+        assert_eq!(
+            imports.get("useState"),
+            Some(&"import React, { useState, useEffect } from 'react';".to_string())
+        );
+        assert_eq!(
+            imports.get("useEffect"),
+            Some(&"import React, { useState, useEffect } from 'react';".to_string())
+        );
     }
 
     #[test]
     fn aliased_import() {
         let source = "import { Foo as Bar } from './utils';";
         let (_, _, imports) = parse_ts(source);
-        assert_eq!(imports.get("Bar"), Some(&"import { Foo as Bar } from './utils';".to_string()));
+        assert_eq!(
+            imports.get("Bar"),
+            Some(&"import { Foo as Bar } from './utils';".to_string())
+        );
     }
 
     #[test]

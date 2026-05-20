@@ -179,19 +179,58 @@ pub static RUST_CONFIG: LangConfig = LangConfig {
         "block",
     ],
     name_fields: &[
-        NameField { node_kind: "function_item", field: "name" },
-        NameField { node_kind: "struct_item", field: "name" },
-        NameField { node_kind: "enum_item", field: "name" },
-        NameField { node_kind: "trait_item", field: "name" },
-        NameField { node_kind: "mod_item", field: "name" },
-        NameField { node_kind: "type_item", field: "name" },
-        NameField { node_kind: "const_item", field: "name" },
-        NameField { node_kind: "static_item", field: "name" },
-        NameField { node_kind: "field_item", field: "name" },
-        NameField { node_kind: "enum_variant", field: "name" },
-        NameField { node_kind: "function_signature_item", field: "name" },
-        NameField { node_kind: "metavariable", field: "name" },
-        NameField { node_kind: "macro_invocation", field: "name" },
+        NameField {
+            node_kind: "function_item",
+            field: "name",
+        },
+        NameField {
+            node_kind: "struct_item",
+            field: "name",
+        },
+        NameField {
+            node_kind: "enum_item",
+            field: "name",
+        },
+        NameField {
+            node_kind: "trait_item",
+            field: "name",
+        },
+        NameField {
+            node_kind: "mod_item",
+            field: "name",
+        },
+        NameField {
+            node_kind: "type_item",
+            field: "name",
+        },
+        NameField {
+            node_kind: "const_item",
+            field: "name",
+        },
+        NameField {
+            node_kind: "static_item",
+            field: "name",
+        },
+        NameField {
+            node_kind: "field_item",
+            field: "name",
+        },
+        NameField {
+            node_kind: "enum_variant",
+            field: "name",
+        },
+        NameField {
+            node_kind: "function_signature_item",
+            field: "name",
+        },
+        NameField {
+            node_kind: "metavariable",
+            field: "name",
+        },
+        NameField {
+            node_kind: "macro_invocation",
+            field: "name",
+        },
     ],
     kind_map: &[
         ("function_item", Kind::Function),
@@ -209,7 +248,14 @@ pub static RUST_CONFIG: LangConfig = LangConfig {
         ("macro_definition", Kind::Function),
         ("metavariable", Kind::Const),
     ],
-    container_kinds: &[Kind::Struct, Kind::Enum, Kind::Interface, Kind::Module, Kind::Class, Kind::Impl],
+    container_kinds: &[
+        Kind::Struct,
+        Kind::Enum,
+        Kind::Interface,
+        Kind::Module,
+        Kind::Class,
+        Kind::Impl,
+    ],
     call_nodes: &["call_expression", "macro_invocation"],
     call_field: "function",
     ref_node: "scoped_identifier",
@@ -239,15 +285,42 @@ pub static TYPESCRIPT_CONFIG: LangConfig = LangConfig {
         "variable_declaration",
     ],
     name_fields: &[
-        NameField { node_kind: "function_declaration", field: "name" },
-        NameField { node_kind: "class_declaration", field: "name" },
-        NameField { node_kind: "interface_declaration", field: "name" },
-        NameField { node_kind: "enum_declaration", field: "name" },
-        NameField { node_kind: "type_alias_declaration", field: "name" },
-        NameField { node_kind: "method_definition", field: "name" },
-        NameField { node_kind: "public_field_definition", field: "name" },
-        NameField { node_kind: "enum_assignment", field: "name" },
-        NameField { node_kind: "property_identifier", field: "value" },
+        NameField {
+            node_kind: "function_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "class_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "interface_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "enum_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "type_alias_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "method_definition",
+            field: "name",
+        },
+        NameField {
+            node_kind: "public_field_definition",
+            field: "name",
+        },
+        NameField {
+            node_kind: "enum_assignment",
+            field: "name",
+        },
+        NameField {
+            node_kind: "property_identifier",
+            field: "value",
+        },
     ],
     kind_map: &[
         ("function_declaration", Kind::Function),
@@ -300,19 +373,58 @@ pub static DART_CONFIG: LangConfig = LangConfig {
         "program",
     ],
     name_fields: &[
-        NameField { node_kind: "function_signature", field: "name" },
-        NameField { node_kind: "class_declaration", field: "name" },
-        NameField { node_kind: "mixin_declaration", field: "name" },
-        NameField { node_kind: "enum_declaration", field: "name" },
-        NameField { node_kind: "extension_declaration", field: "name" },
-        NameField { node_kind: "method_signature", field: "name" },
-        NameField { node_kind: "getter_signature", field: "name" },
-        NameField { node_kind: "setter_signature", field: "name" },
-        NameField { node_kind: "constructor_signature", field: "name" },
-        NameField { node_kind: "type_alias", field: "name" },
-        NameField { node_kind: "enum_constant", field: "name" },
-        NameField { node_kind: "field", field: "name" },
-        NameField { node_kind: "static_final_declaration", field: "name" },
+        NameField {
+            node_kind: "function_signature",
+            field: "name",
+        },
+        NameField {
+            node_kind: "class_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "mixin_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "enum_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "extension_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "method_signature",
+            field: "name",
+        },
+        NameField {
+            node_kind: "getter_signature",
+            field: "name",
+        },
+        NameField {
+            node_kind: "setter_signature",
+            field: "name",
+        },
+        NameField {
+            node_kind: "constructor_signature",
+            field: "name",
+        },
+        NameField {
+            node_kind: "type_alias",
+            field: "name",
+        },
+        NameField {
+            node_kind: "enum_constant",
+            field: "name",
+        },
+        NameField {
+            node_kind: "field",
+            field: "name",
+        },
+        NameField {
+            node_kind: "static_final_declaration",
+            field: "name",
+        },
     ],
     kind_map: &[
         ("function_declaration", Kind::Function),
@@ -365,19 +477,58 @@ pub static SOLIDITY_CONFIG: LangConfig = LangConfig {
         "source_unit",
     ],
     name_fields: &[
-        NameField { node_kind: "contract_declaration", field: "name" },
-        NameField { node_kind: "interface_declaration", field: "name" },
-        NameField { node_kind: "library_declaration", field: "name" },
-        NameField { node_kind: "function_definition", field: "name" },
-        NameField { node_kind: "modifier_definition", field: "name" },
-        NameField { node_kind: "event_definition", field: "name" },
-        NameField { node_kind: "struct_declaration", field: "name" },
-        NameField { node_kind: "enum_declaration", field: "name" },
-        NameField { node_kind: "state_variable_declaration", field: "name" },
-        NameField { node_kind: "constant_variable_declaration", field: "name" },
-        NameField { node_kind: "enum_value", field: "name" },
-        NameField { node_kind: "struct_member", field: "name" },
-        NameField { node_kind: "user_defined_type_definition", field: "name" },
+        NameField {
+            node_kind: "contract_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "interface_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "library_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "function_definition",
+            field: "name",
+        },
+        NameField {
+            node_kind: "modifier_definition",
+            field: "name",
+        },
+        NameField {
+            node_kind: "event_definition",
+            field: "name",
+        },
+        NameField {
+            node_kind: "struct_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "enum_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "state_variable_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "constant_variable_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "enum_value",
+            field: "name",
+        },
+        NameField {
+            node_kind: "struct_member",
+            field: "name",
+        },
+        NameField {
+            node_kind: "user_defined_type_definition",
+            field: "name",
+        },
     ],
     kind_map: &[
         ("contract_declaration", Kind::Class),
@@ -397,7 +548,13 @@ pub static SOLIDITY_CONFIG: LangConfig = LangConfig {
         ("fallback_receive_definition", Kind::Method),
         ("user_defined_type_definition", Kind::TypeAlias),
     ],
-    container_kinds: &[Kind::Class, Kind::Interface, Kind::Module, Kind::Struct, Kind::Enum],
+    container_kinds: &[
+        Kind::Class,
+        Kind::Interface,
+        Kind::Module,
+        Kind::Struct,
+        Kind::Enum,
+    ],
     call_nodes: &["function_call_expression", "call_expression"],
     call_field: "name",
     ref_node: "identifier",

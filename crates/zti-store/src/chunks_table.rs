@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use arrow::array::{
     Array, BinaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, ListArray,
     RecordBatch, RecordBatchIterator, StringArray, UInt32Array,
@@ -21,7 +21,12 @@ pub struct ChunksTable {
 impl ChunksTable {
     pub async fn open(db: &lancedb::Connection, dim: usize) -> Result<Self> {
         let name = "chunks";
-        let table = if db.table_names().execute().await?.contains(&name.to_string()) {
+        let table = if db
+            .table_names()
+            .execute()
+            .await?
+            .contains(&name.to_string())
+        {
             db.open_table(name).execute().await?
         } else {
             let schema = Arc::new(schema::chunks_schema(dim));
@@ -54,7 +59,7 @@ impl ChunksTable {
         if n == 0
             || matches!(
                 params.method,
-                zti_ann::SearchMethod::Flat | zti_ann::SearchMethod::HnswRs
+                zti_ann::SearchMethod::Flat | zti_ann::SearchMethod::Usearch
             )
         {
             self.index_created = true;
@@ -273,11 +278,19 @@ impl ChunksTable {
 
 fn build_lang_path_filter(languages: Option<&[String]>, path_glob: Option<&str>) -> Option<String> {
     let mut filters = Vec::with_capacity(2);
-    if let Some(langs) = languages && !langs.is_empty() {
-        let list = langs.iter().map(|l| format!("'{}'", l)).collect::<Vec<_>>().join(",");
+    if let Some(langs) = languages
+        && !langs.is_empty()
+    {
+        let list = langs
+            .iter()
+            .map(|l| format!("'{}'", l))
+            .collect::<Vec<_>>()
+            .join(",");
         filters.push(format!("language IN ({})", list));
     }
-    if let Some(glob) = path_glob && let Some(pattern) = glob_to_like(glob) {
+    if let Some(glob) = path_glob
+        && let Some(pattern) = glob_to_like(glob)
+    {
         filters.push(format!("file_path LIKE '{}'", pattern));
     }
     if filters.is_empty() {
@@ -350,17 +363,10 @@ fn decode_batch(batch: &RecordBatch, has_distance: bool, out: &mut Vec<ChunkHit>
                 Some(v)
             })
             .unwrap_or_default();
-        let parent_sym_id = parent_sym_ids.and_then(|a| {
-            if a.is_null(i) {
-                None
-            } else {
-                Some(a.value(i))
-            }
-        });
+        let parent_sym_id =
+            parent_sym_ids.and_then(|a| if a.is_null(i) { None } else { Some(a.value(i)) });
         out.push(ChunkHit {
-            chunk_id: chunk_ids
-                .map(|a| a.value(i).to_vec())
-                .unwrap_or_default(),
+            chunk_id: chunk_ids.map(|a| a.value(i).to_vec()).unwrap_or_default(),
             file_path: file_paths
                 .map(|a| a.value(i).to_string())
                 .unwrap_or_default(),
@@ -375,12 +381,8 @@ fn decode_batch(batch: &RecordBatch, has_distance: bool, out: &mut Vec<ChunkHit>
             appendix_sym_ids: appendix,
             start_line: start_lines.map(|a| a.value(i)).unwrap_or(0),
             end_line: end_lines.map(|a| a.value(i)).unwrap_or(0),
-            content: contents
-                .map(|a| a.value(i).to_string())
-                .unwrap_or_default(),
-            turbo_code: turbo_codes
-                .map(|a| a.value(i).to_vec())
-                .unwrap_or_default(),
+            content: contents.map(|a| a.value(i).to_string()).unwrap_or_default(),
+            turbo_code: turbo_codes.map(|a| a.value(i).to_vec()).unwrap_or_default(),
             score,
         });
     }

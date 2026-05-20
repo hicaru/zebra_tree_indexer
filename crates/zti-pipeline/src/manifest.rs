@@ -87,10 +87,7 @@ pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
     map
 }
 
-pub fn detect_changes(
-    current: &HashMap<String, FileSnapshot>,
-    previous: &[FileRow],
-) -> Changes {
+pub fn detect_changes(current: &HashMap<String, FileSnapshot>, previous: &[FileRow]) -> Changes {
     let mut prev_map: HashMap<&str, &[u8]> = HashMap::with_capacity(previous.len());
     for row in previous {
         prev_map.insert(&row.file_path, &row.blake3);

@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -7,7 +7,7 @@ use clap::Parser;
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
-use rmcp::{tool, ErrorData, ServiceExt};
+use rmcp::{ErrorData, ServiceExt, tool};
 use tracing_subscriber::EnvFilter;
 
 use zti_ipc_client::Client;
@@ -326,10 +326,7 @@ impl ZebraMcpServer {
     #[tool(description = "Stop the daemon")]
     async fn stop(&self) -> Result<CallToolResult, ErrorData> {
         let mut client = self.client().await?;
-        let _ = client
-            .request(Request::Stop)
-            .await
-            .map_err(daemon_err)?;
+        let _ = client.request(Request::Stop).await.map_err(daemon_err)?;
         Ok(ok_text("Daemon stopped.".to_string()))
     }
 
@@ -375,12 +372,7 @@ impl ZebraMcpServer {
         match resp {
             Response::DaemonEnv(env) => Ok(ok_text(format!(
                 "Data: {}\nSocket: {}\nModel: {}\nDevice: {}\nCPUs: {}\nRAM: {}MB",
-                env.data_dir,
-                env.socket_path,
-                env.model_id,
-                env.device,
-                env.cpus,
-                env.mem_total_mb
+                env.data_dir, env.socket_path, env.model_id, env.device, env.cpus, env.mem_total_mb
             ))),
             _ => Err(unexpected_response()),
         }

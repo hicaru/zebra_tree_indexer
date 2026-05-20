@@ -4,14 +4,16 @@ use std::path::Path;
 use anyhow::Result;
 use ignore::WalkBuilder;
 
-use zti_ts_core::walker::LanguageFrontend;
 use zti_tree_sitter::{Language, detect_from_path, frontend_for};
+use zti_ts_core::walker::LanguageFrontend;
 
 use crate::model::{FileEntry, ProjectIndex};
 
-pub(crate) const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "build", "dist", ".cache"];
+pub(crate) const SKIP_DIRS: &[&str] =
+    &[".git", "node_modules", "target", "build", "dist", ".cache"];
 
-pub(crate) const MANIFEST_NAMES: &[&str] = &["Cargo.toml", "pubspec.yaml", "package.json", "foundry.toml"];
+pub(crate) const MANIFEST_NAMES: &[&str] =
+    &["Cargo.toml", "pubspec.yaml", "package.json", "foundry.toml"];
 
 /// Collect the union of every supported language's `extra_skip_dirs` —
 /// the standalone walker has no way to know which languages are present
@@ -19,7 +21,13 @@ pub(crate) const MANIFEST_NAMES: &[&str] = &["Cargo.toml", "pubspec.yaml", "pack
 fn all_lang_skip_dirs() -> Vec<&'static str> {
     use zti_tree_sitter::Language;
     let mut out: Vec<&'static str> = Vec::new();
-    for lang in [Language::Rust, Language::Ts, Language::Tsx, Language::Dart, Language::Solidity] {
+    for lang in [
+        Language::Rust,
+        Language::Ts,
+        Language::Tsx,
+        Language::Dart,
+        Language::Solidity,
+    ] {
         let cfg = zti_tree_sitter::frontend_for(lang).config();
         for &d in cfg.extra_skip_dirs {
             if !out.contains(&d) {
@@ -58,10 +66,7 @@ pub(crate) fn collect_manifest_paths(root: &Path, skip_dirs: Vec<&'static str>) 
         if !MANIFEST_NAMES.contains(&name.to_string_lossy().as_ref()) {
             continue;
         }
-        let rel = path
-            .strip_prefix(root)
-            .unwrap_or(path)
-            .to_string_lossy();
+        let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
         let rel = rel.trim_start_matches("./");
         results.push(rel.to_string());
     }
@@ -101,7 +106,11 @@ where
     let mut all_edges: Vec<zti_ts_core::types::Edge> = Vec::new();
 
     for src in sources {
-        let SourceFile { full_path, content, language } = src;
+        let SourceFile {
+            full_path,
+            content,
+            language,
+        } = src;
         let file_idx = files.len() as u16;
         let frontend = frontend_for(language);
         let id_offset = all_symbols.len() as u32;
@@ -189,13 +198,11 @@ pub fn build_index(root: &str) -> Result<ProjectIndex> {
         loaded.push((path_str, content, lang));
     }
 
-    let sources = loaded
-        .iter()
-        .map(|(p, c, l)| SourceFile {
-            full_path: p.clone(),
-            content: c.as_str(),
-            language: *l,
-        });
+    let sources = loaded.iter().map(|(p, c, l)| SourceFile {
+        full_path: p.clone(),
+        content: c.as_str(),
+        language: *l,
+    });
 
     Ok(build_index_from_sources(
         root_path.to_string_lossy().to_string(),
@@ -203,7 +210,10 @@ pub fn build_index(root: &str) -> Result<ProjectIndex> {
     ))
 }
 
-fn build_qualified_map(symbols: &[zti_ts_core::types::Symbol], files: &[FileEntry]) -> HashMap<String, u32> {
+fn build_qualified_map(
+    symbols: &[zti_ts_core::types::Symbol],
+    files: &[FileEntry],
+) -> HashMap<String, u32> {
     let mut map = HashMap::new();
 
     let mut name_counts: HashMap<&str, usize> = HashMap::new();
@@ -290,7 +300,11 @@ fn resolve_via_imports(
     None
 }
 
-fn resolve_in_same_file(name: &str, from_id: u32, symbols: &[zti_ts_core::types::Symbol]) -> Option<u32> {
+fn resolve_in_same_file(
+    name: &str,
+    from_id: u32,
+    symbols: &[zti_ts_core::types::Symbol],
+) -> Option<u32> {
     let from_sym = symbols.get(from_id as usize)?;
     symbols
         .iter()
@@ -298,7 +312,9 @@ fn resolve_in_same_file(name: &str, from_id: u32, symbols: &[zti_ts_core::types:
         .map(|s| s.id)
 }
 
-fn build_reverse_edges(edges: &[zti_ts_core::types::Edge]) -> HashMap<u32, Vec<zti_ts_core::types::Edge>> {
+fn build_reverse_edges(
+    edges: &[zti_ts_core::types::Edge],
+) -> HashMap<u32, Vec<zti_ts_core::types::Edge>> {
     let mut reverse: HashMap<u32, Vec<zti_ts_core::types::Edge>> = HashMap::new();
     for edge in edges {
         if let zti_ts_core::types::Target::Resolved(target_id) = edge.to {
@@ -311,7 +327,9 @@ fn build_reverse_edges(edges: &[zti_ts_core::types::Edge]) -> HashMap<u32, Vec<z
     reverse
 }
 
-fn build_forward_edges(edges: &[zti_ts_core::types::Edge]) -> HashMap<u32, Vec<zti_ts_core::types::Edge>> {
+fn build_forward_edges(
+    edges: &[zti_ts_core::types::Edge],
+) -> HashMap<u32, Vec<zti_ts_core::types::Edge>> {
     let mut forward: HashMap<u32, Vec<zti_ts_core::types::Edge>> = HashMap::new();
     for edge in edges {
         forward.entry(edge.from).or_default().push(edge.clone());
@@ -328,7 +346,11 @@ pub fn files_by_language(files: &[FileEntry], lang: zti_tree_sitter::Language) -
         .collect()
 }
 
-pub fn glob_match_files(files: &[FileEntry], root: &str, pattern: &str) -> Result<Vec<u16>, String> {
+pub fn glob_match_files(
+    files: &[FileEntry],
+    root: &str,
+    pattern: &str,
+) -> Result<Vec<u16>, String> {
     let glob = globset::Glob::new(pattern)
         .map_err(|e| format!("Invalid glob '{}': {}", pattern, e))?
         .compile_matcher();
@@ -346,8 +368,8 @@ pub fn glob_match_files(files: &[FileEntry], root: &str, pattern: &str) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use zti_ts_core::types::{Edge, EdgeKind, Kind, Symbol, Target};
     use zti_tree_sitter::Language;
+    use zti_ts_core::types::{Edge, EdgeKind, Kind, Symbol, Target};
 
     use crate::model::FileEntry;
 
@@ -477,9 +499,21 @@ mod tests {
     #[test]
     fn files_by_language_returns_correct_indices() {
         let files = vec![
-            FileEntry { path: "/p/a.rs".into(), language: Language::Rust, imports: HashMap::new() },
-            FileEntry { path: "/p/b.dart".into(), language: Language::Dart, imports: HashMap::new() },
-            FileEntry { path: "/p/c.rs".into(), language: Language::Rust, imports: HashMap::new() },
+            FileEntry {
+                path: "/p/a.rs".into(),
+                language: Language::Rust,
+                imports: HashMap::new(),
+            },
+            FileEntry {
+                path: "/p/b.dart".into(),
+                language: Language::Dart,
+                imports: HashMap::new(),
+            },
+            FileEntry {
+                path: "/p/c.rs".into(),
+                language: Language::Rust,
+                imports: HashMap::new(),
+            },
         ];
         assert_eq!(files_by_language(&files, Language::Rust), vec![0u16, 2u16]);
         assert_eq!(files_by_language(&files, Language::Dart), vec![1u16]);
@@ -488,18 +522,32 @@ mod tests {
 
     #[test]
     fn glob_match_files_returns_err_on_bad_glob() {
-        let files = vec![
-            FileEntry { path: "/p/a.rs".into(), language: Language::Rust, imports: HashMap::new() },
-        ];
+        let files = vec![FileEntry {
+            path: "/p/a.rs".into(),
+            language: Language::Rust,
+            imports: HashMap::new(),
+        }];
         assert!(glob_match_files(&files, "/p", "[invalid").is_err());
     }
 
     #[test]
     fn glob_match_files_matches_paths() {
         let files = vec![
-            FileEntry { path: "/p/src/a.rs".into(), language: Language::Rust, imports: HashMap::new() },
-            FileEntry { path: "/p/src/b.dart".into(), language: Language::Dart, imports: HashMap::new() },
-            FileEntry { path: "/p/lib/c.rs".into(), language: Language::Rust, imports: HashMap::new() },
+            FileEntry {
+                path: "/p/src/a.rs".into(),
+                language: Language::Rust,
+                imports: HashMap::new(),
+            },
+            FileEntry {
+                path: "/p/src/b.dart".into(),
+                language: Language::Dart,
+                imports: HashMap::new(),
+            },
+            FileEntry {
+                path: "/p/lib/c.rs".into(),
+                language: Language::Rust,
+                imports: HashMap::new(),
+            },
         ];
         let result = glob_match_files(&files, "/p", "src/**/*.rs").unwrap();
         assert_eq!(result, vec![0u16]);

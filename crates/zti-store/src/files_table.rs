@@ -1,5 +1,7 @@
 use anyhow::Result;
-use arrow::array::{FixedSizeBinaryArray, RecordBatch, RecordBatchIterator, StringArray, UInt64Array};
+use arrow::array::{
+    FixedSizeBinaryArray, RecordBatch, RecordBatchIterator, StringArray, UInt64Array,
+};
 use lancedb::query::ExecutableQuery;
 use lancedb::table::Table;
 use std::sync::Arc;
@@ -13,7 +15,12 @@ pub struct FilesTable {
 impl FilesTable {
     pub async fn open(db: &lancedb::Connection) -> Result<Self> {
         let name = "files";
-        let table = if db.table_names().execute().await?.contains(&name.to_string()) {
+        let table = if db
+            .table_names()
+            .execute()
+            .await?
+            .contains(&name.to_string())
+        {
             db.open_table(name).execute().await?
         } else {
             let schema = Arc::new(schema::files_schema());
@@ -68,9 +75,7 @@ impl FilesTable {
                     file_path: file_paths
                         .map(|a| a.value(i).to_string())
                         .unwrap_or_default(),
-                    blake3: blake3s
-                        .map(|a| a.value(i).to_vec())
-                        .unwrap_or_default(),
+                    blake3: blake3s.map(|a| a.value(i).to_vec()).unwrap_or_default(),
                     mtime_ns: mtimes.map(|a| a.value(i)).unwrap_or(0),
                     size_bytes: sizes.map(|a| a.value(i)).unwrap_or(0),
                     language: languages

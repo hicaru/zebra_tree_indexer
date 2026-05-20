@@ -36,7 +36,13 @@ pub fn format_search_results(results: &SearchResults) -> String {
     }
 
     for (i, hit) in results.hits.iter().enumerate() {
-        let _ = writeln!(out, "#{} {:.4} {}", i + 1, hit.score, short_name(&hit.symbol_qualified));
+        let _ = writeln!(
+            out,
+            "#{} {:.4} {}",
+            i + 1,
+            hit.score,
+            short_name(&hit.symbol_qualified)
+        );
         write_hit_block(&mut out, hit);
     }
 
@@ -143,14 +149,34 @@ mod tests {
         let out = format_search_results(&r);
         assert!(out.starts_with("LEGEND test\n"), "legend prefix: {}", out);
         assert!(out.contains("#1 0.7407 recip\n"), "hit rank line: {}", out);
-        assert!(out.contains("m#183 src/poly/rq.rs:127-203\n"), "hit header: {}", out);
+        assert!(
+            out.contains("m#183 src/poly/rq.rs:127-203\n"),
+            "hit header: {}",
+            out
+        );
         assert!(out.contains("    pub fn recip"), "body indent: {}", out);
-        assert!(out.contains("--- APPENDIX ---\n"), "appendix marker: {}", out);
-        assert!(out.contains("f#97 src/poly/rq.rs:127-203\n"), "appendix header: {}", out);
-        assert!(out.contains("    pub fn i16_negative_mask"), "appendix body indent: {}", out);
+        assert!(
+            out.contains("--- APPENDIX ---\n"),
+            "appendix marker: {}",
+            out
+        );
+        assert!(
+            out.contains("f#97 src/poly/rq.rs:127-203\n"),
+            "appendix header: {}",
+            out
+        );
+        assert!(
+            out.contains("    pub fn i16_negative_mask"),
+            "appendix body indent: {}",
+            out
+        );
         // No more sig/→/>/≈ lines.
         assert!(!out.contains("sig "), "should have no sig line: {}", out);
-        assert!(!out.contains("  ---\n"), "should have no separator: {}", out);
+        assert!(
+            !out.contains("  ---\n"),
+            "should have no separator: {}",
+            out
+        );
     }
 
     #[test]

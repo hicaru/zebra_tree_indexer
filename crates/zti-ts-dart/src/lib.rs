@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use tree_sitter::Node;
-use zti_ts_core::config::{LangConfig, DART_CONFIG};
+use zti_ts_core::config::{DART_CONFIG, LangConfig};
 use zti_ts_core::walker::LanguageFrontend;
 
 pub struct DartFrontend;
@@ -44,9 +44,10 @@ fn collect_dart_imports(node: Node, source: &str, imports: &mut HashMap<String, 
             }
             if prev_was_as {
                 if ck == "identifier"
-                    && let Ok(name) = child.utf8_text(source.as_bytes()) {
-                        alias = Some(name.to_string());
-                    }
+                    && let Ok(name) = child.utf8_text(source.as_bytes())
+                {
+                    alias = Some(name.to_string());
+                }
                 prev_was_as = false;
                 continue;
             }
@@ -58,10 +59,12 @@ fn collect_dart_imports(node: Node, source: &str, imports: &mut HashMap<String, 
                         is_show = true;
                         continue;
                     }
-                    if is_show && c2.kind() == "identifier"
-                        && let Ok(name) = c2.utf8_text(source.as_bytes()) {
-                            shown.push(name.to_string());
-                        }
+                    if is_show
+                        && c2.kind() == "identifier"
+                        && let Ok(name) = c2.utf8_text(source.as_bytes())
+                    {
+                        shown.push(name.to_string());
+                    }
                 }
             }
         }
@@ -79,9 +82,7 @@ fn collect_dart_imports(node: Node, source: &str, imports: &mut HashMap<String, 
 
         if !has_alias && !has_shown {
             let last_segment = uri.rsplit('/').next().unwrap_or(uri);
-            let base = last_segment
-                .trim_end_matches(".dart")
-                .trim_end_matches('/');
+            let base = last_segment.trim_end_matches(".dart").trim_end_matches('/');
             if !base.is_empty() {
                 let parts: Vec<&str> = base.split('_').collect();
                 let class_name: String = parts
@@ -119,7 +120,12 @@ mod tests {
         let source = "void main() { print(\"hi\"); }";
         let (symbols, _, _) = parse_dart(source);
         let mains: Vec<&Symbol> = symbols.iter().filter(|s| s.name == "main").collect();
-        assert_eq!(mains.len(), 1, "expected exactly one 'main', got: {:?}", symbols);
+        assert_eq!(
+            mains.len(),
+            1,
+            "expected exactly one 'main', got: {:?}",
+            symbols
+        );
         assert_eq!(mains[0].kind, Kind::Function);
     }
 
@@ -128,7 +134,12 @@ mod tests {
         let source = "void main() => print(\"hi\");";
         let (symbols, _, _) = parse_dart(source);
         let mains: Vec<&Symbol> = symbols.iter().filter(|s| s.name == "main").collect();
-        assert_eq!(mains.len(), 1, "expected exactly one 'main', got: {:?}", symbols);
+        assert_eq!(
+            mains.len(),
+            1,
+            "expected exactly one 'main', got: {:?}",
+            symbols
+        );
         assert!(!symbols.iter().any(|s| s.name.starts_with("=>")));
     }
 
@@ -140,7 +151,11 @@ mod tests {
             assert!(!sym.name.contains('{'), "name contains '{{': {}", sym.name);
             assert!(!sym.name.contains("=>"), "name contains '=>': {}", sym.name);
             assert!(!sym.name.contains(';'), "name contains ';': {}", sym.name);
-            assert!(!sym.name.contains('\n'), "name contains newline: {}", sym.name);
+            assert!(
+                !sym.name.contains('\n'),
+                "name contains newline: {}",
+                sym.name
+            );
         }
     }
 
@@ -160,10 +175,13 @@ mod tests {
         let (symbols, edges, _) = parse_dart(source);
         let main = symbols.iter().find(|s| s.name == "main").unwrap();
         let calls_some_api = edges.iter().any(|e| {
-            e.from == main.id
-                && matches!(e.to, Target::Unresolved(ref name) if name == "someApi")
+            e.from == main.id && matches!(e.to, Target::Unresolved(ref name) if name == "someApi")
         });
-        assert!(calls_some_api, "main should call someApi, edges: {:?}", edges);
+        assert!(
+            calls_some_api,
+            "main should call someApi, edges: {:?}",
+            edges
+        );
     }
 
     #[test]
@@ -203,8 +221,16 @@ mod tests {
         let (symbols, _, _) = parse_dart(source);
         let api = symbols.iter().find(|s| s.name == "apiUrl");
         let timeout = symbols.iter().find(|s| s.name == "timeout");
-        assert!(api.is_some(), "apiUrl should be captured, got: {:?}", symbols);
-        assert!(timeout.is_some(), "timeout should be captured, got: {:?}", symbols);
+        assert!(
+            api.is_some(),
+            "apiUrl should be captured, got: {:?}",
+            symbols
+        );
+        assert!(
+            timeout.is_some(),
+            "timeout should be captured, got: {:?}",
+            symbols
+        );
     }
 
     #[test]
@@ -224,8 +250,14 @@ mod tests {
             }
         "};
         let (symbols, _, _) = parse_dart(source);
-        let getter = symbols.iter().find(|s| s.name == "name" && s.kind == Kind::Method);
-        assert!(getter.is_some(), "abstract getter should be Method, got: {:?}", symbols);
+        let getter = symbols
+            .iter()
+            .find(|s| s.name == "name" && s.kind == Kind::Method);
+        assert!(
+            getter.is_some(),
+            "abstract getter should be Method, got: {:?}",
+            symbols
+        );
     }
 
     #[test]
@@ -257,7 +289,11 @@ mod tests {
         "};
         let (symbols, _, _) = parse_dart(source);
         let ext = symbols.iter().find(|s| s.name.starts_with("_extOn"));
-        assert!(ext.is_some(), "anonymous extension should get synthetic name, got: {:?}", symbols);
+        assert!(
+            ext.is_some(),
+            "anonymous extension should get synthetic name, got: {:?}",
+            symbols
+        );
     }
 
     #[test]
@@ -273,10 +309,20 @@ mod tests {
         let species = symbols.iter().find(|s| s.name == "species");
         assert!(species.is_some(), "static const species should be captured");
         assert_eq!(species.unwrap().kind, Kind::Const);
-        let name_as_const = symbols.iter().find(|s| s.name == "name" && s.kind == Kind::Const);
-        assert!(name_as_const.is_none(), "instance field 'name' should NOT be Const");
-        let age_as_const = symbols.iter().find(|s| s.name == "age" && s.kind == Kind::Const);
-        assert!(age_as_const.is_none(), "instance field 'age' should NOT be Const");
+        let name_as_const = symbols
+            .iter()
+            .find(|s| s.name == "name" && s.kind == Kind::Const);
+        assert!(
+            name_as_const.is_none(),
+            "instance field 'name' should NOT be Const"
+        );
+        let age_as_const = symbols
+            .iter()
+            .find(|s| s.name == "age" && s.kind == Kind::Const);
+        assert!(
+            age_as_const.is_none(),
+            "instance field 'age' should NOT be Const"
+        );
     }
 
     #[test]
@@ -289,7 +335,11 @@ mod tests {
         let (symbols, _, _) = parse_dart(source);
         let comp = symbols.iter().find(|s| s.name == "Comparable").unwrap();
         let op = symbols.iter().find(|s| s.name == "<");
-        assert!(op.is_some(), "operator < should be captured, got: {:?}", symbols);
+        assert!(
+            op.is_some(),
+            "operator < should be captured, got: {:?}",
+            symbols
+        );
         assert_eq!(op.unwrap().kind, Kind::Method);
         assert_eq!(op.unwrap().parent, Some(comp.id));
     }
@@ -305,14 +355,22 @@ mod tests {
     fn aliased_import_captured() {
         let source = "import 'package:foo/bar.dart' as baz;";
         let (_, _, imports) = parse_dart(source);
-        assert!(imports.contains_key("baz"), "aliased import should have key 'baz', got: {:?}", imports);
+        assert!(
+            imports.contains_key("baz"),
+            "aliased import should have key 'baz', got: {:?}",
+            imports
+        );
     }
 
     #[test]
     fn bare_import_captured() {
         let source = "import 'package:foo/bar.dart';";
         let (_, _, imports) = parse_dart(source);
-        assert!(!imports.is_empty(), "bare import should still produce an entry, got: {:?}", imports);
+        assert!(
+            !imports.is_empty(),
+            "bare import should still produce an entry, got: {:?}",
+            imports
+        );
     }
 
     #[test]

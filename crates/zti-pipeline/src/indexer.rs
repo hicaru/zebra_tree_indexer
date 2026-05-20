@@ -128,10 +128,13 @@ pub async fn index_project(
         }
     }
 
-    info!("collected {} chunks from {} files", all_pending.len(), need_reindex.len());
+    info!(
+        "collected {} chunks from {} files",
+        all_pending.len(),
+        need_reindex.len()
+    );
 
-    let chunk_sym_set: HashSet<u32> =
-        all_pending.iter().map(|(c, _)| c.sym_id).collect();
+    let chunk_sym_set: HashSet<u32> = all_pending.iter().map(|(c, _)| c.sym_id).collect();
 
     let appendix_for = |sym_id: u32| -> Vec<u32> {
         let mut visited: HashSet<u32> = HashSet::with_capacity(16);
@@ -325,10 +328,14 @@ pub async fn index_project(
         .as_ref()
         .and_then(|r| r.search_params.as_deref())
         .and_then(|s| serde_json::from_str(s).ok());
-    let params = zti_ann::choose_method(total_embedded, engine.dim(), &hw, previous_params.as_ref());
+    let params =
+        zti_ann::choose_method(total_embedded, engine.dim(), &hw, previous_params.as_ref());
     info!(
         "search method: {:?} (n={}, dim={}, ram_avail={} MB)",
-        params.method, total_embedded, engine.dim(), hw.mem_avail >> 20
+        params.method,
+        total_embedded,
+        engine.dim(),
+        hw.mem_avail >> 20
     );
 
     chunks_table.build_index(&params).await?;
@@ -337,7 +344,17 @@ pub async fn index_project(
 
     let languages: HashSet<Language> = snapshots.values().map(|s| s.language).collect();
     let languages: Vec<&Language> = languages.iter().collect();
-    upsert_project(db, &pid, root_str, total_embedded, snapshots.len(), &languages, engine, &params).await?;
+    upsert_project(
+        db,
+        &pid,
+        root_str,
+        total_embedded,
+        snapshots.len(),
+        &languages,
+        engine,
+        &params,
+    )
+    .await?;
 
     reporter.finish_with_message(&format!("embedded {} passages", total_embedded));
 
@@ -422,9 +439,7 @@ async fn upsert_project(
     let mut project_id_builder = FixedSizeBinaryBuilder::new(32);
     project_id_builder.append_value(pid)?;
 
-    let lang_values = StringArray::from(
-        languages.iter().map(|l| l.as_str()).collect::<Vec<_>>(),
-    );
+    let lang_values = StringArray::from(languages.iter().map(|l| l.as_str()).collect::<Vec<_>>());
     let languages_arr = arrow::array::ListArray::new(
         Arc::new(arrow::datatypes::Field::new(
             "item",

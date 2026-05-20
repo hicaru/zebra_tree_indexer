@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SearchMethod {
     Flat,
-    HnswRs,
+    Usearch,
     IvfHnswSq,
 }
 
@@ -12,7 +12,7 @@ impl SearchMethod {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Flat => "flat",
-            Self::HnswRs => "hnsw_rs",
+            Self::Usearch => "usearch",
             Self::IvfHnswSq => "ivf_hnsw_sq",
         }
     }
@@ -21,7 +21,7 @@ impl SearchMethod {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "flat" => Some(Self::Flat),
-            "hnsw_rs" => Some(Self::HnswRs),
+            "usearch" => Some(Self::Usearch),
             "ivf_hnsw_sq" => Some(Self::IvfHnswSq),
             _ => None,
         }

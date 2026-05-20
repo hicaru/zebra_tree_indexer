@@ -20,7 +20,13 @@ impl<'a> AsciiTreeRenderer<'a> {
             Some(s) => s,
             None => return format!("Symbol {} not found\n", id),
         };
-        let _ = writeln!(out, "{}#{} {} (callers)", sym.kind.short(), id, sym.qualified);
+        let _ = writeln!(
+            out,
+            "{}#{} {} (callers)",
+            sym.kind.short(),
+            id,
+            sym.qualified
+        );
         let mut prefix = String::new();
         let mut visited = HashSet::new();
         self.recurse(
@@ -41,14 +47,26 @@ impl<'a> AsciiTreeRenderer<'a> {
         self.render_callees_with_ids(id, max_depth, local_only, true)
     }
 
-    pub fn render_callees_with_ids(&self, id: u32, max_depth: usize, local_only: bool, show_ids: bool) -> String {
+    pub fn render_callees_with_ids(
+        &self,
+        id: u32,
+        max_depth: usize,
+        local_only: bool,
+        show_ids: bool,
+    ) -> String {
         let mut out = String::new();
         let sym = match self.index.symbols.get(id as usize) {
             Some(s) => s,
             None => return format!("Symbol {} not found\n", id),
         };
         if show_ids {
-            let _ = writeln!(out, "{}#{} {} (callees)", sym.kind.short(), id, sym.qualified);
+            let _ = writeln!(
+                out,
+                "{}#{} {} (callees)",
+                sym.kind.short(),
+                id,
+                sym.qualified
+            );
         } else {
             let _ = writeln!(out, "{} {} (callees)", sym.kind.short(), sym.qualified);
         }
@@ -90,8 +108,18 @@ impl<'a> AsciiTreeRenderer<'a> {
         }
 
         let edges_for_id: &[Edge] = match direction {
-            Direction::Callers => self.index.reverse_edges.get(&id).map(Vec::as_slice).unwrap_or(&[]),
-            Direction::Callees => self.index.forward_edges.get(&id).map(Vec::as_slice).unwrap_or(&[]),
+            Direction::Callers => self
+                .index
+                .reverse_edges
+                .get(&id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            Direction::Callees => self
+                .index
+                .forward_edges
+                .get(&id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
         };
 
         let filtered: Vec<&Edge> = edges_for_id
@@ -124,7 +152,13 @@ impl<'a> AsciiTreeRenderer<'a> {
                     if let Target::Resolved(from_id) = edge.to {
                         if let Some(sym) = self.index.symbols.get(from_id as usize) {
                             if show_ids {
-                                let _ = writeln!(out, "{}#{} {}", sym.kind.short(), from_id, sym.qualified);
+                                let _ = writeln!(
+                                    out,
+                                    "{}#{} {}",
+                                    sym.kind.short(),
+                                    from_id,
+                                    sym.qualified
+                                );
                             } else {
                                 let _ = writeln!(out, "{} {}", sym.kind.short(), sym.qualified);
                             }
@@ -153,7 +187,13 @@ impl<'a> AsciiTreeRenderer<'a> {
                     Target::Resolved(to_id) => {
                         if let Some(sym) = self.index.symbols.get(*to_id as usize) {
                             if show_ids {
-                                let _ = writeln!(out, "{}#{} {}", sym.kind.short(), to_id, sym.qualified);
+                                let _ = writeln!(
+                                    out,
+                                    "{}#{} {}",
+                                    sym.kind.short(),
+                                    to_id,
+                                    sym.qualified
+                                );
                             } else {
                                 let _ = writeln!(out, "{} {}", sym.kind.short(), sym.qualified);
                             }

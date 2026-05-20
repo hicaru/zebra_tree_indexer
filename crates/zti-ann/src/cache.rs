@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use tokio::sync::{OnceCell, RwLock};
 
-use crate::hnsw::HnswGraph;
+use crate::usearch_graph::AnnIndex;
 
 pub type ProjectId = [u8; 32];
-pub type AnnHandle = Arc<HnswGraph>;
+pub type AnnHandle = Arc<AnnIndex>;
 
 #[derive(Default)]
 pub struct AnnCache {
@@ -20,14 +20,10 @@ impl AnnCache {
         map.get(pid).and_then(|cell| cell.get().cloned())
     }
 
-    pub async fn get_or_build<F, Fut, E>(
-        &self,
-        pid: ProjectId,
-        builder: F,
-    ) -> Result<AnnHandle, E>
+    pub async fn get_or_build<F, Fut, E>(&self, pid: ProjectId, builder: F) -> Result<AnnHandle, E>
     where
         F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<HnswGraph, E>>,
+        Fut: std::future::Future<Output = Result<AnnIndex, E>>,
     {
         let cell = {
             let mut map = self.inner.write().await;

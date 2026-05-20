@@ -4,10 +4,10 @@ use tree_sitter::Node;
 use zti_ts_core::config::LangConfig;
 use zti_ts_core::types::ParseResult;
 use zti_ts_core::walker::LanguageFrontend;
-use zti_ts_rust::RustFrontend;
-use zti_ts_typescript::TypeScriptFrontend;
 use zti_ts_dart::DartFrontend;
+use zti_ts_rust::RustFrontend;
 use zti_ts_solidity::SolidityFrontend;
+use zti_ts_typescript::TypeScriptFrontend;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Language {

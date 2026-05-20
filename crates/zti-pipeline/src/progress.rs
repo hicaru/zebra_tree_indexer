@@ -87,8 +87,7 @@ impl ProgressReporter for IpcReporter {
     fn start(&self, total: u64) {
         self.total
             .store(total, std::sync::atomic::Ordering::Relaxed);
-        self.current
-            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.current.store(0, std::sync::atomic::Ordering::Relaxed);
         let _ = self.tx.send(zti_protocol::response::IndexingProgress {
             phase: "start".to_string(),
             current: 0,

@@ -20,7 +20,7 @@ pub fn choose_method(
     let mut method = if n_chunks < FLAT_MAX {
         SearchMethod::Flat
     } else if n_chunks < HNSW_RS_MAX && est_full_vec_mem < mem_quarter {
-        SearchMethod::HnswRs
+        SearchMethod::Usearch
     } else {
         SearchMethod::IvfHnswSq
     };
@@ -75,7 +75,7 @@ mod tests {
     #[test]
     fn hnsw_rs_for_medium() {
         let p = choose_method(5_000, 768, &hw(32 * 1024 * 1024 * 1024), None);
-        assert_eq!(p.method, SearchMethod::HnswRs);
+        assert_eq!(p.method, SearchMethod::Usearch);
     }
 
     #[test]
@@ -99,9 +99,9 @@ mod tests {
     #[test]
     fn hysteresis_stays_on_hnsw_rs() {
         let prev = choose_method(9_900, 768, &hw(32 * 1024 * 1024 * 1024), None);
-        assert_eq!(prev.method, SearchMethod::HnswRs);
+        assert_eq!(prev.method, SearchMethod::Usearch);
         let now = choose_method(10_100, 768, &hw(32 * 1024 * 1024 * 1024), Some(&prev));
-        assert_eq!(now.method, SearchMethod::HnswRs);
+        assert_eq!(now.method, SearchMethod::Usearch);
     }
 
     #[test]

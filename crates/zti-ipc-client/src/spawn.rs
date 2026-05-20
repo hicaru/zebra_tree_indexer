@@ -7,10 +7,7 @@ use tokio::time;
 
 use zti_common::paths;
 
-pub async fn connect_or_spawn(
-    timeout: Duration,
-    model: Option<&str>,
-) -> Result<UnixStream> {
+pub async fn connect_or_spawn(timeout: Duration, model: Option<&str>) -> Result<UnixStream> {
     let socket_path = paths::daemon_socket()?;
 
     if let Ok(stream) = UnixStream::connect(&socket_path).await {
@@ -20,7 +17,7 @@ pub async fn connect_or_spawn(
 
     match model {
         Some(m) => tracing::info!("daemon not running, spawning with model {m}..."),
-        None    => tracing::info!("daemon not running, spawning with daemon default model..."),
+        None => tracing::info!("daemon not running, spawning with daemon default model..."),
     }
     spawn_daemon(model)?;
     wait_for_socket(&socket_path, timeout).await
@@ -28,7 +25,9 @@ pub async fn connect_or_spawn(
 
 fn spawn_daemon(model: Option<&str>) -> Result<()> {
     let exe = std::env::current_exe()?;
-    let dir = exe.parent().ok_or_else(|| anyhow::anyhow!("no parent dir for current exe"))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("no parent dir for current exe"))?;
     let daemon_path = dir.join("zti-daemon");
 
     let log_path = paths::daemon_log()?;

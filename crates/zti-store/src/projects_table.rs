@@ -1,5 +1,7 @@
 use anyhow::{Result, anyhow};
-use arrow::array::{FixedSizeBinaryArray, RecordBatch, RecordBatchIterator, StringArray, UInt32Array, UInt64Array};
+use arrow::array::{
+    FixedSizeBinaryArray, RecordBatch, RecordBatchIterator, StringArray, UInt32Array, UInt64Array,
+};
 use arrow_array::Array;
 use futures::StreamExt;
 use lancedb::query::ExecutableQuery;
@@ -15,7 +17,12 @@ pub struct ProjectsTable {
 impl ProjectsTable {
     pub async fn open(db: &lancedb::Connection) -> Result<Self> {
         let name = "projects";
-        let table = if db.table_names().execute().await?.contains(&name.to_string()) {
+        let table = if db
+            .table_names()
+            .execute()
+            .await?
+            .contains(&name.to_string())
+        {
             db.open_table(name).execute().await?
         } else {
             let schema = Arc::new(schema::projects_schema());
@@ -83,10 +90,18 @@ impl ProjectsTable {
                 last_indexed_ns: last_indexed.map(|a| a.value(i)).unwrap_or(0),
                 created_at_ns: created_at.map(|a| a.value(i)).unwrap_or(0),
                 search_method: search_method.and_then(|a| {
-                    if a.is_null(i) { None } else { Some(a.value(i).to_string()) }
+                    if a.is_null(i) {
+                        None
+                    } else {
+                        Some(a.value(i).to_string())
+                    }
                 }),
                 search_params: search_params.and_then(|a| {
-                    if a.is_null(i) { None } else { Some(a.value(i).to_string()) }
+                    if a.is_null(i) {
+                        None
+                    } else {
+                        Some(a.value(i).to_string())
+                    }
                 }),
             }));
         }

@@ -41,7 +41,11 @@ pub fn files_schema() -> Schema {
         Field::new("language", DataType::Utf8, false),
         Field::new(
             "chunk_ids",
-            DataType::List(Arc::new(Field::new("item", DataType::FixedSizeBinary(16), false))),
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::FixedSizeBinary(16),
+                false,
+            ))),
             true,
         ),
         Field::new("indexed_at_ns", DataType::UInt64, false),
@@ -53,7 +57,11 @@ pub fn projects_schema() -> Schema {
     let fields = vec![
         Field::new("project_id", DataType::FixedSizeBinary(32), false),
         Field::new("root_path", DataType::Utf8, false),
-        Field::new("languages", DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))), false),
+        Field::new(
+            "languages",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))),
+            false,
+        ),
         Field::new("model_id", DataType::Utf8, false),
         Field::new("model_dim", DataType::UInt32, false),
         Field::new("total_chunks", DataType::UInt64, false),

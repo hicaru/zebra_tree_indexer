@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use zti_ts_core::{Edge, Symbol};
 use zti_tree_sitter::Language;
+use zti_ts_core::{Edge, Symbol};
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {

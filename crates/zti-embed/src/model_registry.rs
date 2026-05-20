@@ -45,11 +45,7 @@ const BERT_QUERY_PREFIX: &str = "Represent this sentence for searching relevant 
 
 const BERT_FAMILY_PREFIXES: &[&str] = &["bge-", "mxbai-", "gte-", "e5-"];
 
-const ONNX_CANDIDATES: &[&str] = &[
-    "onnx/model.onnx",
-    "model.onnx",
-    "onnx/model_quantized.onnx",
-];
+const ONNX_CANDIDATES: &[&str] = &["onnx/model.onnx", "model.onnx", "onnx/model_quantized.onnx"];
 
 const TOKENIZER_CANDIDATES: &[&str] = &["tokenizer.json", "onnx/tokenizer.json"];
 
@@ -121,10 +117,7 @@ fn resolve_local(p: &Path) -> Result<ResolvedModel> {
             .ok_or_else(|| anyhow::anyhow!("path has no parent: {}", p.display()))?;
         (parent.to_path_buf(), Some(p.to_path_buf()))
     } else {
-        anyhow::bail!(
-            "{} is neither a directory nor a .onnx file",
-            p.display()
-        );
+        anyhow::bail!("{} is neither a directory nor a .onnx file", p.display());
     };
 
     let onnx_path = match explicit_onnx {
@@ -195,7 +188,10 @@ fn resolve_hf(model_id: &str) -> Result<ResolvedModel> {
     let parts: Vec<&str> = model_id.splitn(2, '/').collect();
     let (owner, name) = match parts.as_slice() {
         [o, n] => (*o, *n),
-        _ => anyhow::bail!("invalid model_id: expected 'owner/name', got '{}'", model_id),
+        _ => anyhow::bail!(
+            "invalid model_id: expected 'owner/name', got '{}'",
+            model_id
+        ),
     };
 
     if !onnx_path.exists() {
@@ -226,11 +222,7 @@ fn try_download(
 ) -> Result<PathBuf> {
     let mut last_err: Option<String> = None;
     for fname in candidates {
-        match repo
-            .download_file()
-            .filename(fname.to_string())
-            .send()
-        {
+        match repo.download_file().filename(fname.to_string()).send() {
             Ok(p) => {
                 tracing::debug!(filename = fname, "downloaded {}", p.display());
                 return Ok(p);

@@ -27,11 +27,18 @@ pub async fn handle(req: &DoctorReq, state: &DaemonState) -> Response {
                 )),
                 Some(emb) => checks.push(error_check(
                     "model_load",
-                    format!("dim mismatch: profile={} probe={}", state.engine.dim(), emb.len()),
+                    format!(
+                        "dim mismatch: profile={} probe={}",
+                        state.engine.dim(),
+                        emb.len()
+                    ),
                 )),
                 None => checks.push(error_check("model_load", "probe returned no embedding")),
             },
-            Err(e) => checks.push(error_check("model_load", format!("embed probe failed: {}", e))),
+            Err(e) => checks.push(error_check(
+                "model_load",
+                format!("embed probe failed: {}", e),
+            )),
         }
     }
 
@@ -55,7 +62,11 @@ pub async fn handle(req: &DoctorReq, state: &DaemonState) -> Response {
             match available_space(&dir) {
                 Ok(bytes) => {
                     let gib = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-                    let status = if gib < 1.0 { CheckStatus::Warn } else { CheckStatus::Ok };
+                    let status = if gib < 1.0 {
+                        CheckStatus::Warn
+                    } else {
+                        CheckStatus::Ok
+                    };
                     checks.push(DoctorCheck {
                         name: "disk_free_gib".to_string(),
                         status,

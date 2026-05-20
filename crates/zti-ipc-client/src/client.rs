@@ -38,7 +38,11 @@ impl Client {
         Ok(resp)
     }
 
-    pub async fn request_streaming<F>(&mut self, req: Request, mut on_progress: F) -> Result<Response>
+    pub async fn request_streaming<F>(
+        &mut self,
+        req: Request,
+        mut on_progress: F,
+    ) -> Result<Response>
     where
         F: FnMut(Response),
     {

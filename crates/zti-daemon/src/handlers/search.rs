@@ -16,9 +16,8 @@ pub async fn handle(req: &SearchReq, state: &DaemonState) -> Response {
     let limit = req.limit;
 
     let result = with_project(state, &req.project_root, |project| async move {
-        let pid = zti_common::ids::project_id(
-            &std::path::Path::new(&req.project_root).canonicalize()?,
-        );
+        let pid =
+            zti_common::ids::project_id(&std::path::Path::new(&req.project_root).canonicalize()?);
 
         let opts = zti_pipeline::search::SearchOpts {
             limit,
@@ -26,14 +25,8 @@ pub async fn handle(req: &SearchReq, state: &DaemonState) -> Response {
             path_glob: req.path_glob.as_deref(),
         };
         let hits = if req.exhaustive {
-            zti_pipeline::search::search_exhaustive(
-                &query,
-                &state.engine,
-                &project.db,
-                &pid,
-                &opts,
-            )
-            .await?
+            zti_pipeline::search::search_exhaustive(&query, &state.engine, &project.db, &pid, &opts)
+                .await?
         } else {
             let reranker = TurboReranker::new(state.engine.dim())?;
             zti_pipeline::search::search(
@@ -79,8 +72,7 @@ pub async fn handle(req: &SearchReq, state: &DaemonState) -> Response {
             Vec::new()
         } else {
             let rows = chunks_table.get_by_sym_ids(&appendix_ids).await?;
-            let by_sym: HashMap<u32, &ChunkHit> =
-                rows.iter().map(|r| (r.sym_id, r)).collect();
+            let by_sym: HashMap<u32, &ChunkHit> = rows.iter().map(|r| (r.sym_id, r)).collect();
             let mut out: Vec<SearchHit> = Vec::with_capacity(appendix_ids.len());
             for sid in &appendix_ids {
                 if let Some(c) = by_sym.get(sid) {

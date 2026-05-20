@@ -16,7 +16,13 @@ impl Db {
         let lance_dir = root.join("lance");
         std::fs::create_dir_all(&lance_dir)?;
 
-        let db = connect(lance_dir.to_str().ok_or_else(|| anyhow::anyhow!("invalid path"))?).execute().await?;
+        let db = connect(
+            lance_dir
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid path"))?,
+        )
+        .execute()
+        .await?;
 
         Ok(Self { db })
     }
@@ -26,7 +32,13 @@ impl Db {
         let registry = data.join("registry");
         std::fs::create_dir_all(&registry)?;
 
-        let db = connect(registry.to_str().ok_or_else(|| anyhow::anyhow!("invalid path"))?).execute().await?;
+        let db = connect(
+            registry
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid path"))?,
+        )
+        .execute()
+        .await?;
 
         Ok(Self { db })
     }

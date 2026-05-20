@@ -39,22 +39,25 @@ fn collect_solidity_imports(node: Node, source: &str, imports: &mut HashMap<Stri
             for child in node.children(&mut cursor2) {
                 if child.kind() == "identifier"
                     && let Ok(name) = child.utf8_text(source.as_bytes())
-                        && !name.is_empty() {
-                            imports.entry(name.to_string()).or_insert_with(|| text.clone());
-                            found_named = true;
-                        }
+                    && !name.is_empty()
+                {
+                    imports
+                        .entry(name.to_string())
+                        .or_insert_with(|| text.clone());
+                    found_named = true;
+                }
             }
         }
 
-        if !found_named
-            && let Some(path_node) = node.child_by_field_name("path")
-        {
+        if !found_named && let Some(path_node) = node.child_by_field_name("path") {
             let path_text = path_node.utf8_text(source.as_bytes()).unwrap_or("");
             let clean = path_text.trim_matches('"').trim_matches('\'');
             let basename = clean.rsplit('/').next().unwrap_or(clean);
             let name = basename.trim_end_matches(".sol");
             if !name.is_empty() {
-                imports.entry(name.to_string()).or_insert_with(|| text.clone());
+                imports
+                    .entry(name.to_string())
+                    .or_insert_with(|| text.clone());
             }
         }
     }
@@ -80,16 +83,21 @@ fn collect_solidity_import_names(
         }
         if prev_was_as && child.kind() == "identifier" {
             if let Ok(name) = child.utf8_text(source.as_bytes()) {
-                imports.entry(name.to_string()).or_insert_with(|| text.to_string());
+                imports
+                    .entry(name.to_string())
+                    .or_insert_with(|| text.to_string());
                 *found_named = true;
             }
             prev_was_as = false;
             continue;
         }
-        if child.kind() == "identifier" && !prev_was_as
+        if child.kind() == "identifier"
+            && !prev_was_as
             && let Ok(name) = child.utf8_text(source.as_bytes())
         {
-            imports.entry(name.to_string()).or_insert_with(|| text.to_string());
+            imports
+                .entry(name.to_string())
+                .or_insert_with(|| text.to_string());
             *found_named = true;
         }
         if child.child_count() > 0 && child.kind() != "identifier" && child.kind() != "as" {
@@ -278,7 +286,10 @@ mod tests {
             }
         "};
         let (symbols, _, _) = parse_solidity(source);
-        let err = symbols.iter().find(|s| s.name == "InsufficientBalance").unwrap();
+        let err = symbols
+            .iter()
+            .find(|s| s.name == "InsufficientBalance")
+            .unwrap();
         assert_eq!(err.kind, Kind::Error);
     }
 
@@ -304,29 +315,49 @@ mod tests {
     fn import_named() {
         let source = "import {Foo, Bar} from \"./Token.sol\";";
         let (_, _, imports) = parse_solidity(source);
-        assert!(imports.contains_key("Foo"), "should have Foo, got: {:?}", imports);
-        assert!(imports.contains_key("Bar"), "should have Bar, got: {:?}", imports);
+        assert!(
+            imports.contains_key("Foo"),
+            "should have Foo, got: {:?}",
+            imports
+        );
+        assert!(
+            imports.contains_key("Bar"),
+            "should have Bar, got: {:?}",
+            imports
+        );
     }
 
     #[test]
     fn import_aliased() {
         let source = "import {Foo as Bar} from \"./Token.sol\";";
         let (_, _, imports) = parse_solidity(source);
-        assert!(imports.contains_key("Bar"), "should have Bar (alias), got: {:?}", imports);
+        assert!(
+            imports.contains_key("Bar"),
+            "should have Bar (alias), got: {:?}",
+            imports
+        );
     }
 
     #[test]
     fn import_star() {
         let source = "import * as Token from \"./Token.sol\";";
         let (_, _, imports) = parse_solidity(source);
-        assert!(imports.contains_key("Token"), "should have Token, got: {:?}", imports);
+        assert!(
+            imports.contains_key("Token"),
+            "should have Token, got: {:?}",
+            imports
+        );
     }
 
     #[test]
     fn import_bare() {
         let source = "import \"./Token.sol\";";
         let (_, _, imports) = parse_solidity(source);
-        assert!(imports.is_empty() || imports.contains_key("Token"), "bare import should not add noise, got: {:?}", imports);
+        assert!(
+            imports.is_empty() || imports.contains_key("Token"),
+            "bare import should not add noise, got: {:?}",
+            imports
+        );
     }
 
     #[test]
@@ -406,7 +437,10 @@ mod tests {
             }
         "};
         let (symbols, _, _) = parse_solidity(source);
-        let err = symbols.iter().find(|s| s.name == "InsufficientBalance").unwrap();
+        let err = symbols
+            .iter()
+            .find(|s| s.name == "InsufficientBalance")
+            .unwrap();
         assert!(
             err.doc.is_none(),
             "error should not have doc, got: {:?}",

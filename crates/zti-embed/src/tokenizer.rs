@@ -7,7 +7,8 @@ pub struct Tokenizer {
 
 impl Tokenizer {
     pub fn from_file(path: &std::path::Path) -> Result<Self> {
-        let inner = HfTokenizer::from_file(path).map_err(|e| anyhow::anyhow!("tokenizer: {}", e))?;
+        let inner =
+            HfTokenizer::from_file(path).map_err(|e| anyhow::anyhow!("tokenizer: {}", e))?;
         Ok(Self { inner })
     }
 

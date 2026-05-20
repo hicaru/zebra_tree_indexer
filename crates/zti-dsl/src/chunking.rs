@@ -7,7 +7,7 @@ use zti_common::line_byte_range;
 use zti_ts_core::types::Kind;
 
 use crate::model::ProjectIndex;
-use crate::render::{build_children_by_parent, render_symbol_rich, LEGEND_LINE};
+use crate::render::{LEGEND_LINE, build_children_by_parent, render_symbol_rich};
 
 const RICH_MAX_TARGETS: usize = 24;
 const MANIFEST_CAP: usize = 2048;
@@ -208,7 +208,13 @@ mod tests {
         ] {
             assert!(is_chunkable_kind(k));
         }
-        for k in [Kind::Module, Kind::Field, Kind::Variant, Kind::Const, Kind::Static] {
+        for k in [
+            Kind::Module,
+            Kind::Field,
+            Kind::Variant,
+            Kind::Const,
+            Kind::Static,
+        ] {
             assert!(!is_chunkable_kind(k));
         }
     }

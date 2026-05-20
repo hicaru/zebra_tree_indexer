@@ -70,6 +70,9 @@ mod tests {
     fn parse_kinds_all_known_multi() {
         let input: Vec<String> = vec!["fn".into(), "struct".into(), "event".into(), "error".into()];
         let kinds = parse_kinds(&input);
-        assert_eq!(kinds, vec![Kind::Function, Kind::Struct, Kind::Event, Kind::Error]);
+        assert_eq!(
+            kinds,
+            vec![Kind::Function, Kind::Struct, Kind::Event, Kind::Error]
+        );
     }
 }

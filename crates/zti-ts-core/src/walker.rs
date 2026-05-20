@@ -104,7 +104,12 @@ impl<'a> WalkState<'a> {
     }
 
     fn add_edge(&mut self, from: u32, to: Target, kind: EdgeKind, line: u32) {
-        self.edges.push(Edge { from, to, kind, line });
+        self.edges.push(Edge {
+            from,
+            to,
+            kind,
+            line,
+        });
     }
 
     fn is_inside_fn(&self) -> bool {
@@ -116,10 +121,12 @@ impl<'a> WalkState<'a> {
     }
 
     fn is_inside_method_container(&self) -> bool {
-        self.scope_kinds.iter().any(|k| matches!(
-            k,
-            Kind::Struct | Kind::Enum | Kind::Class | Kind::Impl | Kind::Interface
-        ))
+        self.scope_kinds.iter().any(|k| {
+            matches!(
+                k,
+                Kind::Struct | Kind::Enum | Kind::Class | Kind::Impl | Kind::Interface
+            )
+        })
     }
 }
 
@@ -547,7 +554,9 @@ pub trait LanguageFrontend {
     fn parse(&self, source: &str, file_idx: u16, id_start: u32) -> ParseResult {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&self.language())?;
-        let tree = parser.parse(source, None).ok_or_else(|| anyhow::anyhow!("parse failed"))?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| anyhow::anyhow!("parse failed"))?;
 
         let (symbols, edges) = parse_file(&tree, source, file_idx, self.config(), id_start);
         let imports = self.extract_imports(tree.root_node(), source);

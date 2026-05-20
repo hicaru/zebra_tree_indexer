@@ -55,14 +55,12 @@ fn main() -> Result<()> {
     // to `~/.zebra_tree_indexer/zti-daemon.log` by the parent, so file
     // logging is preserved without duplicating the writer here.
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                EnvFilter::new(
-                    "info,zti_daemon=debug,zti_embed=debug,\
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new(
+                "info,zti_daemon=debug,zti_embed=debug,\
                      zti_pipeline=debug,zti_dsl=debug,zti_store=debug",
-                )
-            }),
-        )
+            )
+        }))
         .with_writer(std::io::stderr)
         .init();
 

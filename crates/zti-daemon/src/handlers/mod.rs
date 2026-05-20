@@ -34,6 +34,10 @@ where
     let project = state
         .load_or_open(project_root)
         .await
-        .map_err(|e| ErrorBody { message: e.to_string() })?;
-    body(project).await.map_err(|e| ErrorBody { message: e.to_string() })
+        .map_err(|e| ErrorBody {
+            message: e.to_string(),
+        })?;
+    body(project).await.map_err(|e| ErrorBody {
+        message: e.to_string(),
+    })
 }

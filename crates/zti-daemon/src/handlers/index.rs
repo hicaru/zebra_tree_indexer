@@ -11,11 +11,7 @@ use crate::state::DaemonState;
 
 /// Streaming index. Writes any number of `Response::IndexProgress` frames
 /// followed by exactly one terminal `Response::Index(Ok|Err)`.
-pub async fn handle_streaming<W>(
-    writer: &mut W,
-    req: &IndexReq,
-    state: &DaemonState,
-) -> Result<()>
+pub async fn handle_streaming<W>(writer: &mut W, req: &IndexReq, state: &DaemonState) -> Result<()>
 where
     W: AsyncWrite + Unpin,
 {

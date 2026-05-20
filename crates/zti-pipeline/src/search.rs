@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
-use zti_ann::{AnnCache, AnnHandle, SearchMethod, SearchParams};
+use zti_ann::{AnnCache, AnnHandle, AnnIndexBuilder, SearchMethod, SearchParams};
 use zti_embed::EmbedEngine;
 use zti_rerank::TurboReranker;
 use zti_store::chunks_table::ChunkHit;
@@ -32,10 +32,14 @@ pub async fn search(
     opts: &SearchOpts<'_>,
 ) -> Result<Vec<Hit>> {
     let projects = db.projects_table().await?;
-    let project = projects.get(pid).await?
+    let project = projects
+        .get(pid)
+        .await?
         .ok_or_else(|| anyhow!("project not indexed"))?;
 
-    let previous: Option<SearchParams> = project.search_params.as_deref()
+    let previous: Option<SearchParams> = project
+        .search_params
+        .as_deref()
         .and_then(|s| serde_json::from_str(s).ok());
 
     let params: SearchParams = match previous {
@@ -58,19 +62,17 @@ pub async fn search(
                 .knn(&query_emb, raw_k, &params, opts.languages, opts.path_glob)
                 .await?
         }
-        SearchMethod::HnswRs => {
+        SearchMethod::Usearch => {
             let graph: AnnHandle = ann_cache
                 .get_or_build(*pid, || rebuild(&chunks_table, engine.dim(), &params))
                 .await
                 .map_err(|e: anyhow::Error| e)?;
 
             let mut topn: Vec<([u8; 16], f32)> = Vec::with_capacity(raw_k);
-            graph.search(&query_emb, raw_k, opts.limit * 2, &mut topn);
+            graph.search(&query_emb, raw_k, &mut topn);
 
-            let score_by_id: std::collections::HashMap<[u8; 16], f32> = topn
-                .iter()
-                .map(|(id, score)| (*id, *score))
-                .collect();
+            let score_by_id: std::collections::HashMap<[u8; 16], f32> =
+                topn.iter().map(|(id, score)| (*id, *score)).collect();
 
             let ids: Vec<[u8; 16]> = topn.iter().map(|(id, _)| *id).collect();
             let mut fetched = chunks_table
@@ -107,11 +109,7 @@ pub async fn search(
 }
 
 #[inline]
-fn diversify_by_parent_in_place(
-    ranked: &mut Vec<(usize, f32)>,
-    candidates: &[ChunkHit],
-    k: usize,
-) {
+fn diversify_by_parent_in_place(ranked: &mut Vec<(usize, f32)>, candidates: &[ChunkHit], k: usize) {
     let mut parents_seen: HashMap<u32, u32> = HashMap::with_capacity(ranked.len());
     for entry in ranked.iter_mut() {
         let parent = candidates.get(entry.0).and_then(|c| c.parent_sym_id);
@@ -159,17 +157,108 @@ async fn rebuild(
     chunks: &zti_store::chunks_table::ChunksTable,
     dim: usize,
     params: &SearchParams,
-) -> Result<zti_ann::hnsw::HnswGraph> {
+) -> Result<zti_ann::AnnIndex> {
     let n = params.indexed_chunks as usize;
-    let mut flat: Vec<f32> = Vec::with_capacity(n * dim);
-    let mut chunk_ids: Vec<[u8; 16]> = Vec::with_capacity(n);
+    let mut builder = AnnIndexBuilder::new(dim, params)?;
+    builder.reserve(n.max(1_024))?;
 
     chunks
         .iter_vectors(|id, v| {
-            flat.extend_from_slice(v);
-            chunk_ids.push(*id);
+            builder.add(*id, v);
         })
         .await?;
 
-    Ok(zti_ann::hnsw::HnswGraph::build(dim, &flat, chunk_ids, params))
+    builder.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::alloc_counting;
+    use arrow::array::Float32Array;
+
+    #[test]
+    fn float32array_from_vec_is_zero_copy() {
+        let v: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let ptr_before = v.as_ptr();
+        let arr = Float32Array::from(v);
+        let ptr_after = arr.values().as_ptr();
+        assert_eq!(
+            ptr_before, ptr_after,
+            "Float32Array::from(Vec<f32>) must reuse the Vec buffer without copying"
+        );
+    }
+
+    #[test]
+    fn float32array_from_vec_zero_copy_verified_by_allocation_counter() {
+        let v = vec![1.0f32; 1024];
+        let (_, prev_bytes) = alloc_counting::snapshot();
+        let arr = Float32Array::from(v);
+        std::hint::black_box(&arr);
+        let (_, curr_bytes) = alloc_counting::snapshot();
+        let delta = curr_bytes - prev_bytes;
+        eprintln!("Float32Array::from: 1024 × f32, delta_bytes={delta}");
+        assert!(
+            delta < 1024,
+            "Float32Array::from should not re-allocate the vec buffer, got {delta} bytes",
+        );
+    }
+
+    #[test]
+    fn rebuild_builder_pattern_saves_flat_vec_allocations() {
+        let dim = 128;
+        let n = 100;
+        let vectors: Vec<Vec<f32>> = (0..n).map(|_| vec![1.0f32; dim]).collect();
+
+        let (_, prev_bytes) = alloc_counting::snapshot();
+        let mut flat: Vec<f32> = Vec::new();
+        let mut chunk_ids: Vec<[u8; 16]> = Vec::new();
+        for (i, v) in vectors.iter().enumerate() {
+            flat.extend_from_slice(v);
+            let mut id = [0u8; 16];
+            id[0..8].copy_from_slice(&(i as u64).to_le_bytes());
+            chunk_ids.push(id);
+        }
+        let (_, mid_bytes) = alloc_counting::snapshot();
+        std::hint::black_box((&flat, &chunk_ids));
+        let old_delta = mid_bytes - prev_bytes;
+
+        let (_, prev2_bytes) = alloc_counting::snapshot();
+        let mut chunk_ids2: Vec<[u8; 16]> = Vec::new();
+        for (i, _v) in vectors.iter().enumerate() {
+            let mut id = [0u8; 16];
+            id[0..8].copy_from_slice(&(i as u64).to_le_bytes());
+            chunk_ids2.push(id);
+        }
+        let (_, curr2_bytes) = alloc_counting::snapshot();
+        std::hint::black_box(&chunk_ids2);
+        let new_delta = curr2_bytes - prev2_bytes;
+
+        let savings = old_delta as i64 - new_delta as i64;
+        let reduction_pct = if old_delta > 0 {
+            (1.0 - new_delta as f64 / old_delta as f64) * 100.0
+        } else {
+            0.0
+        };
+        eprintln!(
+            "rebuild compare: {n} vectors x {dim} dim, old_flat+chunk_ids={old_delta} B, builder_chunk_ids_only={new_delta} B, saved={savings} B ({reduction_pct:.0}%)"
+        );
+        assert!(
+            savings >= (n * dim * 4) as i64,
+            "builder should save at least n * dim * 4 bytes by avoiding flat Vec, got {savings}",
+        );
+    }
+
+    #[test]
+    fn flat_split_slices_are_views_not_copies() {
+        let dim = 16;
+        let n = 5;
+        let flat: Vec<f32> = (0..n * dim).map(|i| i as f32).collect();
+        let ptr_base = flat.as_ptr();
+
+        for i in 0..n {
+            let v = &flat[i * dim..(i + 1) * dim];
+            let offset = (v.as_ptr() as usize) - (ptr_base as usize);
+            assert_eq!(offset, i * dim * 4);
+        }
+    }
 }

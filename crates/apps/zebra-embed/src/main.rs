@@ -13,7 +13,11 @@ use zti_protocol::request::*;
 use zti_protocol::response::*;
 
 #[derive(Parser)]
-#[command(name = "zebra-embed", version, about = "Index / search / chat via daemon")]
+#[command(
+    name = "zebra-embed",
+    version,
+    about = "Index / search / chat via daemon"
+)]
 struct Cli {
     /// HF id or local path. When omitted, the daemon uses its own default.
     #[arg(short, long, global = true)]
@@ -160,7 +164,14 @@ async fn main() -> Result<()> {
                 other => eprintln!("Unexpected response: {:?}", other),
             }
         }
-        Commands::Search { root, query, limit, lang, glob, exhaustive } => {
+        Commands::Search {
+            root,
+            query,
+            limit,
+            lang,
+            glob,
+            exhaustive,
+        } => {
             let mut client = open_client(model).await?;
             let project_root = canon(&root)?;
             let resp = client
@@ -241,7 +252,9 @@ async fn main() -> Result<()> {
         Commands::Doctor { root } => {
             let mut client = open_client(model).await?;
             let project_root = canon_opt(root)?;
-            let resp = client.request(Request::Doctor(DoctorReq { project_root })).await?;
+            let resp = client
+                .request(Request::Doctor(DoctorReq { project_root }))
+                .await?;
             match resp {
                 Response::Doctor(Ok(report)) => {
                     println!("Device: {}", report.device);

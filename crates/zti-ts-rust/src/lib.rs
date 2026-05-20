@@ -24,18 +24,21 @@ impl LanguageFrontend for RustFrontend {
 
 fn collect_rust_imports(node: Node, source: &str, imports: &mut HashMap<String, String>) {
     if node.kind() == "use_declaration"
-        && let Some(arg) = node.child_by_field_name("argument") {
-            let path = arg.utf8_text(source.as_bytes()).unwrap_or("");
-            let last = path.rsplit("::").next().unwrap_or(path);
-            let local = last
-                .trim_start_matches('{')
-                .trim_start_matches('}')
-                .trim()
-                .trim_start_matches("self::");
-            if !local.is_empty() {
-                imports.entry(local.to_string()).or_insert_with(|| path.to_string());
-            }
+        && let Some(arg) = node.child_by_field_name("argument")
+    {
+        let path = arg.utf8_text(source.as_bytes()).unwrap_or("");
+        let last = path.rsplit("::").next().unwrap_or(path);
+        let local = last
+            .trim_start_matches('{')
+            .trim_start_matches('}')
+            .trim()
+            .trim_start_matches("self::");
+        if !local.is_empty() {
+            imports
+                .entry(local.to_string())
+                .or_insert_with(|| path.to_string());
         }
+    }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_rust_imports(child, source, imports);
@@ -71,7 +74,11 @@ mod tests {
 
         let foo = symbols.iter().find(|s| s.name == "foo").unwrap();
         assert_eq!(foo.kind, Kind::Method, "foo should be a method, not a fn");
-        assert_eq!(foo.parent, Some(impl_sym.id), "foo's parent should be impl S");
+        assert_eq!(
+            foo.parent,
+            Some(impl_sym.id),
+            "foo's parent should be impl S"
+        );
 
         let bar = symbols.iter().find(|s| s.name == "bar").unwrap();
         assert_eq!(bar.kind, Kind::Method);
@@ -127,11 +134,22 @@ mod tests {
             }
         "};
         let (symbols, _, _) = parse_rust(source);
-        let hi = symbols.iter().filter(|s| s.name == "hi" && s.kind == Kind::Method).count();
+        let hi = symbols
+            .iter()
+            .filter(|s| s.name == "hi" && s.kind == Kind::Method)
+            .count();
         assert!(hi >= 1, "trait impl method `hi` should be captured");
-        let impl_sym = symbols.iter().find(|s| s.name == "impl Greet for T").unwrap();
-        let attached = symbols.iter().any(|s| s.name == "hi" && s.parent == Some(impl_sym.id));
-        assert!(attached, "trait impl method should have parent = impl symbol");
+        let impl_sym = symbols
+            .iter()
+            .find(|s| s.name == "impl Greet for T")
+            .unwrap();
+        let attached = symbols
+            .iter()
+            .any(|s| s.name == "hi" && s.parent == Some(impl_sym.id));
+        assert!(
+            attached,
+            "trait impl method should have parent = impl symbol"
+        );
     }
 
     #[test]
@@ -143,7 +161,9 @@ mod tests {
         let (symbols, _, _) = parse_rust(source);
         let foo = symbols.iter().find(|s| s.name == "foo").unwrap();
         assert!(
-            foo.doc.as_ref().is_some_and(|d| d.contains("This is a doc comment")),
+            foo.doc
+                .as_ref()
+                .is_some_and(|d| d.contains("This is a doc comment")),
             "expected doc comment, got: {:?}",
             foo.doc
         );
@@ -156,7 +176,10 @@ mod tests {
             impl Foo { fn x() {} }
         "};
         let (symbols, _, _) = parse_rust(source);
-        let foo = symbols.iter().find(|s| s.name == "Foo" && s.kind == Kind::Struct).unwrap();
+        let foo = symbols
+            .iter()
+            .find(|s| s.name == "Foo" && s.kind == Kind::Struct)
+            .unwrap();
         assert_eq!(foo.parent, None);
         let impl_sym = symbols.iter().find(|s| s.name == "impl Foo").unwrap();
         assert_eq!(impl_sym.name, "impl Foo");
@@ -164,7 +187,11 @@ mod tests {
         let x = symbols.iter().find(|s| s.name == "x").unwrap();
         assert_eq!(x.kind, Kind::Method);
         assert_eq!(x.parent, Some(impl_sym.id));
-        assert!(x.qualified.contains("Foo::x"), "qualified should be Foo::x, got: {}", x.qualified);
+        assert!(
+            x.qualified.contains("Foo::x"),
+            "qualified should be Foo::x, got: {}",
+            x.qualified
+        );
     }
 
     #[test]
@@ -176,7 +203,11 @@ mod tests {
         let (symbols, _, _) = parse_rust(source);
         let foo = symbols.iter().find(|s| s.name == "foo").unwrap();
         assert!(
-            foo.doc.is_none() || !foo.doc.as_ref().is_some_and(|d| d.contains("regular comment")),
+            foo.doc.is_none()
+                || !foo
+                    .doc
+                    .as_ref()
+                    .is_some_and(|d| d.contains("regular comment")),
             "line comment should not be doc, got: {:?}",
             foo.doc
         );
@@ -192,10 +223,16 @@ mod tests {
             }
         "};
         let (symbols, _, _) = parse_rust(source);
-        let impl_sym = symbols.iter().find(|s| s.name == "impl Bar for Foo").unwrap();
+        let impl_sym = symbols
+            .iter()
+            .find(|s| s.name == "impl Bar for Foo")
+            .unwrap();
         assert_eq!(impl_sym.kind, Kind::Impl);
         assert_eq!(impl_sym.parent, None);
-        let baz = symbols.iter().find(|s| s.name == "baz" && s.parent == Some(impl_sym.id)).unwrap();
+        let baz = symbols
+            .iter()
+            .find(|s| s.name == "baz" && s.parent == Some(impl_sym.id))
+            .unwrap();
         assert_eq!(baz.kind, Kind::Method);
     }
 
@@ -208,7 +245,12 @@ mod tests {
         "};
         let (symbols, _, _) = parse_rust(source);
         let helper = symbols.iter().find(|s| s.name == "helper").unwrap();
-        assert_eq!(helper.kind, Kind::Function, "fn inside mod should stay Function, got {:?}", helper.kind);
+        assert_eq!(
+            helper.kind,
+            Kind::Function,
+            "fn inside mod should stay Function, got {:?}",
+            helper.kind
+        );
     }
 
     #[test]
@@ -224,8 +266,20 @@ mod tests {
         "};
         let (symbols, _, _) = parse_rust(source);
         let sym = symbols.iter().find(|s| s.name == "bytes_encrypt").unwrap();
-        assert!(sym.signature.contains("rng:"), "multiline sig should contain args, got: {}", sym.signature);
-        assert!(sym.signature.contains("Result<"), "multiline sig should contain return type, got: {}", sym.signature);
-        assert!(!sym.signature.contains('{'), "sig should not contain opening brace, got: {}", sym.signature);
+        assert!(
+            sym.signature.contains("rng:"),
+            "multiline sig should contain args, got: {}",
+            sym.signature
+        );
+        assert!(
+            sym.signature.contains("Result<"),
+            "multiline sig should contain return type, got: {}",
+            sym.signature
+        );
+        assert!(
+            !sym.signature.contains('{'),
+            "sig should not contain opening brace, got: {}",
+            sym.signature
+        );
     }
 }

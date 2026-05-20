@@ -59,10 +59,7 @@ impl TurboReranker {
             .enumerate()
             .filter_map(|(i, (code_bytes, initial_score))| {
                 let code = TurboCode::from_compact_bytes(code_bytes).ok()?;
-                let ip = self
-                    .quantizer
-                    .inner_product_estimate(&code, query)
-                    .ok()?;
+                let ip = self.quantizer.inner_product_estimate(&code, query).ok()?;
                 let combined = initial_score + ip;
                 Some((i, combined))
             })

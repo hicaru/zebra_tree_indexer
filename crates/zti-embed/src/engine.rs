@@ -108,7 +108,12 @@ impl EmbedEngine {
     }
 
     fn prepare(&self, texts: &[&str]) -> Result<Option<Prepared>> {
-        prepare(&self.tokenizer, &self.profile, self.needs_token_type_ids, texts)
+        prepare(
+            &self.tokenizer,
+            &self.profile,
+            self.needs_token_type_ids,
+            texts,
+        )
     }
 
     pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {

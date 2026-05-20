@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
-use zti_ts_core::types::{EdgeKind, Kind, Target};
 use zti_tree_sitter::Language;
+use zti_ts_core::types::{EdgeKind, Kind, Target};
 
 use crate::model::ProjectIndex;
 
@@ -116,12 +116,24 @@ fn format_signature_ts(sig: &str) -> &str {
     }
     let mut s = trimmed;
     for prefix in [
-        "export default ", "export ", "declare ",
-        "public ", "private ", "protected ",
-        "async function ", "function ",
-        "async ", "static ", "abstract ",
-        "class ", "interface ", "enum ", "type ",
-        "const ", "let ", "var ",
+        "export default ",
+        "export ",
+        "declare ",
+        "public ",
+        "private ",
+        "protected ",
+        "async function ",
+        "function ",
+        "async ",
+        "static ",
+        "abstract ",
+        "class ",
+        "interface ",
+        "enum ",
+        "type ",
+        "const ",
+        "let ",
+        "var ",
     ] {
         if let Some(rest) = s.strip_prefix(prefix) {
             s = rest;
@@ -138,10 +150,22 @@ fn format_signature_dart(sig: &str) -> &str {
     }
     let mut s = trimmed;
     for prefix in [
-        "abstract ", "external ", "factory ",
-        "static ", "late ", "final ", "const ",
-        "class ", "mixin ", "enum ", "extension ",
-        "void ", "String ", "int ", "double ", "bool ",
+        "abstract ",
+        "external ",
+        "factory ",
+        "static ",
+        "late ",
+        "final ",
+        "const ",
+        "class ",
+        "mixin ",
+        "enum ",
+        "extension ",
+        "void ",
+        "String ",
+        "int ",
+        "double ",
+        "bool ",
     ] {
         if let Some(rest) = s.strip_prefix(prefix) {
             s = rest;
@@ -158,11 +182,26 @@ fn format_signature_solidity(sig: &str) -> &str {
     }
     let mut s = trimmed;
     for prefix in [
-        "public ", "private ", "internal ", "external ",
-        "pure ", "view ", "payable ", "virtual ", "override ",
-        "function ", "event ", "error ", "struct ",
-        "contract ", "interface ", "library ",
-        "uint256 ", "address ", "bool ", "string ",
+        "public ",
+        "private ",
+        "internal ",
+        "external ",
+        "pure ",
+        "view ",
+        "payable ",
+        "virtual ",
+        "override ",
+        "function ",
+        "event ",
+        "error ",
+        "struct ",
+        "contract ",
+        "interface ",
+        "library ",
+        "uint256 ",
+        "address ",
+        "bool ",
+        "string ",
     ] {
         if let Some(rest) = s.strip_prefix(prefix) {
             s = rest;
@@ -200,9 +239,21 @@ fn format_signature_rust(sig: &str) -> &str {
     loop {
         let before = s.as_ptr();
         for prefix in [
-            "unsafe fn ", "async fn ", "const fn ", "fn ",
-            "unsafe ", "async ", "const ", "static ", "let ",
-            "struct ", "enum ", "trait ", "mod ", "impl ", "type ",
+            "unsafe fn ",
+            "async fn ",
+            "const fn ",
+            "fn ",
+            "unsafe ",
+            "async ",
+            "const ",
+            "static ",
+            "let ",
+            "struct ",
+            "enum ",
+            "trait ",
+            "mod ",
+            "impl ",
+            "type ",
         ] {
             if let Some(rest) = s.strip_prefix(prefix) {
                 s = rest;
@@ -322,7 +373,8 @@ pub fn render_symbol_rich(
         }
     }
 
-    let tree = super::tree::AsciiTreeRenderer::new(index).render_callees_with_ids(id, 2, true, false);
+    let tree =
+        super::tree::AsciiTreeRenderer::new(index).render_callees_with_ids(id, 2, true, false);
     let tree = tree.trim();
     if !tree.is_empty() {
         let mut first = true;
@@ -422,13 +474,8 @@ impl<'a> DslRenderer<'a> {
         Self { index, max_tokens }
     }
 
-    pub fn render(
-        &self,
-        file_filter: Option<&[u16]>,
-        kind_filter: Option<&[Kind]>,
-    ) -> String {
-        let kind_set: Option<HashSet<Kind>> =
-            kind_filter.map(|k| k.iter().copied().collect());
+    pub fn render(&self, file_filter: Option<&[u16]>, kind_filter: Option<&[Kind]>) -> String {
+        let kind_set: Option<HashSet<Kind>> = kind_filter.map(|k| k.iter().copied().collect());
 
         if kind_set.is_some() {
             tracing::debug!("kind_filter active: {:?} kinds", kind_filter);
@@ -453,8 +500,7 @@ impl<'a> DslRenderer<'a> {
 
         let children = build_children_by_parent(self.index);
 
-        let filter_set: Option<HashSet<u16>> =
-            file_filter.map(|f| f.iter().copied().collect());
+        let filter_set: Option<HashSet<u16>> = file_filter.map(|f| f.iter().copied().collect());
 
         let mut top_by_file: Vec<Vec<u32>> = vec![Vec::new(); self.index.files.len()];
         for sym in &self.index.symbols {
@@ -486,8 +532,10 @@ impl<'a> DslRenderer<'a> {
                 .1
                 .push(file_idx);
         }
-        let mut lang_files: Vec<(&'static str, Language, Vec<usize>)> =
-            by_label.into_iter().map(|(label, (lang, files))| (label, lang, files)).collect();
+        let mut lang_files: Vec<(&'static str, Language, Vec<usize>)> = by_label
+            .into_iter()
+            .map(|(label, (lang, files))| (label, lang, files))
+            .collect();
         lang_files.sort_by_key(|(label, _, _)| *label);
 
         for (label, lang, file_indices) in &lang_files {
@@ -553,8 +601,8 @@ pub fn render_files_only(index: &ProjectIndex, file_indices: &[u16]) -> String {
 mod tests {
     use std::collections::HashMap;
 
-    use zti_ts_core::types::Kind;
     use zti_tree_sitter::Language;
+    use zti_ts_core::types::Kind;
 
     use crate::model::{FileEntry, ProjectIndex};
 
@@ -600,7 +648,18 @@ mod tests {
 
     #[test]
     fn ast_header_lists_every_rust_short_code() {
-        for entry in ["f=fn", "m=method", "s=struct", "c=class/impl", "t=trait", "e=enum", "v=var", "d=mod", "k=const", "y=typealias"] {
+        for entry in [
+            "f=fn",
+            "m=method",
+            "s=struct",
+            "c=class/impl",
+            "t=trait",
+            "e=enum",
+            "v=var",
+            "d=mod",
+            "k=const",
+            "y=typealias",
+        ] {
             assert!(
                 RUST_LEGEND.contains(entry),
                 "RUST_LEGEND missing entry `{}`",
@@ -634,9 +693,17 @@ mod tests {
             vec![mk_file("/p/a.rs")],
         );
         let out = DslRenderer::new(&idx, 8000).render(None, None);
-        assert!(out.contains("## Rust"), "should contain ## Rust section, got:\n{}", out);
+        assert!(
+            out.contains("## Rust"),
+            "should contain ## Rust section, got:\n{}",
+            out
+        );
         assert!(out.contains("s#0"), "should contain s#0, got:\n{}", out);
-        assert!(out.contains("@ a.rs"), "should contain @ a.rs, got:\n{}", out);
+        assert!(
+            out.contains("@ a.rs"),
+            "should contain @ a.rs, got:\n{}",
+            out
+        );
     }
 
     #[test]
@@ -656,9 +723,21 @@ mod tests {
         let s_line = lines.iter().find(|l| l.contains("s#0")).unwrap();
         let v1_line = lines.iter().find(|l| l.contains("v#1")).unwrap();
         let v2_line = lines.iter().find(|l| l.contains("v#2")).unwrap();
-        assert!(s_line.starts_with("s#0"), "struct should be at indent 0: {}", s_line);
-        assert!(v1_line.starts_with("  v#1"), "field should be at indent 1: {}", v1_line);
-        assert!(v2_line.starts_with("  v#2"), "field should be at indent 1: {}", v2_line);
+        assert!(
+            s_line.starts_with("s#0"),
+            "struct should be at indent 0: {}",
+            s_line
+        );
+        assert!(
+            v1_line.starts_with("  v#1"),
+            "field should be at indent 1: {}",
+            v1_line
+        );
+        assert!(
+            v2_line.starts_with("  v#2"),
+            "field should be at indent 1: {}",
+            v2_line
+        );
     }
 
     #[test]
@@ -678,8 +757,16 @@ mod tests {
         let lines: Vec<&str> = section.lines().collect();
         let c_line = lines.iter().find(|l| l.contains("c#1")).unwrap();
         let m_line = lines.iter().find(|l| l.contains("m#2")).unwrap();
-        assert!(c_line.contains("impl State"), "should contain impl State: {}", c_line);
-        assert!(m_line.starts_with("  m#2"), "method should be indented under impl: {}", m_line);
+        assert!(
+            c_line.contains("impl State"),
+            "should contain impl State: {}",
+            c_line
+        );
+        assert!(
+            m_line.starts_with("  m#2"),
+            "method should be indented under impl: {}",
+            m_line
+        );
     }
 
     #[test]
@@ -699,27 +786,72 @@ mod tests {
         let all: Vec<u16> = (0..3).collect();
         let out = render_files_only(&idx, &all);
 
-        assert!(out.starts_with("FILES"), "should start with FILES header, got:\n{}", out);
-        assert!(out.contains("# 0 @ "), "should contain file ID 0, got:\n{}", out);
-        assert!(out.contains("# 1 @ "), "should contain file ID 1, got:\n{}", out);
-        assert!(out.contains("# 2 @ "), "should contain file ID 2, got:\n{}", out);
-        assert!(out.contains("src/"), "should contain src dir, got:\n{}", out);
-        assert!(!out.contains("f#"), "should NOT contain symbol DSL, got:\n{}", out);
-        assert!(!out.contains("s#"), "should NOT contain symbol DSL, got:\n{}", out);
-        assert!(!out.contains("foo"), "should NOT contain symbol names, got:\n{}", out);
-        assert!(out.contains("@ "), "should contain @ path prefix, got:\n{}", out);
+        assert!(
+            out.starts_with("FILES"),
+            "should start with FILES header, got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("# 0 @ "),
+            "should contain file ID 0, got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("# 1 @ "),
+            "should contain file ID 1, got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("# 2 @ "),
+            "should contain file ID 2, got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("src/"),
+            "should contain src dir, got:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("f#"),
+            "should NOT contain symbol DSL, got:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("s#"),
+            "should NOT contain symbol DSL, got:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("foo"),
+            "should NOT contain symbol names, got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("@ "),
+            "should contain @ path prefix, got:\n{}",
+            out
+        );
     }
 
     #[test]
     fn format_signature_rust_strips_visibility_and_keywords() {
-        assert_eq!(format_signature_rust("pub fn foo() -> Result<()>"), "foo() -> Result<()>");
+        assert_eq!(
+            format_signature_rust("pub fn foo() -> Result<()>"),
+            "foo() -> Result<()>"
+        );
         assert_eq!(format_signature_rust("fn bar(x: i32)"), "bar(x: i32)");
         assert_eq!(format_signature_rust("struct Point {"), "Point");
         assert_eq!(format_signature_rust("enum Color {"), "Color");
         assert_eq!(format_signature_rust("mod utils;"), "utils");
         assert_eq!(format_signature_rust("pub(crate) fn hidden()"), "hidden()");
-        assert_eq!(format_signature_rust("const MAX: usize = 10;"), "MAX: usize = 10");
-        assert_eq!(format_signature_rust("pub unsafe async fn combo()"), "combo()");
+        assert_eq!(
+            format_signature_rust("const MAX: usize = 10;"),
+            "MAX: usize = 10"
+        );
+        assert_eq!(
+            format_signature_rust("pub unsafe async fn combo()"),
+            "combo()"
+        );
     }
 
     fn mk_file_lang(path: &str, lang: Language) -> FileEntry {
@@ -745,7 +877,11 @@ mod tests {
         );
         let out = DslRenderer::new(&idx, 8000).render(None, None);
         let count = out.matches("## TypeScript").count();
-        assert_eq!(count, 1, "Ts and Tsx should merge into one ## TypeScript section, got {} occurrences:\n{}", count, out);
+        assert_eq!(
+            count, 1,
+            "Ts and Tsx should merge into one ## TypeScript section, got {} occurrences:\n{}",
+            count, out
+        );
         assert!(out.contains("s#0"), "should have Rust struct");
         assert!(out.contains("C#1"), "should have TS class");
         assert!(out.contains("C#2"), "should have TSX class");
@@ -754,14 +890,17 @@ mod tests {
     #[test]
     fn render_skips_empty_language_sections() {
         let rust_sym = mk_sym(0, "Foo", Kind::Struct, 0);
-        let idx = mk_index(
-            vec![rust_sym],
-            vec![mk_file("/p/a.rs")],
-        );
+        let idx = mk_index(vec![rust_sym], vec![mk_file("/p/a.rs")]);
         let out = DslRenderer::new(&idx, 8000).render(None, None);
         assert!(out.contains("## Rust"), "should have Rust section");
-        assert!(!out.contains("## TypeScript"), "should not have empty TypeScript section");
-        assert!(!out.contains("## Dart"), "should not have empty Dart section");
+        assert!(
+            !out.contains("## TypeScript"),
+            "should not have empty TypeScript section"
+        );
+        assert!(
+            !out.contains("## Dart"),
+            "should not have empty Dart section"
+        );
     }
 
     #[test]
@@ -778,7 +917,10 @@ mod tests {
         let filter: Vec<u16> = vec![0];
         let out = DslRenderer::new(&idx, 8000).render(Some(&filter), None);
         assert!(out.contains("## Rust"), "should have Rust section");
-        assert!(!out.contains("## TypeScript"), "should not have TypeScript section when filtered");
+        assert!(
+            !out.contains("## TypeScript"),
+            "should not have TypeScript section when filtered"
+        );
         assert!(out.contains("s#0"), "should have Rust struct");
         assert!(!out.contains("C#1"), "should not have TS class");
     }
