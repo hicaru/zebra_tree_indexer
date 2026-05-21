@@ -215,10 +215,10 @@ pub async fn index_project(
 
     // Token budget per batch matches the per-sample shape `batch_size` was
     // sized for (≈512 tokens × batch_size items). Item count is capped at
-    // 4× batch_size so very short chunks don't inflate the working set just
+    // BATCH_CEILING so very short chunks don't inflate the working set just
     // because the token budget allows it.
     let budget_tokens = batch_size.saturating_mul(zti_embed::batch::TYPICAL_SEQ_LEN);
-    let max_items = batch_size.saturating_mul(4);
+    let max_items = batch_size.saturating_mul(4).min(zti_embed::batch::BATCH_CEILING);
 
     // Reusable per-batch view into `encs` (no per-batch allocation: cleared
     // and refilled with references each iteration).

@@ -313,6 +313,13 @@ impl EmbedEngine {
         if real_batch == 0 {
             return Ok(Pooled::empty(self.profile.dim));
         }
+        if real_batch > BATCH_CEILING {
+            anyhow::bail!(
+                "batch size {} exceeds BATCH_CEILING ({})",
+                real_batch,
+                BATCH_CEILING,
+            );
+        }
 
         let max_len = self.profile.max_length;
         let real_seq = encs
