@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use zti_common::dsl::SymbolBodyEntry;
 
+use crate::chunking::find_doc_start_line;
 use crate::model::ProjectIndex;
 
 pub fn resolve_symbol_bodies(
@@ -48,11 +49,16 @@ pub fn resolve_symbol_bodies(
 
         match content {
             Ok(ref c) => {
-                let range = zti_common::line_byte_range(c, sym.line, sym.end_line);
+                let doc_start = if sym.doc.is_some() {
+                    find_doc_start_line(c, sym.line)
+                } else {
+                    sym.line
+                };
+                let range = zti_common::line_byte_range(c, doc_start, sym.end_line);
                 entries.push(SymbolBodyEntry::Ok {
                     symbol_id: id,
                     kind_short: sym.kind.short().to_owned(),
-                    start_line: sym.line,
+                    start_line: doc_start,
                     end_line: sym.end_line,
                     body: c[range].to_owned(),
                 });

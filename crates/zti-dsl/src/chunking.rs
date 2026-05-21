@@ -193,7 +193,7 @@ impl<'a> DslChunker<'a> {
 /// starts. Regular `//` comments do NOT match, so a file-top license block
 /// is naturally excluded. Picks up Rust `///` / `//!` / `/** */` / `*` /
 /// `#[…]` and TS/Dart decorators starting with `@`.
-fn find_doc_start_line(source: &str, sym_line: u32) -> u32 {
+pub(crate) fn find_doc_start_line(source: &str, sym_line: u32) -> u32 {
     if sym_line <= 1 {
         return sym_line;
     }

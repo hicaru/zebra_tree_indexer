@@ -15,6 +15,17 @@ fn is_lock_file(name: &str) -> bool {
     name.ends_with(".lock") || name.contains("-lock.")
 }
 
+/// Match the LICENSE family by stem (case-insensitive): `LICENSE`,
+/// `LICENSE.md`, `LICENSE.txt`, `LICENSE-MIT`, `LICENSE-APACHE-2.0`, …
+/// These are boilerplate; embedding them dilutes search results.
+fn is_license_file(name: &str) -> bool {
+    let stem = name
+        .split(|c: char| c == '.' || c == '-')
+        .next()
+        .unwrap_or(name);
+    stem.eq_ignore_ascii_case("LICENSE")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Code(Language),
@@ -68,10 +79,14 @@ pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
             continue;
         }
 
-        // Skip manifest + lock files by filename — manifests are already
-        // emitted as `@ <path>` PKG blocks, lockfiles are pure noise.
+        // Skip manifest + lock + license files by filename — manifests are
+        // already emitted as `@ <path>` PKG blocks, lockfiles are pure noise,
+        // licenses are boilerplate that dilutes search results.
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if MANIFEST_NAMES.contains(&file_name) || is_lock_file(file_name) {
+        if MANIFEST_NAMES.contains(&file_name)
+            || is_lock_file(file_name)
+            || is_license_file(file_name)
+        {
             continue;
         }
 
