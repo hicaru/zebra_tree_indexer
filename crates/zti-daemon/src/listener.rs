@@ -107,5 +107,8 @@ async fn handle_request(req: Request, state: &DaemonState) -> Response {
         Request::DslProjectMap(pm) => crate::handlers::dsl_project_map::handle(&pm, state).await,
         Request::DslDepTree(dt) => crate::handlers::dsl_dep_tree::handle(&dt, state).await,
         Request::DslSymbolBody(sb) => crate::handlers::dsl_symbol_body::handle(&sb, state).await,
+        Request::DslSymbolBodies(sb) => {
+            crate::handlers::dsl_symbol_bodies::handle(&sb, state).await
+        }
     }
 }

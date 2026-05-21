@@ -49,6 +49,12 @@ pub struct SymbolBodyParams {
     pub symbol_id: u32,
 }
 
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+pub struct SymbolBodiesParams {
+    pub project_root: String,
+    pub symbol_ids: Vec<u32>,
+}
+
 #[derive(Debug, Clone)]
 struct ZebraMcpServer {
     #[allow(dead_code)]
@@ -166,31 +172,49 @@ impl ZebraMcpServer {
         Parameters(params): Parameters<SymbolBodyParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let index = self.get_index(&params.project_root).await?;
+        let entries = zti_dsl::resolve_symbol_bodies(&index, &[params.symbol_id]);
 
-        let sym = index
-            .symbols
-            .get(params.symbol_id as usize)
-            .ok_or_else(|| {
-                internal_err(format!("Symbol {} not found", params.symbol_id))
-            })?;
-        let file = index
-            .files
-            .get(sym.file_idx as usize)
-            .ok_or_else(|| {
-                internal_err(format!("File for symbol {} not found", params.symbol_id))
-            })?;
-
-        let content = std::fs::read_to_string(&file.path)
-            .map_err(|e| internal_err(format!("Failed to read {}: {e}", file.path)))?;
-
-        let range = zti_common::line_byte_range(&content, sym.line, sym.end_line);
-        let body = &content[range];
-        let text = format!(
-            "// File: {} | Lines: {}-{}\n{}",
-            file.path, sym.line, sym.end_line, body
-        );
+        let text = match entries.first() {
+            Some(zti_common::dsl::SymbolBodyEntry::Ok {
+                kind_short,
+                symbol_id,
+                start_line,
+                end_line,
+                body,
+                ..
+            }) => format!(
+                "{}#{} : {}-{}\n{}",
+                kind_short, symbol_id, start_line, end_line, body
+            ),
+            Some(zti_common::dsl::SymbolBodyEntry::Err { message, .. }) => {
+                return Err(internal_err(message.clone()));
+            }
+            None => {
+                return Err(internal_err(format!(
+                    "Symbol {} not found",
+                    params.symbol_id
+                )));
+            }
+        };
 
         Ok(ok_text(text))
+    }
+
+    #[tool(description = "Read source code for multiple symbols by their #IDs")]
+    async fn symbol_bodies(
+        &self,
+        Parameters(params): Parameters<SymbolBodiesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let index = self.get_index(&params.project_root).await?;
+        let entries = zti_dsl::resolve_symbol_bodies(&index, &params.symbol_ids);
+
+        let mut out = String::with_capacity(entries.len() * 256);
+        for entry in &entries {
+            use std::fmt::Write;
+            let _ = writeln!(out, "{}\n---", entry);
+        }
+
+        Ok(ok_text(out))
     }
 }
 
@@ -200,7 +224,7 @@ impl rmcp::ServerHandler for ZebraMcpServer {
         let mut info = ServerInfo::default();
         info.instructions = Some(
             "Zebra Tree Indexer MCP server (DSL-only). Use file_tree, project_map, dep_tree, \
-              symbol_body for AST graph queries."
+              symbol_body, symbol_bodies for AST graph queries."
                 .into(),
         );
         info.capabilities = ServerCapabilities::builder().enable_tools().build();

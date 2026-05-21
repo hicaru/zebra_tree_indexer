@@ -70,6 +70,12 @@ pub struct SymbolBodyReq {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolBodiesReq {
+    pub project_root: String,
+    pub symbol_ids: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
     Handshake(HandshakeReq),
     Index(IndexReq),
@@ -84,4 +90,5 @@ pub enum Request {
     DslProjectMap(ProjectMapReq),
     DslDepTree(DepTreeReq),
     DslSymbolBody(SymbolBodyReq),
+    DslSymbolBodies(SymbolBodiesReq),
 }

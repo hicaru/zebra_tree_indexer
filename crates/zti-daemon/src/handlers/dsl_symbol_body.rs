@@ -1,3 +1,4 @@
+use zti_common::dsl::SymbolBodyEntry;
 use zti_protocol::request::SymbolBodyReq;
 use zti_protocol::response::{Response, SymbolBodyBody};
 
@@ -11,27 +12,23 @@ pub async fn handle(req: &SymbolBodyReq, state: &DaemonState) -> Response {
 
     let result = with_project(state, &req.project_root, |project| async move {
         let index = ensure_dsl_index(&project, &project_root).await?;
-
-        let sym = index
-            .symbols
-            .get(symbol_id as usize)
-            .ok_or_else(|| anyhow::anyhow!("Symbol {} not found", symbol_id))?;
-        let file = index
-            .files
-            .get(sym.file_idx as usize)
-            .ok_or_else(|| anyhow::anyhow!("File for symbol {} not found", symbol_id))?;
-
-        let content = std::fs::read_to_string(&file.path)
-            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", file.path, e))?;
-
-        let range = zti_common::line_byte_range(&content, sym.line, sym.end_line);
-        let body = &content[range];
-        let text = format!(
-            "// File: {} | Lines: {}-{}\n{}",
-            file.path, sym.line, sym.end_line, body
-        );
-
-        Ok(SymbolBodyBody { text })
+        let entries = zti_dsl::resolve_symbol_bodies(&index, &[symbol_id]);
+        match entries.into_iter().next() {
+            Some(SymbolBodyEntry::Ok {
+                kind_short,
+                symbol_id,
+                start_line,
+                end_line,
+                body,
+                ..
+            }) => {
+                let text =
+                    format!("{}#{} : {}-{}\n{}", kind_short, symbol_id, start_line, end_line, body);
+                Ok(SymbolBodyBody { text })
+            }
+            Some(SymbolBodyEntry::Err { message, .. }) => Err(anyhow::anyhow!(message)),
+            None => Err(anyhow::anyhow!("Symbol {} not found", symbol_id)),
+        }
     })
     .await;
 

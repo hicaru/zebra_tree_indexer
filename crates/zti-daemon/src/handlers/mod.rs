@@ -10,6 +10,7 @@ pub mod doctor;
 pub mod dsl_dep_tree;
 pub mod dsl_file_tree;
 pub mod dsl_project_map;
+pub mod dsl_symbol_bodies;
 pub mod dsl_symbol_body;
 pub mod env;
 pub mod handshake;

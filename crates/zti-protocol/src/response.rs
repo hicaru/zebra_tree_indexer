@@ -121,6 +121,11 @@ pub struct SymbolBodyBody {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolBodiesBody {
+    pub entries: Vec<zti_common::dsl::SymbolBodyEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Response {
     Handshake(HandshakeResp),
     Index(Result<IndexStats, ErrorBody>),
@@ -136,4 +141,5 @@ pub enum Response {
     DslProjectMap(Result<ProjectMapBody, ErrorBody>),
     DslDepTree(Result<DepTreeBody, ErrorBody>),
     DslSymbolBody(Result<SymbolBodyBody, ErrorBody>),
+    DslSymbolBodies(Result<SymbolBodiesBody, ErrorBody>),
 }

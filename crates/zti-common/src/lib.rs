@@ -1,3 +1,4 @@
+pub mod dsl;
 pub mod ids;
 pub mod paths;
 

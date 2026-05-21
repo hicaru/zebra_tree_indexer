@@ -64,6 +64,11 @@ enum Commands {
         #[arg(short, long, help = "Symbol ID")]
         id: u32,
     },
+    #[command(about = "Show the source code of multiple symbols")]
+    SymbolBodies {
+        #[arg(short, long, num_args(1..), help = "Symbol IDs")]
+        ids: Vec<u32>,
+    },
     #[command(about = "Show chunks in embed or display format")]
     Chunks {
         #[arg(short, long, help = "File path relative to root (omit for all files)")]
@@ -142,21 +147,30 @@ fn main() -> Result<()> {
             }
         }
         Commands::SymbolBody { id } => {
-            let sym = index
-                .symbols
-                .get(id as usize)
-                .ok_or_else(|| anyhow::anyhow!("Symbol {} not found", id))?;
-            let file = index
-                .files
-                .get(sym.file_idx as usize)
-                .ok_or_else(|| anyhow::anyhow!("File not found for symbol {}", id))?;
-            let content = std::fs::read_to_string(&file.path)?;
-            let range = zti_common::line_byte_range(&content, sym.line, sym.end_line);
-            println!(
-                "// File: {} | Lines: {}-{}",
-                file.path, sym.line, sym.end_line
-            );
-            println!("{}", &content[range]);
+            let entries = zti_dsl::resolve_symbol_bodies(&index, &[id]);
+            match entries.first() {
+                Some(zti_common::dsl::SymbolBodyEntry::Ok {
+                    kind_short,
+                    symbol_id,
+                    start_line,
+                    end_line,
+                    body,
+                    ..
+                }) => {
+                    println!("{}#{} : {}-{}", kind_short, symbol_id, start_line, end_line);
+                    println!("{}", body);
+                }
+                Some(zti_common::dsl::SymbolBodyEntry::Err { message, .. }) => {
+                    return Err(anyhow::anyhow!("{}", message));
+                }
+                None => return Err(anyhow::anyhow!("Symbol {} not found", id)),
+            }
+        }
+        Commands::SymbolBodies { ids } => {
+            let entries = zti_dsl::resolve_symbol_bodies(&index, &ids);
+            for entry in &entries {
+                println!("{}\n---", entry);
+            }
         }
         Commands::Chunks {
             file,
