@@ -36,13 +36,7 @@ pub fn format_search_results(results: &SearchResults) -> String {
     }
 
     for (i, hit) in results.hits.iter().enumerate() {
-        let _ = writeln!(
-            out,
-            "#{} {:.4} {}",
-            i + 1,
-            hit.score,
-            short_name(&hit.symbol_qualified)
-        );
+        let _ = writeln!(out, "#{} {:.4}", i + 1, hit.score);
         write_hit_block(&mut out, hit);
     }
 
@@ -74,15 +68,6 @@ fn write_hit_block(out: &mut String, hit: &SearchHit) {
         out.push_str("    ");
         out.push_str(line);
         out.push('\n');
-    }
-}
-
-/// Last `::` segment of a qualified name, or the whole string if there
-/// is no separator. Borrows from `q` — no allocation.
-fn short_name(q: &str) -> &str {
-    match q.rsplit_once("::") {
-        Some((_, tail)) => tail,
-        None => q,
     }
 }
 
@@ -148,7 +133,7 @@ mod tests {
         };
         let out = format_search_results(&r);
         assert!(out.starts_with("LEGEND test\n"), "legend prefix: {}", out);
-        assert!(out.contains("#1 0.7407 recip\n"), "hit rank line: {}", out);
+        assert!(out.contains("#1 0.7407\n"), "hit rank line: {}", out);
         assert!(
             out.contains("m#183 src/poly/rq.rs:127-203\n"),
             "hit header: {}",
@@ -189,13 +174,6 @@ mod tests {
         };
         let out = format_search_results(&r);
         assert!(out.contains("no results"), "{}", out);
-    }
-
-    #[test]
-    fn short_name_takes_last_segment() {
-        assert_eq!(short_name("foo::bar::baz"), "baz");
-        assert_eq!(short_name("baz"), "baz");
-        assert_eq!(short_name(""), "");
     }
 
     #[test]
