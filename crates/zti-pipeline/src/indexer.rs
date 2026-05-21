@@ -271,8 +271,9 @@ pub async fn index_project(
                 let mut indexed_at_builder = UInt64Array::builder(n);
                 let mut embeddings: Vec<f32> = Vec::with_capacity(n * dim);
 
-                for (&idx, emb) in idxs.iter().zip(embs) {
+                for (i, &idx) in idxs.iter().enumerate() {
                     let (chunk, lang) = &all_pending[idx];
+                    let emb = embs.row(i);
 
                     if emb.iter().any(|v| v.is_nan()) {
                         tracing::warn!(
@@ -294,7 +295,7 @@ pub async fn index_project(
                     let mut chunk_id = [0u8; 16];
                     chunk_id.copy_from_slice(&hash.as_bytes()[..16]);
 
-                    let turbo = match reranker.encode(&emb) {
+                    let turbo = match reranker.encode(emb) {
                         Ok(t) => Some(t),
                         Err(e) => {
                             tracing::debug!("turbo encode failed: {}", e);
@@ -334,7 +335,7 @@ pub async fn index_project(
                         None => turbo_code_builder.append_null(),
                     }
                     indexed_at_builder.append_value(now_ns);
-                    embeddings.extend_from_slice(&emb);
+                    embeddings.extend_from_slice(emb);
 
                     total_embedded += 1;
                 }

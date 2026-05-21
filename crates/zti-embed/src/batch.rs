@@ -9,9 +9,33 @@ const ATTN_TENSORS: usize = 4;
 const FFN_TENSORS: usize = 2;
 const PIPELINE_LIVE: usize = 2;
 
-const BATCH_CEILING: usize = 64;
+pub const BATCH_CEILING: usize = 64;
 
 pub const TYPICAL_SEQ_LEN: usize = 512;
+
+/// Sequence-length buckets the engine pads to. CoreML caches a compiled
+/// MLProgram per `(batch, seq)` shape, so we want a small finite set; 4096
+/// bridges the gap between 2048 and the 8192 maximum so a 2049-token chunk
+/// does not pad 6143 zeros through every layer.
+pub const SEQ_BUCKETS: &[usize] = &[64, 128, 256, 512, 1024, 2048, 4096, 8192];
+
+/// Batch buckets the engine pads to. Same cache-shape rationale as
+/// [`SEQ_BUCKETS`].
+pub const BATCH_BUCKETS: &[usize] = &[1, 4, 8, 16, 32, 64];
+
+/// Round `n` up to the next entry in `buckets`, clamped to `cap`.
+///
+/// Returns `cap` if `n` exceeds the largest bucket — callers are expected to
+/// ensure `cap` is itself the model's hard limit, not an arbitrary cutoff.
+#[inline]
+pub fn next_bucket(buckets: &[usize], n: usize, cap: usize) -> usize {
+    for &b in buckets {
+        if b >= n {
+            return b.min(cap);
+        }
+    }
+    cap
+}
 
 const DEFAULT_METAL_MEM_FRAC: (usize, usize) = (4, 10);
 const DEFAULT_CUDA_MEM_FRAC: (usize, usize) = (6, 10);
@@ -131,5 +155,35 @@ mod tests {
         let p = profile(4096, 32, 16384, 32, 4096, "/nonexistent");
         let b = recommended_batch_size(&p, &hw(Device::Metal, 1));
         assert_eq!(b, 1);
+    }
+
+    #[test]
+    fn next_bucket_zero_returns_smallest() {
+        assert_eq!(next_bucket(SEQ_BUCKETS, 0, 8192), 64);
+        assert_eq!(next_bucket(BATCH_BUCKETS, 0, 64), 1);
+    }
+
+    #[test]
+    fn next_bucket_exact_match_returns_same() {
+        assert_eq!(next_bucket(SEQ_BUCKETS, 512, 8192), 512);
+        assert_eq!(next_bucket(BATCH_BUCKETS, 8, 64), 8);
+    }
+
+    #[test]
+    fn next_bucket_one_over_2048_picks_4096() {
+        assert_eq!(next_bucket(SEQ_BUCKETS, 2049, 8192), 4096);
+    }
+
+    #[test]
+    fn next_bucket_above_max_clamps_to_cap() {
+        assert_eq!(next_bucket(SEQ_BUCKETS, 12_000, 8192), 8192);
+        assert_eq!(next_bucket(BATCH_BUCKETS, 200, 64), 64);
+    }
+
+    #[test]
+    fn next_bucket_cap_below_natural_bucket_clamps() {
+        // model max_length is 256: a 200-token batch buckets to 256 — but if
+        // the model's max is 200 we should clamp to 200, not 256.
+        assert_eq!(next_bucket(SEQ_BUCKETS, 200, 200), 200);
     }
 }

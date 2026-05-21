@@ -175,9 +175,19 @@ async fn rebuild(
 mod tests {
     use crate::alloc_counting;
     use arrow::array::Float32Array;
+    use std::sync::Mutex;
+
+    // The `#[cfg(test)] #[global_allocator]` counter in `crate::alloc_counting`
+    // is process-wide. The default `cargo test` harness runs the tests in this
+    // module on multiple threads, so concurrent allocations from sibling tests
+    // pollute every snapshot region. Serialise all tests in this file so the
+    // snapshot delta really only sees the allocations the test under scrutiny
+    // performed.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn float32array_from_vec_is_zero_copy() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let v: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let ptr_before = v.as_ptr();
         let arr = Float32Array::from(v);
@@ -190,6 +200,7 @@ mod tests {
 
     #[test]
     fn float32array_from_vec_zero_copy_verified_by_allocation_counter() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let v = vec![1.0f32; 1024];
         let (_, prev_bytes) = alloc_counting::snapshot();
         let arr = Float32Array::from(v);
@@ -205,6 +216,7 @@ mod tests {
 
     #[test]
     fn rebuild_builder_pattern_saves_flat_vec_allocations() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dim = 128;
         let n = 100;
         let vectors: Vec<Vec<f32>> = (0..n).map(|_| vec![1.0f32; dim]).collect();
@@ -250,6 +262,7 @@ mod tests {
 
     #[test]
     fn flat_split_slices_are_views_not_copies() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dim = 16;
         let n = 5;
         let flat: Vec<f32> = (0..n * dim).map(|i| i as f32).collect();
