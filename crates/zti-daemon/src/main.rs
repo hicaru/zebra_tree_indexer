@@ -22,7 +22,7 @@ struct Cli {
     #[arg(short, long, default_value = "Xenova/bge-small-en-v1.5")]
     model: String,
 
-    #[arg(long, value_enum, default_value_t = OnnxVariant::Auto)]
+    #[arg(long, default_value = "auto")]
     variant: OnnxVariant,
 
     #[arg(long)]

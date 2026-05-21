@@ -43,7 +43,7 @@ impl Pooled {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct LoadOverrides<'a> {
     pub variant: OnnxVariant,
     pub query_prefix: Option<&'a str>,
@@ -131,7 +131,7 @@ impl EmbedEngine {
     }
 
     pub fn load_with(model_id: &str, hw: &Hardware, opts: &LoadOverrides<'_>) -> Result<Self> {
-        let mut profile = resolve_profile(model_id, opts.variant, hw, opts.query_prefix)?;
+        let mut profile = resolve_profile(model_id, &opts.variant, hw, opts.query_prefix)?;
 
         tracing::info!(path = %profile.onnx_path.display(), "loading ONNX model");
 

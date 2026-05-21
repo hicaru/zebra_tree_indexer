@@ -112,8 +112,7 @@ impl TokenizerCfg {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OnnxVariant {
     Auto,
     Fp32,
@@ -125,10 +124,11 @@ pub enum OnnxVariant {
     Q4,
     Q4f16,
     Bnb4,
+    Named(String),
 }
 
 impl OnnxVariant {
-    pub const fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Auto => "auto",
             Self::Fp32 => "fp32",
@@ -140,6 +140,7 @@ impl OnnxVariant {
             Self::Q4 => "q4",
             Self::Q4f16 => "q4f16",
             Self::Bnb4 => "bnb4",
+            Self::Named(s) => s,
         }
     }
 }
@@ -147,6 +148,34 @@ impl OnnxVariant {
 impl std::fmt::Display for OnnxVariant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for OnnxVariant {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "auto" => Self::Auto,
+            "fp32" => Self::Fp32,
+            "fp16" => Self::Fp16,
+            "o4" => Self::O4,
+            "int8" => Self::Int8,
+            "uint8" => Self::Uint8,
+            "quantized" => Self::Quantized,
+            "q4" => Self::Q4,
+            "q4f16" => Self::Q4f16,
+            "bnb4" => Self::Bnb4,
+            _ => {
+                let suffix = s
+                    .strip_suffix(".onnx")
+                    .unwrap_or(s)
+                    .strip_prefix("model_")
+                    .or_else(|| s.strip_prefix("model-"))
+                    .unwrap_or(s);
+                Self::Named(suffix.to_owned())
+            }
+        })
     }
 }
 
@@ -175,7 +204,7 @@ fn classify(lower_filename: &str) -> Option<OnnxVariant> {
             t if t.starts_with("quant") => (Quantized, 7),
             _ => continue,
         };
-        if best.is_none_or(|(_, p)| cur.1 < p) {
+        if best.as_ref().is_none_or(|(_, p)| cur.1 < *p) {
             best = Some(cur);
         }
     }
@@ -274,7 +303,7 @@ fn read_query_prefix_from_metadata(dir: &Path) -> Option<String> {
 
 pub fn resolve_profile(
     model_id: &str,
-    variant: OnnxVariant,
+    variant: &OnnxVariant,
     hw: &Hardware,
     query_prefix_override: Option<&str>,
 ) -> Result<ModelProfile> {
@@ -331,7 +360,7 @@ pub fn resolve_profile(
 
 pub fn resolve_model_files(
     model_id: &str,
-    variant: OnnxVariant,
+    variant: &OnnxVariant,
     hw: &Hardware,
 ) -> Result<ResolvedModel> {
     let p = Path::new(model_id);
@@ -342,7 +371,7 @@ pub fn resolve_model_files(
     }
 }
 
-fn resolve_local(p: &Path, variant: OnnxVariant, hw: &Hardware) -> Result<ResolvedModel> {
+fn resolve_local(p: &Path, variant: &OnnxVariant, hw: &Hardware) -> Result<ResolvedModel> {
     let (dir, explicit_onnx) = if p.is_dir() {
         (p, None)
     } else if p.extension().and_then(|s| s.to_str()) == Some("onnx") {
@@ -390,14 +419,52 @@ fn resolve_local(p: &Path, variant: OnnxVariant, hw: &Hardware) -> Result<Resolv
     })
 }
 
-fn find_onnx_in(dir: &Path, variant: OnnxVariant, hw: &Hardware) -> Result<PathBuf> {
-    let one;
+fn find_onnx_by_suffix(dir: &Path, suffix: &str) -> Result<PathBuf> {
+    for sub in ["", "onnx"] {
+        let joined;
+        let scan_dir: &Path = if sub.is_empty() {
+            dir
+        } else {
+            joined = dir.join(sub);
+            &joined
+        };
+        if !scan_dir.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(scan_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("onnx") {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let stem = name.strip_suffix(".onnx").unwrap_or(name);
+            let body = stem
+                .strip_prefix("model_")
+                .or_else(|| stem.strip_prefix("model-"))
+                .unwrap_or(stem);
+            if body.eq_ignore_ascii_case(suffix) {
+                tracing::info!(path = %path.display(), "selected ONNX variant by exact suffix");
+                return Ok(path);
+            }
+        }
+    }
+    anyhow::bail!(
+        "no ONNX file matching 'model_{suffix}.onnx' found in {}",
+        dir.display(),
+    )
+}
+
+fn find_onnx_in(dir: &Path, variant: &OnnxVariant, hw: &Hardware) -> Result<PathBuf> {
+    if let OnnxVariant::Named(suffix) = variant {
+        return find_onnx_by_suffix(dir, suffix);
+    }
+
     let order: &[OnnxVariant] = match variant {
         OnnxVariant::Auto => auto_variant_order(hw),
-        v => {
-            one = [v];
-            &one
-        }
+        v => std::slice::from_ref(v),
     };
 
     let mut best_rank: usize = usize::MAX;
@@ -458,7 +525,7 @@ fn find_onnx_in(dir: &Path, variant: OnnxVariant, hw: &Hardware) -> Result<PathB
         return Ok(p);
     }
 
-    if variant != OnnxVariant::Auto {
+    if *variant != OnnxVariant::Auto {
         anyhow::bail!(
             "requested ONNX variant {} not available in {}",
             variant,
@@ -510,7 +577,7 @@ fn split_model_id(model_id: &str) -> Result<(&str, &str)> {
     }
 }
 
-fn resolve_hf(model_id: &str, variant: OnnxVariant, hw: &Hardware) -> Result<ResolvedModel> {
+fn resolve_hf(model_id: &str, variant: &OnnxVariant, hw: &Hardware) -> Result<ResolvedModel> {
     let (owner, name) = split_model_id(model_id)?;
 
     let model_dir = zti_common::paths::models_dir()?.join(model_id.replace('/', "_"));

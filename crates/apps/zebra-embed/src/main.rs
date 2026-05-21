@@ -23,7 +23,7 @@ struct Cli {
     #[arg(short, long, global = true)]
     model: Option<String>,
 
-    #[arg(long, value_enum, global = true)]
+    #[arg(long, global = true)]
     variant: Option<OnnxVariant>,
 
     #[arg(long, global = true)]
@@ -118,12 +118,12 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let model = cli.model.as_deref();
-    let variant: Option<&'static str> = cli.variant.and_then(|v| match v {
+    let variant: Option<String> = cli.variant.and_then(|v| match v {
         OnnxVariant::Auto => None,
-        other => Some(other.as_str()),
+        other => Some(other.to_string()),
     });
     let query_prefix = cli.query_prefix.as_deref();
-    let open = || open_client(model, variant, query_prefix);
+    let open = || open_client(model, variant.as_deref(), query_prefix);
     match cli.command {
         Commands::Index { root, refresh } => {
             let mut client = open().await?;
