@@ -117,8 +117,10 @@ pub struct Hit {
     pub score: f32,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn search(
     query: &str,
+    query_emb: &[f32],
     engine: &EmbedEngine,
     db: &zti_store::Db,
     reranker: &TurboReranker,
@@ -147,7 +149,6 @@ pub async fn search(
         ),
     };
 
-    let query_emb = engine.embed_query_async(query).await?;
     let chunks_table = db.chunks_table(engine.dim()).await?;
     let raw_k = opts.limit.saturating_mul(KNN_OVERFETCH_MULT);
 
@@ -157,7 +158,7 @@ pub async fn search(
     let mut candidates: Vec<ChunkHit> = match params.method {
         SearchMethod::IvfHnswSq | SearchMethod::Flat => {
             chunks_table
-                .knn(&query_emb, raw_k, &params, opts.languages, opts.path_glob)
+                .knn(query_emb, raw_k, &params, opts.languages, opts.path_glob)
                 .await?
         }
         SearchMethod::Usearch => {
@@ -167,7 +168,7 @@ pub async fn search(
                 .map_err(|e: anyhow::Error| e)?;
 
             let mut topn: Vec<([u8; 16], f32)> = Vec::with_capacity(raw_k);
-            graph.search(&query_emb, raw_k, &mut topn);
+            graph.search(query_emb, raw_k, &mut topn);
 
             let score_by_id: std::collections::HashMap<[u8; 16], f32> =
                 topn.iter().map(|(id, score)| (*id, *score)).collect();
@@ -195,7 +196,7 @@ pub async fn search(
         .iter()
         .map(|c| (c.turbo_code.as_slice(), c.score))
         .collect();
-    let mut ranked = reranker.rerank(&rerank_input, &query_emb);
+    let mut ranked = reranker.rerank(&rerank_input, query_emb);
 
     diversify_by_parent_in_place(&mut ranked, &candidates, opts.limit);
 
@@ -226,6 +227,7 @@ fn diversify_by_parent_in_place(ranked: &mut Vec<(usize, f32)>, candidates: &[Ch
 
 pub async fn search_exhaustive(
     query: &str,
+    query_emb: &[f32],
     engine: &EmbedEngine,
     db: &zti_store::Db,
     pid: &[u8; 32],
@@ -237,7 +239,6 @@ pub async fn search_exhaustive(
         .await?
         .ok_or_else(|| anyhow!("project not indexed"))?;
 
-    let query_emb = engine.embed_query_async(query).await?;
     let raw_k = opts.limit.saturating_mul(KNN_OVERFETCH_MULT);
 
     let chunks_table = db.chunks_table(engine.dim()).await?;
@@ -245,7 +246,7 @@ pub async fn search_exhaustive(
     let words = split_query_words(&query_lc);
 
     let mut candidates = chunks_table
-        .knn_exhaustive(&query_emb, raw_k, opts.languages, opts.path_glob)
+        .knn_exhaustive(query_emb, raw_k, opts.languages, opts.path_glob)
         .await?;
 
     extend_with_lexical(&chunks_table, &mut candidates, &words, opts, raw_k).await?;

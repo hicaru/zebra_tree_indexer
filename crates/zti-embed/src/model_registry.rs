@@ -15,6 +15,7 @@ pub struct ModelProfile {
     pub max_length: usize,
     pub pooling: PoolingStrategyEnum,
     pub query_prefix: Option<String>,
+    pub passage_prefix: Option<String>,
 
     pub hidden_size: usize,
     pub num_hidden_layers: usize,
@@ -264,7 +265,6 @@ struct StPrompts {
     #[serde(default)]
     query: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     passage: Option<String>,
 }
 
@@ -295,10 +295,40 @@ fn read_pooling_from_metadata(dir: &Path) -> PoolingStrategyEnum {
     PoolingStrategyEnum::Mean
 }
 
-fn read_query_prefix_from_metadata(dir: &Path) -> Option<String> {
+fn read_prefixes_from_metadata(dir: &Path) -> (Option<String>, Option<String>) {
     let st_path = dir.join("config_sentence_transformers.json");
-    let cfg = read_json::<StConfig>(&st_path).ok()?;
-    cfg.prompts.and_then(|p| p.query)
+    let Ok(cfg) = read_json::<StConfig>(&st_path) else {
+        return (None, None);
+    };
+    match cfg.prompts {
+        Some(p) => (p.query, p.passage),
+        None => (None, None),
+    }
+}
+
+fn guess_prefixes_from_model_id(model_id: &str) -> (Option<String>, Option<String>) {
+    let name = model_id.to_ascii_lowercase();
+
+    if name.contains("e5") {
+        return (Some("query: ".into()), Some("passage: ".into()));
+    }
+    if name.contains("bge") && name.contains("en") {
+        return (
+            Some("Represent this sentence for searching relevant passages: ".into()),
+            None,
+        );
+    }
+    if name.contains("nomic-embed") {
+        return (Some("search_query: ".into()), Some("search_document: ".into()));
+    }
+    if name.contains("instructor") {
+        return (
+            Some("Represent the question for retrieving supporting documents: ".into()),
+            Some("Represent the document for retrieval: ".into()),
+        );
+    }
+
+    (None, None)
 }
 
 pub fn resolve_profile(
@@ -306,6 +336,7 @@ pub fn resolve_profile(
     variant: &OnnxVariant,
     hw: &Hardware,
     query_prefix_override: Option<&str>,
+    passage_prefix_override: Option<&str>,
 ) -> Result<ModelProfile> {
     let files = resolve_model_files(model_id, variant, hw)?;
     let cfg: ModelConfig = read_json(&files.config_path)?;
@@ -335,12 +366,31 @@ pub fn resolve_profile(
     let metadata_dir = files.config_path.parent().unwrap_or(Path::new("."));
     let pooling = read_pooling_from_metadata(metadata_dir);
 
+    let (mut auto_query, mut auto_passage) = read_prefixes_from_metadata(metadata_dir);
+
+    if auto_query.is_none() && auto_passage.is_none() {
+        let (guess_q, guess_p) = guess_prefixes_from_model_id(model_id);
+        if guess_q.is_some() || guess_p.is_some() {
+            tracing::info!(model = model_id, "applied heuristic prefix fallback");
+            auto_query = guess_q;
+            auto_passage = guess_p;
+        }
+    }
+
     let query_prefix = match query_prefix_override {
         Some(p) => {
             tracing::info!(prefix = p, "applying CLI query_prefix override");
             Some(p.to_owned())
         }
-        None => read_query_prefix_from_metadata(metadata_dir),
+        None => auto_query,
+    };
+
+    let passage_prefix = match passage_prefix_override {
+        Some(p) => {
+            tracing::info!(prefix = p, "applying CLI passage_prefix override");
+            Some(p.to_owned())
+        }
+        None => auto_passage,
     };
 
     Ok(ModelProfile {
@@ -351,6 +401,7 @@ pub fn resolve_profile(
         max_length,
         pooling,
         query_prefix,
+        passage_prefix,
         hidden_size: cfg.hidden_size,
         num_hidden_layers: cfg.num_hidden_layers,
         intermediate_size: cfg.ffn_size(),

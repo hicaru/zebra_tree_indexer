@@ -29,6 +29,9 @@ struct Cli {
     #[arg(long, global = true)]
     query_prefix: Option<String>,
 
+    #[arg(long, global = true)]
+    passage_prefix: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -55,6 +58,8 @@ enum Commands {
         glob: Option<String>,
         #[arg(long, default_value = "false")]
         exhaustive: bool,
+        #[arg(long, default_value_t = SearchMode::Query)]
+        mode: SearchMode,
     },
     #[command(about = "Interactive chat (search loop)")]
     Chat {
@@ -91,8 +96,9 @@ async fn open_client(
     model: Option<&str>,
     variant: Option<&str>,
     query_prefix: Option<&str>,
+    passage_prefix: Option<&str>,
 ) -> Result<Client> {
-    let mut client = Client::connect(Duration::from_secs(10), model, variant, query_prefix).await?;
+    let mut client = Client::connect(Duration::from_secs(10), model, variant, query_prefix, passage_prefix).await?;
     client.handshake().await?;
     Ok(client)
 }
@@ -123,7 +129,8 @@ async fn main() -> Result<()> {
         other => Some(other.to_string()),
     });
     let query_prefix = cli.query_prefix.as_deref();
-    let open = || open_client(model, variant.as_deref(), query_prefix);
+    let passage_prefix = cli.passage_prefix.as_deref();
+    let open = || open_client(model, variant.as_deref(), query_prefix, passage_prefix);
     match cli.command {
         Commands::Index { root, refresh } => {
             let mut client = open().await?;
@@ -187,6 +194,7 @@ async fn main() -> Result<()> {
             lang,
             glob,
             exhaustive,
+            mode,
         } => {
             let mut client = open().await?;
             let project_root = canon(&root)?;
@@ -200,6 +208,7 @@ async fn main() -> Result<()> {
                     path_glob: glob,
                     refresh_index: false,
                     exhaustive,
+                    mode,
                 }))
                 .await?;
             match resp {
@@ -237,6 +246,7 @@ async fn main() -> Result<()> {
                         path_glob: None,
                         refresh_index: false,
                         exhaustive: false,
+                        mode: SearchMode::default(),
                     }))
                     .await?;
                 match resp {
@@ -298,6 +308,16 @@ async fn main() -> Result<()> {
                     println!("Device: {}", env.device);
                     println!("CPUs: {}", env.cpus);
                     println!("RAM: {} MB", env.mem_total_mb);
+                    if let Some(ref p) = env.query_prefix {
+                        println!("Query prefix: {:?}", p);
+                    } else {
+                        println!("Query prefix: None");
+                    }
+                    if let Some(ref p) = env.passage_prefix {
+                        println!("Passage prefix: {:?}", p);
+                    } else {
+                        println!("Passage prefix: None");
+                    }
                 }
                 other => eprintln!("Unexpected response: {:?}", other),
             }

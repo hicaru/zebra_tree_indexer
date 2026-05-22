@@ -129,6 +129,7 @@ mod tests {
             max_length: seq,
             pooling: crate::model_registry::PoolingStrategyEnum::Mean,
             query_prefix: None,
+            passage_prefix: None,
             hidden_size: hidden,
             num_hidden_layers: layers,
             intermediate_size: ffn,

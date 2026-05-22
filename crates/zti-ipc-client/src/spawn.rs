@@ -12,6 +12,7 @@ pub async fn connect_or_spawn(
     model: Option<&str>,
     variant: Option<&str>,
     query_prefix: Option<&str>,
+    passage_prefix: Option<&str>,
 ) -> Result<UnixStream> {
     let socket_path = paths::daemon_socket()?;
 
@@ -24,7 +25,7 @@ pub async fn connect_or_spawn(
         Some(m) => tracing::info!("daemon not running, spawning with model {m}..."),
         None => tracing::info!("daemon not running, spawning with daemon default model..."),
     }
-    spawn_daemon(model, variant, query_prefix)?;
+    spawn_daemon(model, variant, query_prefix, passage_prefix)?;
     wait_for_socket(&socket_path, timeout).await
 }
 
@@ -32,6 +33,7 @@ fn spawn_daemon(
     model: Option<&str>,
     variant: Option<&str>,
     query_prefix: Option<&str>,
+    passage_prefix: Option<&str>,
 ) -> Result<()> {
     let exe = std::env::current_exe()?;
     let dir = exe
@@ -54,6 +56,9 @@ fn spawn_daemon(
     }
     if let Some(p) = query_prefix {
         cmd.args(["--query-prefix", p]);
+    }
+    if let Some(p) = passage_prefix {
+        cmd.args(["--passage-prefix", p]);
     }
     cmd.spawn()?;
 

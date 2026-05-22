@@ -17,5 +17,7 @@ pub fn handle(state: &DaemonState) -> Response {
         device: state.hardware.device.as_str().to_string(),
         cpus: state.hardware.cpus as u32,
         mem_total_mb: state.hardware.mem_total / (1024 * 1024),
+        query_prefix: state.engine.profile().query_prefix.clone(),
+        passage_prefix: state.engine.profile().passage_prefix.clone(),
     })
 }

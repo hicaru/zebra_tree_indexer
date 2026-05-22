@@ -19,8 +19,9 @@ impl Client {
         model: Option<&str>,
         variant: Option<&str>,
         query_prefix: Option<&str>,
+        passage_prefix: Option<&str>,
     ) -> Result<Self> {
-        let stream = connect_or_spawn(timeout, model, variant, query_prefix).await?;
+        let stream = connect_or_spawn(timeout, model, variant, query_prefix, passage_prefix).await?;
         Ok(Self { stream })
     }
 

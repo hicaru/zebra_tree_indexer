@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use zti_protocol::request::SearchReq;
+use zti_protocol::request::{SearchMode, SearchReq};
 use zti_protocol::response::{Response, SearchHit, SearchResults};
 use zti_rerank::TurboReranker;
 use zti_store::chunks_table::ChunkHit;
@@ -20,9 +20,16 @@ pub async fn handle(req: &SearchReq, state: &DaemonState) -> Response {
             languages: req.languages.as_deref(),
             path_glob: req.path_glob.as_deref(),
         };
+
+        let query_emb = match req.mode {
+            SearchMode::Query => state.engine.embed_query_async(&req.query).await?,
+            SearchMode::Passage => state.engine.embed_passage_async(&req.query).await?,
+        };
+
         let hits = if req.exhaustive {
             zti_pipeline::search::search_exhaustive(
                 &req.query,
+                &query_emb,
                 &state.engine,
                 &project.db,
                 &pid,
@@ -33,6 +40,7 @@ pub async fn handle(req: &SearchReq, state: &DaemonState) -> Response {
             let reranker = TurboReranker::new(state.engine.dim())?;
             zti_pipeline::search::search(
                 &req.query,
+                &query_emb,
                 &state.engine,
                 &project.db,
                 &reranker,

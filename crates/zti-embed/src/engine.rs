@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
@@ -43,10 +44,18 @@ impl Pooled {
     }
 }
 
+pub fn apply_prefix<'a>(text: &'a str, prefix: &Option<String>) -> Cow<'a, str> {
+    match prefix {
+        Some(p) => Cow::Owned(format!("{p}{text}")),
+        None => Cow::Borrowed(text),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LoadOverrides<'a> {
     pub variant: OnnxVariant,
     pub query_prefix: Option<&'a str>,
+    pub passage_prefix: Option<&'a str>,
 }
 
 impl<'a> Default for LoadOverrides<'a> {
@@ -54,6 +63,7 @@ impl<'a> Default for LoadOverrides<'a> {
         Self {
             variant: OnnxVariant::Auto,
             query_prefix: None,
+            passage_prefix: None,
         }
     }
 }
@@ -131,7 +141,7 @@ impl EmbedEngine {
     }
 
     pub fn load_with(model_id: &str, hw: &Hardware, opts: &LoadOverrides<'_>) -> Result<Self> {
-        let mut profile = resolve_profile(model_id, &opts.variant, hw, opts.query_prefix)?;
+        let mut profile = resolve_profile(model_id, &opts.variant, hw, opts.query_prefix, opts.passage_prefix)?;
 
         tracing::info!(path = %profile.onnx_path.display(), "loading ONNX model");
 
@@ -277,10 +287,7 @@ impl EmbedEngine {
     }
 
     pub fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        let input = match &self.profile.query_prefix {
-            Some(prefix) => format!("{prefix}{text}"),
-            None => text.to_string(),
-        };
+        let input = apply_prefix(text, &self.profile.query_prefix);
         let mut batch = self.embed_batch(&[&input])?;
         batch
             .pop()
@@ -288,10 +295,23 @@ impl EmbedEngine {
     }
 
     pub async fn embed_query_async(&self, text: &str) -> Result<Vec<f32>> {
-        let input = match &self.profile.query_prefix {
-            Some(prefix) => format!("{prefix}{text}"),
-            None => text.to_string(),
-        };
+        let input = apply_prefix(text, &self.profile.query_prefix);
+        let mut batch = self.embed_batch_async(&[&input]).await?;
+        batch
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("no embedding produced"))
+    }
+
+    pub fn embed_passage(&self, text: &str) -> Result<Vec<f32>> {
+        let input = apply_prefix(text, &self.profile.passage_prefix);
+        let mut batch = self.embed_batch(&[&input])?;
+        batch
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("no embedding produced"))
+    }
+
+    pub async fn embed_passage_async(&self, text: &str) -> Result<Vec<f32>> {
+        let input = apply_prefix(text, &self.profile.passage_prefix);
         let mut batch = self.embed_batch_async(&[&input]).await?;
         batch
             .pop()

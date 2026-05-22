@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
@@ -206,7 +207,12 @@ pub async fn index_project(
     // dynamic padding in `prepare_from_encs` stays tight (no long chunk
     // forcing short batch-mates to pad up to its length).
     let encs: Vec<zti_embed::Tokenized> = {
-        let refs: Vec<&str> = all_pending.iter().map(|(c, _)| c.body.as_str()).collect();
+        let passage_prefix = &engine.profile().passage_prefix;
+        let prefixed: Vec<Cow<'_, str>> = all_pending
+            .iter()
+            .map(|(c, _)| zti_embed::apply_prefix(&c.body, passage_prefix))
+            .collect();
+        let refs: Vec<&str> = prefixed.iter().map(|s| s.as_ref()).collect();
         engine.tokenize(&refs)?
     };
 

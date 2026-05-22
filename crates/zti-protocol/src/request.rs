@@ -1,5 +1,34 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchMode {
+    #[default]
+    Query,
+    Passage,
+}
+
+impl std::fmt::Display for SearchMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Query => "query",
+            Self::Passage => "passage",
+        })
+    }
+}
+
+impl std::str::FromStr for SearchMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "query" => Ok(Self::Query),
+            "passage" => Ok(Self::Passage),
+            other => Err(format!("unknown search mode: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandshakeReq {
     pub client_version: String,
@@ -23,6 +52,8 @@ pub struct SearchReq {
     pub refresh_index: bool,
     #[serde(default)]
     pub exhaustive: bool,
+    #[serde(default)]
+    pub mode: SearchMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

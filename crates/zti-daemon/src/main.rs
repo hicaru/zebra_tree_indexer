@@ -27,6 +27,9 @@ struct Cli {
 
     #[arg(long)]
     query_prefix: Option<String>,
+
+    #[arg(long)]
+    passage_prefix: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -34,6 +37,7 @@ fn main() -> Result<()> {
         model,
         variant,
         query_prefix,
+        passage_prefix,
     } = Cli::parse();
 
     let pid_path = zti_common::paths::daemon_pid()?;
@@ -84,6 +88,7 @@ fn main() -> Result<()> {
     let opts = LoadOverrides {
         variant,
         query_prefix: query_prefix.as_deref(),
+        passage_prefix: passage_prefix.as_deref(),
     };
     let engine = EmbedEngine::load_with(&model, &hw, &opts)?;
 
