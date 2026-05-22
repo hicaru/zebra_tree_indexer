@@ -21,12 +21,14 @@ use zti_tree_sitter::{parse_kinds, parse_language};
 struct Cli;
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FileTreeParams {
     pub project_root: String,
     pub path_glob: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectMapParams {
     pub project_root: String,
     pub language: Option<String>,
@@ -36,6 +38,7 @@ pub struct ProjectMapParams {
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DepTreeParams {
     pub project_root: String,
     pub symbol_id: u32,
@@ -44,12 +47,14 @@ pub struct DepTreeParams {
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SymbolBodyParams {
     pub project_root: String,
     pub symbol_id: u32,
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SymbolBodiesParams {
     pub project_root: String,
     pub symbol_ids: Vec<u32>,
@@ -104,7 +109,7 @@ fn internal_err(msg: String) -> ErrorData {
 
 #[rmcp::tool_router]
 impl ZebraMcpServer {
-    #[tool(description = "Returns the file tree with numeric #IDs")]
+    #[tool(name = "fileTree", description = "Returns the file tree with numeric #IDs")]
     async fn file_tree(
         &self,
         Parameters(params): Parameters<FileTreeParams>,
@@ -121,7 +126,7 @@ impl ZebraMcpServer {
         Ok(ok_text(render_files_only(&index, &file_indices)))
     }
 
-    #[tool(description = "Returns the DSL symbol map for a language")]
+    #[tool(name = "projectMap", description = "Returns the DSL symbol map for a language")]
     async fn project_map(
         &self,
         Parameters(params): Parameters<ProjectMapParams>,
@@ -142,7 +147,7 @@ impl ZebraMcpServer {
         Ok(ok_text(text))
     }
 
-    #[tool(description = "Trace dependency chains for a symbol by its #ID")]
+    #[tool(name = "depTree", description = "Trace dependency chains for a symbol by its #ID")]
     async fn dep_tree(
         &self,
         Parameters(params): Parameters<DepTreeParams>,
@@ -164,7 +169,7 @@ impl ZebraMcpServer {
         Ok(ok_text(text))
     }
 
-    #[tool(description = "Read the exact source code of a symbol by its #ID")]
+    #[tool(name = "symbolBody", description = "Read the exact source code of a symbol by its #ID")]
     async fn symbol_body(
         &self,
         Parameters(params): Parameters<SymbolBodyParams>,
@@ -198,7 +203,7 @@ impl ZebraMcpServer {
         Ok(ok_text(text))
     }
 
-    #[tool(description = "Read source code for multiple symbols by their #IDs")]
+    #[tool(name = "symbolBodies", description = "Read source code for multiple symbols by their #IDs")]
     async fn symbol_bodies(
         &self,
         Parameters(params): Parameters<SymbolBodiesParams>,
@@ -221,8 +226,8 @@ impl rmcp::ServerHandler for ZebraMcpServer {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
         info.instructions = Some(
-            "Zebra Tree Indexer MCP server (DSL-only). Use file_tree, project_map, dep_tree, \
-              symbol_body, symbol_bodies for AST graph queries."
+            "Zebra Tree Indexer MCP server (DSL-only). Use fileTree, projectMap, depTree, \
+              symbolBody, symbolBodies for AST graph queries."
                 .into(),
         );
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
