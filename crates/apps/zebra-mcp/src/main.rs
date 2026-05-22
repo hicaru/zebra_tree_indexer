@@ -149,7 +149,7 @@ fn internal_err(msg: String) -> ErrorData {
 
 #[rmcp::tool_router]
 impl ZebraMcpServer {
-    #[tool(name = "fileTree", description = "Get the project structure. Use this to understand the directory layout or find specific files. Returns paths and their numeric #IDs.")]
+    #[tool(name = "fileTree", description = "Maps the file structure. Use this to discover available source files and project roots in any project.")]
     async fn file_tree(
         &self,
         Parameters(params): Parameters<FileTreeParams>,
@@ -164,11 +164,11 @@ impl ZebraMcpServer {
         };
 
         let mut out = render_files_only(&index, &file_indices);
-        out.push_str("\n\n[SYSTEM HINT: To see symbols inside a file, use `projectMap` with the same project_root. To search for specific logic, use `search`.]");
+        out.push_str("\n\n[SYSTEM HINT: Files discovered. Use `search` to find concepts, or `projectMap` with `pathGlob` to get symbol #IDs for a specific file.]");
         Ok(ok_text(out))
     }
 
-    #[tool(name = "projectMap", description = "Get a high-level AST graph of classes, structs, and functions. Use this when you need an overview of what's inside a file or language. Returns symbol names and their critical #IDs.")]
+    #[tool(name = "projectMap", description = "Generates a symbol map for a specific file. REQUIRED: Use `pathGlob` to target one file. Returns the #IDs needed for `readCode`.")]
     async fn project_map(
         &self,
         Parameters(params): Parameters<ProjectMapParams>,
@@ -189,11 +189,11 @@ impl ZebraMcpServer {
 
         let renderer = DslRenderer::new(&index, max_tokens);
         let mut out = renderer.render(Some(&file_filter), kind_filter.as_deref());
-        out.push_str("\n\n[SYSTEM HINT: To read source code, use `readCode` with the #ID wrapped in an array (e.g. [ID]). To trace dependencies, use `depTree`.]");
+        out.push_str("\n\n[SYSTEM HINT: Symbols mapped. Call `readCode` with the required #IDs (wrapped in an array) to fetch source code.]");
         Ok(ok_text(out))
     }
 
-    #[tool(name = "depTree", description = "CRITICAL FOR REFACTORING: Trace dependencies. Pass a known symbol #ID and direction ('callers' or 'callees') to see exactly where a function is used or what it depends on.")]
+    #[tool(name = "depTree", description = "Trace dependency chains. RULE: Requires an #ID resolved via `projectMap`. Do not guess identifiers.")]
     async fn dep_tree(
         &self,
         Parameters(params): Parameters<DepTreeParams>,
@@ -215,7 +215,7 @@ impl ZebraMcpServer {
         Ok(ok_text(text))
     }
 
-    #[tool(name = "readCode", description = "READ CODE: Fetches exact source code. Pass an array of ONE OR MORE #IDs (e.g. [204] or [12, 45, 99]). RULE: You MUST obtain the #IDs from `search` or `projectMap` first. NEVER guess IDs.")]
+    #[tool(name = "readCode", description = "READ CODE: Fetches source code by #IDs. RULE: You MUST resolve IDs using `projectMap` first. Do not guess IDs.")]
     async fn read_code(
         &self,
         Parameters(params): Parameters<ReadCodeParams>,
@@ -231,7 +231,7 @@ impl ZebraMcpServer {
         Ok(ok_text(out))
     }
 
-    #[tool(name = "search", description = "START HERE: Semantic search. Use this first when looking for concepts, logic, or features by natural language (e.g., 'how does auth work'). Returns ranked snippets and symbol #IDs.")]
+    #[tool(name = "search", description = "Finds relevant files or concepts. Returns paths only. NOTE: Does NOT return #IDs. Use returned paths as input for `projectMap`.")]
     async fn search(
         &self,
         Parameters(params): Parameters<SearchParams>,
@@ -260,7 +260,7 @@ impl ZebraMcpServer {
         match client.request(Request::Search(req)).await {
             Ok(Response::Search(Ok(results))) => {
                 let mut out = format_search_results(&results);
-                out.push_str("\n\n[SYSTEM HINT: To read the full code for any result, use `readCode` with the #ID wrapped in an array (e.g. [ID]). To trace where it's used, use `depTree` with direction 'callers'.]");
+                out.push_str("\n\n[SYSTEM HINT: Paths identified. Call `projectMap` with `pathGlob` set to a path above to get symbol #IDs.]");
                 Ok(ok_text(out))
             }
             Ok(Response::Search(Err(e))) => Err(internal_err(e.message)),
@@ -307,7 +307,7 @@ impl ZebraMcpServer {
         }
     }
 
-    #[tool(name = "projectList", description = "ENVIRONMENT CHECK: List all available indexed projects. Use this if you don't know the `project_root` path yet.")]
+    #[tool(name = "projectList", description = "Lists all available indexed projects. Use this to discover project root paths before using other tools.")]
     async fn project_list(
         &self,
         Parameters(_): Parameters<ProjectListParams>,
@@ -347,18 +347,17 @@ impl rmcp::ServerHandler for ZebraMcpServer {
         let mut info = ServerInfo::default();
         info.instructions = Some(
             "CRITICAL: You are connected to the Zebra Tree Indexer. \
-             DO NOT GUESS OR HALLUCINATE code, file paths, or function names. \
-             You must extract exact information using these tools. \n\n\
-             WORKFLOW:\n\
-             1. DISCOVER: Always start with `search` (for natural language) \
-             or `projectMap` (for architecture overview). \n\
-             2. IDENTIFY: Pay close attention to the numeric `#ID` returned \
-             by these tools.\n\
-             3. DEEP DIVE: Use `readCode` passing the exact `#ID` wrapped in an array \
-             (e.g., [123] or [12, 45]) to read the actual source code.\n\
-             4. TRACE: Use `depTree` passing the `#ID` to find callers or callees.\n\n\
-             Rule: Never use `readCode` or `depTree` without first finding \
-             the correct `#ID`."
+             DO NOT GUESS OR HALLUCINATE code paths or symbol identifiers. \
+             You must extract information using this strict workflow:\n\n\
+             1. DISCOVER (Locate): Use `fileTree` to map the workspace and \
+             `search` to find relevant files or concepts.\n\
+             2. RESOLVE (Map): Use `projectMap` with a `pathGlob` targeting \
+             the specific file discovered in Step 1. This is the ONLY tool \
+             that provides the valid `#IDs` required for deep analysis.\n\
+             3. DEEP DIVE (Read): Use `readCode` with the specific `#IDs` \
+             obtained from the `projectMap`.\n\n\
+             Rule: Never attempt to read code or trace dependencies using \
+             identifiers you have not explicitly resolved via `projectMap`."
                 .into(),
         );
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
