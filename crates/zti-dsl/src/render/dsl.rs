@@ -15,6 +15,30 @@ Code AST. Use node #ID to fetch full code body.\n";
 const RUST_LEGEND: &str = "\
 Types: @=File, f=fn, m=method, s=struct, c=class/impl, t=trait, e=enum, v=var/field/variant, d=mod, k=const, y=typealias\n";
 
+// One-line legends used at the top of search output, scoped to the language
+// of the hits. They use the `Kind::short()` codes that the chunker actually
+// prepends to chunk bodies, so they describe exactly what the reader sees.
+pub const RUST_SEARCH_LEGEND: &str =
+    "# Rust: f#=fn m#=method s#=struct e#=enum t#=typealias c#=const/impl v#=static M#=mod .=field/variant X#=error";
+
+pub const TS_SEARCH_LEGEND: &str =
+    "# TypeScript: C#=class I#=interface f#=fn m#=method s#=struct e#=enum t#=typealias c#=const M#=module .=field";
+
+pub const DART_SEARCH_LEGEND: &str =
+    "# Dart: C#=class I#=interface f#=fn m#=method e#=enum t#=typealias c#=const M#=library";
+
+pub const SOLIDITY_SEARCH_LEGEND: &str =
+    "# Solidity: C#=contract I#=interface s#=struct e#=enum f#=function E#=event X#=error v#=storage c#=const .=field";
+
+pub fn lang_search_legend(lang: Language) -> &'static str {
+    match lang {
+        Language::Rust => RUST_SEARCH_LEGEND,
+        Language::Ts | Language::Tsx => TS_SEARCH_LEGEND,
+        Language::Dart => DART_SEARCH_LEGEND,
+        Language::Solidity => SOLIDITY_SEARCH_LEGEND,
+    }
+}
+
 /// O(N) once-per-index map: parent_id -> child ids. Used by render_symbol_rich
 /// so the siblings line is O(siblings) not O(all symbols). Children are sorted
 /// by line at build time so render_node and rich-header siblings consume them

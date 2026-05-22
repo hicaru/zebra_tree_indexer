@@ -65,8 +65,14 @@ impl Chunk {
 
     /// Text used by the embedding model and stored in `chunks.content`.
     /// One `String::with_capacity` allocation, no `format!` intermediate.
+    /// Emits a `KIND:` line (via `Kind::as_str`) so the embedding model gets
+    /// a natural-language signal for the symbol kind — without it, a trivial
+    /// associated `type Item = i16;` lands near the centroid of the embedding
+    /// space and matches arbitrary queries.
     pub fn embed_text(&self) -> Cow<'_, str> {
-        let mut out = String::with_capacity(self.rel_file.len() + self.body.len() + 32);
+        let kind = self.kind.as_str();
+        let mut out = String::with_capacity(self.rel_file.len() + self.body.len() + kind.len() + 40);
+        let _ = writeln!(out, "KIND: {}", kind);
         let _ = writeln!(out, "FILE: {} :{}-{}", self.rel_file, self.start_line, self.end_line);
         out.push_str(&self.body);
         Cow::Owned(out)
@@ -290,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn embed_text_emits_file_header_and_body() {
+    fn embed_text_emits_kind_file_header_and_body() {
         let c = Chunk {
             file: "/abs/src/foo.rs".to_string(),
             rel_file: "src/foo.rs".to_string(),
@@ -302,7 +308,28 @@ mod tests {
             kind: Kind::Function,
         };
         let txt = c.embed_text();
-        assert_eq!(&*txt, "FILE: src/foo.rs :10-12\nf#7 fn bar() {}");
+        assert_eq!(&*txt, "KIND: function\nFILE: src/foo.rs :10-12\nf#7 fn bar() {}");
+    }
+
+    #[test]
+    fn embed_text_kind_line_uses_kind_as_str() {
+        // Trivial associated type alias — without the KIND line its embedding
+        // sits near the centroid and crowds out real methods. The label here
+        // anchors it to a "typealias" region instead.
+        let c = Chunk {
+            file: "/abs/src/poly/rq.rs".to_string(),
+            rel_file: "src/poly/rq.rs".to_string(),
+            start_line: 348,
+            end_line: 348,
+            sym_id: 40,
+            body: "t#40     type Item = i16;".to_string(),
+            qualified: "Rq::Item".to_string(),
+            kind: Kind::TypeAlias,
+        };
+        let txt = c.embed_text();
+        assert!(txt.starts_with("KIND: typealias\n"), "got: {}", &*txt);
+        assert!(txt.contains("FILE: src/poly/rq.rs :348-348\n"));
+        assert!(txt.ends_with("t#40     type Item = i16;"));
     }
 
     #[test]

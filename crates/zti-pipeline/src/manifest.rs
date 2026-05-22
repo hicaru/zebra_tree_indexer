@@ -19,10 +19,7 @@ fn is_lock_file(name: &str) -> bool {
 /// `LICENSE.md`, `LICENSE.txt`, `LICENSE-MIT`, `LICENSE-APACHE-2.0`, …
 /// These are boilerplate; embedding them dilutes search results.
 fn is_license_file(name: &str) -> bool {
-    let stem = name
-        .split(|c: char| c == '.' || c == '-')
-        .next()
-        .unwrap_or(name);
+    let stem = name.split(['.', '-']).next().unwrap_or(name);
     stem.eq_ignore_ascii_case("LICENSE")
 }
 

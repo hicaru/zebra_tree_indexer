@@ -1,30 +1,110 @@
+use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, anyhow};
 
 use zti_ann::{AnnCache, AnnHandle, AnnIndexBuilder, SearchMethod, SearchParams};
 use zti_embed::EmbedEngine;
 use zti_rerank::TurboReranker;
-use zti_store::chunks_table::ChunkHit;
+use zti_store::chunks_table::{ChunkHit, ChunksTable};
 
-const KNN_OVERFETCH_MULT: usize = 4;
+const KNN_OVERFETCH_MULT: usize = 12;
 const DIVERSITY_PENALTY: f32 = 0.04;
 const KEYWORD_NAME_BOOST: f32 = 0.5;
 const KEYWORD_CONTENT_BOOST: f32 = 0.3;
+const MIN_WORD_LEN: usize = 3;
+
+/// Collect query word slices from an already-lowercased buffer. Splits on any
+/// non-alphanumeric byte (so `_` becomes a boundary too — keeps SQL `LIKE`
+/// patterns trivially safe without an `ESCAPE` clause). Words shorter than
+/// [`MIN_WORD_LEN`] are filtered out so noise tokens like `in`, `a`, `of`
+/// don't pollute the boost. Borrows from `lc` — caller keeps the buffer
+/// alive for the lifetime of the returned slices.
+fn split_query_words(lc: &str) -> Vec<&str> {
+    lc.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= MIN_WORD_LEN)
+        .collect()
+}
 
 #[inline]
-fn apply_keyword_boost(query: &str, candidates: &mut [ChunkHit]) {
-    if query.is_empty() {
+fn apply_keyword_boost(words: &[&str], candidates: &mut [ChunkHit]) {
+    if words.is_empty() {
         return;
     }
     for c in candidates {
-        if c.symbol_qualified.contains(query) {
-            c.score += KEYWORD_NAME_BOOST;
-        } else if c.content.contains(query) {
-            c.score += KEYWORD_CONTENT_BOOST;
+        let name_lc = lowercase_borrowed(&c.symbol_qualified);
+        let content_lc = lowercase_borrowed(&c.content);
+        for w in words {
+            if name_lc.contains(*w) {
+                c.score += KEYWORD_NAME_BOOST;
+            } else if content_lc.contains(*w) {
+                c.score += KEYWORD_CONTENT_BOOST;
+            }
         }
     }
+}
+
+/// `Cow::Borrowed` when `s` is already ASCII-lowercase (no allocation, the hot
+/// path for snake_case code identifiers); `Cow::Owned` when there is an
+/// uppercase byte we have to fold. We only ever lowercase once per candidate,
+/// not once per (candidate × word).
+#[inline]
+fn lowercase_borrowed(s: &str) -> Cow<'_, str> {
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(s.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
+/// Union lexical hits into the kNN candidate pool. Dedup by the 16-byte
+/// `chunk_id` prefix held on the stack (no `Vec` allocation per id). Moves
+/// `ChunkHit`s out of `additions` instead of cloning. Used by both `search`
+/// and `search_exhaustive` so the union logic lives in one place.
+fn merge_unique_by_chunk_id(candidates: &mut Vec<ChunkHit>, additions: Vec<ChunkHit>) {
+    if additions.is_empty() {
+        return;
+    }
+    let mut seen: HashSet<[u8; 16]> =
+        HashSet::with_capacity(candidates.len() + additions.len());
+    for c in candidates.iter() {
+        if c.chunk_id.len() >= 16 {
+            let mut id = [0u8; 16];
+            id.copy_from_slice(&c.chunk_id[..16]);
+            seen.insert(id);
+        }
+    }
+    candidates.reserve(additions.len());
+    for a in additions {
+        if a.chunk_id.len() < 16 {
+            continue;
+        }
+        let mut id = [0u8; 16];
+        id.copy_from_slice(&a.chunk_id[..16]);
+        if seen.insert(id) {
+            candidates.push(a);
+        }
+    }
+}
+
+/// Run the lexical leg of hybrid retrieval and merge it into the kNN pool.
+/// Shared by `search` and `search_exhaustive`. No-op when `words` is empty.
+async fn extend_with_lexical(
+    chunks_table: &ChunksTable,
+    candidates: &mut Vec<ChunkHit>,
+    words: &[&str],
+    opts: &SearchOpts<'_>,
+    k: usize,
+) -> Result<()> {
+    if words.is_empty() {
+        return Ok(());
+    }
+    let lex = chunks_table
+        .lexical_match(words, opts.languages, opts.path_glob, k)
+        .await?;
+    merge_unique_by_chunk_id(candidates, lex);
+    Ok(())
 }
 
 pub struct SearchOpts<'a> {
@@ -72,6 +152,9 @@ pub async fn search(
     let chunks_table = db.chunks_table(engine.dim()).await?;
     let raw_k = opts.limit.saturating_mul(KNN_OVERFETCH_MULT);
 
+    let query_lc = query.to_ascii_lowercase();
+    let words = split_query_words(&query_lc);
+
     let mut candidates: Vec<ChunkHit> = match params.method {
         SearchMethod::IvfHnswSq | SearchMethod::Flat => {
             chunks_table
@@ -106,7 +189,8 @@ pub async fn search(
         }
     };
 
-    apply_keyword_boost(query, &mut candidates);
+    extend_with_lexical(&chunks_table, &mut candidates, &words, opts, raw_k).await?;
+    apply_keyword_boost(&words, &mut candidates);
 
     let rerank_input: Vec<(&[u8], f32)> = candidates
         .iter()
@@ -157,13 +241,22 @@ pub async fn search_exhaustive(
     let query_emb = engine.embed_query_async(query).await?;
     let raw_k = opts.limit.saturating_mul(KNN_OVERFETCH_MULT);
 
-    let mut candidates = db
-        .chunks_table(engine.dim())
-        .await?
+    let chunks_table = db.chunks_table(engine.dim()).await?;
+    let query_lc = query.to_ascii_lowercase();
+    let words = split_query_words(&query_lc);
+
+    let mut candidates = chunks_table
         .knn_exhaustive(&query_emb, raw_k, opts.languages, opts.path_glob)
         .await?;
 
-    apply_keyword_boost(query, &mut candidates);
+    extend_with_lexical(&chunks_table, &mut candidates, &words, opts, raw_k).await?;
+    apply_keyword_boost(&words, &mut candidates);
+
+    // Sort by the boosted score so lexical hits surface — the previous
+    // implementation iterated in raw-cosine order and silently dropped the
+    // boost on output.
+    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+    candidates.truncate(opts.limit);
 
     let mut hits: Vec<Hit> = Vec::with_capacity(candidates.len());
     for c in candidates {
@@ -193,9 +286,107 @@ async fn rebuild(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::alloc_counting;
     use arrow::array::Float32Array;
     use std::sync::Mutex;
+
+    fn mk_chunk(chunk_id: [u8; 16], qualified: &str, content: &str) -> ChunkHit {
+        ChunkHit {
+            chunk_id: chunk_id.to_vec(),
+            file_path: "src/poly/rq.rs".into(),
+            symbol_qualified: qualified.into(),
+            symbol_kind: "method".into(),
+            sym_id: 0,
+            parent_sym_id: None,
+            appendix_sym_ids: Vec::with_capacity(0),
+            start_line: 1,
+            end_line: 1,
+            content: content.into(),
+            turbo_code: Vec::with_capacity(0),
+            score: 0.0,
+        }
+    }
+
+    #[test]
+    fn split_query_words_strips_short_words_and_punct() {
+        let lc = "invert poly in rq".to_ascii_lowercase();
+        let words = split_query_words(&lc);
+        // "in" is below MIN_WORD_LEN(3), "rq" is below too, only "invert"+"poly" survive.
+        assert_eq!(words, vec!["invert", "poly"]);
+    }
+
+    #[test]
+    fn split_query_words_splits_on_underscore_and_colon() {
+        let lc = "rq::mult_int".to_ascii_lowercase();
+        let words = split_query_words(&lc);
+        // `_` and `:` are both non-alphanumeric → boundaries. Tokens >=3 chars.
+        assert_eq!(words, vec!["mult", "int"]);
+    }
+
+    #[test]
+    fn keyword_boost_accumulates_per_word_on_name() {
+        let mut hits = vec![mk_chunk([1u8; 16], "Rq::recip", "let x = fq::recip(RATIO);")];
+        apply_keyword_boost(&["recip", "rq"], &mut hits);
+        // "recip" matches symbol_qualified → +0.5
+        // "rq"    matches symbol_qualified → +0.5
+        assert!((hits[0].score - 1.0).abs() < 1e-6, "got {}", hits[0].score);
+    }
+
+    #[test]
+    fn keyword_boost_falls_back_to_content_when_name_misses() {
+        let mut hits = vec![mk_chunk([1u8; 16], "PolyErrors", "let scale = recip(f[0]);")];
+        apply_keyword_boost(&["recip"], &mut hits);
+        // Not in name → use content boost (0.3), not name (0.5).
+        assert!((hits[0].score - KEYWORD_CONTENT_BOOST).abs() < 1e-6, "got {}", hits[0].score);
+    }
+
+    #[test]
+    fn keyword_boost_empty_words_is_noop() {
+        let mut hits = vec![mk_chunk([1u8; 16], "Anything", "anywhere")];
+        apply_keyword_boost(&[], &mut hits);
+        assert_eq!(hits[0].score, 0.0);
+    }
+
+    #[test]
+    fn lowercase_borrowed_avoids_alloc_when_already_lowercase() {
+        let s = "rq_recip_inverse";
+        let cow = lowercase_borrowed(s);
+        // No upper-case byte → must return Borrowed (zero allocation).
+        assert!(matches!(cow, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn lowercase_borrowed_owns_when_uppercase_present() {
+        let s = "Rq::Recip";
+        let cow = lowercase_borrowed(s);
+        assert!(matches!(cow, Cow::Owned(_)));
+        assert_eq!(&*cow, "rq::recip");
+    }
+
+    #[test]
+    fn merge_unique_by_chunk_id_dedups_and_moves() {
+        let mut existing = vec![
+            mk_chunk([1u8; 16], "a", ""),
+            mk_chunk([2u8; 16], "b", ""),
+        ];
+        let lex = vec![
+            mk_chunk([2u8; 16], "b-dup", ""), // dup by chunk_id
+            mk_chunk([3u8; 16], "c", ""),     // new
+        ];
+        merge_unique_by_chunk_id(&mut existing, lex);
+        assert_eq!(existing.len(), 3);
+        assert_eq!(existing[0].symbol_qualified, "a");
+        assert_eq!(existing[1].symbol_qualified, "b");
+        assert_eq!(existing[2].symbol_qualified, "c");
+    }
+
+    #[test]
+    fn merge_unique_by_chunk_id_empty_additions_is_noop() {
+        let mut existing = vec![mk_chunk([1u8; 16], "a", "")];
+        merge_unique_by_chunk_id(&mut existing, Vec::new());
+        assert_eq!(existing.len(), 1);
+    }
 
     // The `#[cfg(test)] #[global_allocator]` counter in `crate::alloc_counting`
     // is process-wide. The default `cargo test` harness runs the tests in this

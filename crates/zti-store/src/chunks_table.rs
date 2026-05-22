@@ -271,6 +271,80 @@ impl ChunksTable {
         Ok(hits)
     }
 
+    /// Lexical candidate fetch. For each entry in `words` (lowercased,
+    /// alphanumeric+`_`, len ≥ 3) OR-matches `LOWER(symbol_qualified) LIKE
+    /// '%w%'` and `LOWER(content) LIKE '%w%'`. Words that contain SQL
+    /// specials (`'`, `\`, `%`, `_`) are dropped — same policy as
+    /// [`glob_to_like`] — so no escape-handling code is duplicated here.
+    /// The language/path filter, if any, is AND-ed in via
+    /// [`build_lang_path_filter`].
+    ///
+    /// Used by `zti_pipeline::search::search` as the lexical leg of a hybrid
+    /// retrieval. Returns at most `k` rows. Score field on each `ChunkHit`
+    /// is set to `1.0` (no distance column on a non-vector query); the
+    /// keyword boost stage adds the per-word lift on top of that.
+    pub async fn lexical_match(
+        &self,
+        words: &[&str],
+        languages: Option<&[String]>,
+        path_glob: Option<&str>,
+        k: usize,
+    ) -> Result<Vec<ChunkHit>> {
+        if words.is_empty() || k == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut clauses = String::with_capacity(words.len() * 80);
+        let mut emitted: usize = 0;
+        for w in words {
+            if !word_is_sql_safe(w) {
+                continue;
+            }
+            if emitted > 0 {
+                clauses.push_str(" OR ");
+            }
+            let _ = write!(
+                clauses,
+                "(LOWER(symbol_qualified) LIKE '%{w}%' OR LOWER(content) LIKE '%{w}%')",
+            );
+            emitted += 1;
+        }
+        if emitted == 0 {
+            return Ok(Vec::new());
+        }
+
+        let predicate = match build_lang_path_filter(languages, path_glob) {
+            Some(lp) => {
+                let mut s = String::with_capacity(lp.len() + clauses.len() + 16);
+                s.push_str(&lp);
+                s.push_str(" AND (");
+                s.push_str(&clauses);
+                s.push(')');
+                s
+            }
+            None => clauses,
+        };
+
+        let results = self
+            .table
+            .query()
+            .only_if(predicate)
+            .limit(k)
+            .execute()
+            .await?;
+
+        let mut hits = Vec::with_capacity(k);
+        let mut stream = std::pin::pin!(results);
+        while let Some(batch) = stream.next().await {
+            decode_batch(&batch?, false, &mut hits);
+        }
+        // `decode_batch(.., has_distance=false, ..)` initialised `score = 1.0`
+        // for every row (1 - 0.0). That gives lexical-only hits a uniform
+        // baseline; the keyword boost stage lifts the ones whose query words
+        // actually hit name vs body.
+        Ok(hits)
+    }
+
     pub async fn len(&self) -> Result<usize> {
         Ok(self.table.count_rows(None).await?)
     }
@@ -401,6 +475,20 @@ fn glob_to_like(glob: &str) -> Option<String> {
     Some(pattern)
 }
 
+/// `true` iff `word` is safe to embed inside a SQL `LIKE '%…%'` predicate
+/// without further escaping. Mirrors [`glob_to_like`]'s reject-set so the
+/// caller never has to think about SQL escaping. Callers tokenize on
+/// `!c.is_alphanumeric() && c != '_'` upstream, so this is a defence-in-depth
+/// check rather than the primary filter.
+fn word_is_sql_safe(word: &str) -> bool {
+    if word.is_empty() {
+        return false;
+    }
+    !word
+        .bytes()
+        .any(|b| matches!(b, b'\'' | b'\\' | b'%' | b'_'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +506,22 @@ mod tests {
         assert!(glob_to_like(r"back\slash").is_none());
         assert!(glob_to_like("raw_underscore").is_none());
         assert!(glob_to_like("raw%percent").is_none());
+    }
+
+    #[test]
+    fn word_is_sql_safe_accepts_plain_alphanumeric() {
+        assert!(word_is_sql_safe("recip"));
+        assert!(word_is_sql_safe("rq"));
+        assert!(word_is_sql_safe("R3"));
+    }
+
+    #[test]
+    fn word_is_sql_safe_rejects_sql_specials() {
+        assert!(!word_is_sql_safe("' OR 1=1"));
+        assert!(!word_is_sql_safe(r"back\slash"));
+        assert!(!word_is_sql_safe("with_underscore"));
+        assert!(!word_is_sql_safe("with%percent"));
+        assert!(!word_is_sql_safe(""));
     }
 }
 
