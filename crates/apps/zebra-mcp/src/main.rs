@@ -1,6 +1,9 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::fmt::Write;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
@@ -8,16 +11,21 @@ use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
 use rmcp::{ErrorData, ServiceExt, tool};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing_subscriber::EnvFilter;
+use zti_common::format::format_elapsed;
 use zti_dsl::{
     AsciiTreeRenderer, ProjectIndex, build_index, render::dsl::DslRenderer,
     render::dsl::render_files_only,
 };
+use zti_ipc_client::Client;
+use zti_protocol::format_search_results;
+use zti_protocol::request::{DoctorReq, Request, SearchReq, SearchMode};
+use zti_protocol::response::{CheckStatus, Response};
 use zti_tree_sitter::{parse_kinds, parse_language};
 
 #[derive(Parser)]
-#[command(name = "zebra-mcp", about = "Zebra MCP server (DSL-only, stdio)")]
+#[command(name = "zebra-mcp", about = "Zebra MCP server (DSL + daemon IPC, stdio)")]
 struct Cli;
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -60,11 +68,34 @@ pub struct SymbolBodiesParams {
     pub symbol_ids: Vec<u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchParams {
+    pub project_root: String,
+    pub query: String,
+    pub limit: Option<usize>,
+    pub lang: Option<String>,
+    pub path_glob: Option<String>,
+    pub exhaustive: Option<bool>,
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DoctorParams {
+    pub project_root: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectListParams {}
+
+#[derive(Clone)]
 struct ZebraMcpServer {
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
     indexes: Arc<RwLock<HashMap<String, Arc<ProjectIndex>>>>,
+    daemon: Arc<Mutex<Option<Client>>>,
 }
 
 impl ZebraMcpServer {
@@ -72,6 +103,7 @@ impl ZebraMcpServer {
         Self {
             tool_router: Self::tool_router(),
             indexes: Arc::new(RwLock::new(HashMap::with_capacity(4))),
+            daemon: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -96,6 +128,21 @@ impl ZebraMcpServer {
                 Ok(idx)
             }
         }
+    }
+
+    async fn ensure_daemon(&self) -> Result<tokio::sync::MutexGuard<'_, Option<Client>>, ErrorData> {
+        let mut guard = self.daemon.lock().await;
+        if guard.is_none() {
+            let mut client = Client::connect(Duration::from_secs(10), None, None, None, None)
+                .await
+                .map_err(|e| internal_err(format!("daemon connect: {e}")))?;
+            client
+                .handshake()
+                .await
+                .map_err(|e| internal_err(format!("handshake: {e}")))?;
+            *guard = Some(client);
+        }
+        Ok(guard)
     }
 }
 
@@ -213,8 +260,113 @@ impl ZebraMcpServer {
 
         let mut out = String::with_capacity(entries.len() * 256);
         for entry in &entries {
-            use std::fmt::Write;
             let _ = writeln!(out, "{}\n---", entry);
+        }
+
+        Ok(ok_text(out))
+    }
+
+    #[tool(name = "search", description = "Semantic search across indexed code")]
+    async fn search(
+        &self,
+        Parameters(params): Parameters<SearchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mode = params
+            .mode
+            .as_deref()
+            .map(|m| m.parse::<SearchMode>().unwrap_or_default())
+            .unwrap_or_default();
+
+        let req = SearchReq {
+            project_root: params.project_root,
+            query: params.query,
+            limit: params.limit.unwrap_or(5),
+            offset: None,
+            languages: params
+                .lang
+                .map(|l| l.split(',').map(String::from).collect()),
+            path_glob: params.path_glob,
+            refresh_index: false,
+            exhaustive: params.exhaustive.unwrap_or(false),
+            mode,
+        };
+
+        let mut guard = self.ensure_daemon().await?;
+        let client = guard.as_mut().unwrap();
+
+        match client.request(Request::Search(req)).await {
+            Ok(Response::Search(Ok(results))) => Ok(ok_text(format_search_results(&results))),
+            Ok(Response::Search(Err(e))) => Err(internal_err(e.message)),
+            Ok(other) => Err(internal_err(format!("unexpected: {other:?}"))),
+            Err(e) => {
+                *guard = None;
+                Err(internal_err(format!("IPC lost, retry: {e}")))
+            }
+        }
+    }
+
+    #[tool(name = "doctor", description = "Run diagnostics on the embedding engine and project DB")]
+    async fn doctor(
+        &self,
+        Parameters(params): Parameters<DoctorParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let req = DoctorReq {
+            project_root: params.project_root,
+        };
+
+        let mut guard = self.ensure_daemon().await?;
+        let client = guard.as_mut().unwrap();
+
+        match client.request(Request::Doctor(req)).await {
+            Ok(Response::Doctor(Ok(report))) => {
+                let mut out = String::with_capacity(256 + report.checks.len() * 64);
+                let _ = writeln!(out, "Device: {}", report.device);
+                for check in &report.checks {
+                    let marker = match check.status {
+                        CheckStatus::Ok => "OK",
+                        CheckStatus::Warn => "WARN",
+                        CheckStatus::Err => "ERR",
+                    };
+                    let _ = writeln!(out, "[{}] {}: {}", marker, check.name, check.message);
+                }
+                Ok(ok_text(out))
+            }
+            Ok(Response::Doctor(Err(e))) => Err(internal_err(e.message)),
+            Ok(other) => Err(internal_err(format!("unexpected: {other:?}"))),
+            Err(e) => {
+                *guard = None;
+                Err(internal_err(format!("IPC lost, retry: {e}")))
+            }
+        }
+    }
+
+    #[tool(name = "projectList", description = "List all indexed projects")]
+    async fn project_list(
+        &self,
+        Parameters(_): Parameters<ProjectListParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let projects = zti_store::list_projects()
+            .await
+            .map_err(|e| internal_err(format!("list_projects: {e}")))?;
+
+        if projects.is_empty() {
+            return Ok(ok_text(String::from("No indexed projects found.")));
+        }
+
+        let mut out = String::with_capacity(projects.len() * 128);
+        out.push_str("| Project | Model | Chunks | Files | Last Indexed |\n");
+        out.push_str("|---------|-------|--------|-------|-------------|\n");
+        for p in &projects {
+            let name = std::path::Path::new(&p.root_path)
+                .file_name()
+                .map(|s| s.to_string_lossy())
+                .unwrap_or_else(|| Cow::Borrowed(&p.root_path));
+            let ago = format_elapsed(p.last_indexed_ns);
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {} | {} |",
+                name, p.model_id, p.total_chunks, p.total_files, ago
+            );
         }
 
         Ok(ok_text(out))
@@ -226,8 +378,9 @@ impl rmcp::ServerHandler for ZebraMcpServer {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
         info.instructions = Some(
-            "Zebra Tree Indexer MCP server (DSL-only). Use fileTree, projectMap, depTree, \
-              symbolBody, symbolBodies for AST graph queries."
+            "Zebra Tree Indexer MCP server. Tools: fileTree, projectMap, depTree, \
+             symbolBody, symbolBodies (DSL graph queries); search, doctor, projectList \
+             (daemon IPC)."
                 .into(),
         );
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
