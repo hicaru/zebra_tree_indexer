@@ -1,13 +1,9 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::Path;
 
-use zti_dsl::lang_search_legend;
 use zti_protocol::request::SearchReq;
 use zti_protocol::response::{Response, SearchHit, SearchResults};
 use zti_rerank::TurboReranker;
 use zti_store::chunks_table::ChunkHit;
-use zti_tree_sitter::detect_from_path;
 
 use crate::handlers::with_project;
 use crate::state::DaemonState;
@@ -97,12 +93,10 @@ pub async fn handle(req: &SearchReq, state: &DaemonState) -> Response {
         };
 
         let total = search_hits.len();
-        let legend = build_legend(&search_hits, &appendix);
 
         Ok(SearchResults {
             hits: search_hits,
             appendix,
-            legend,
             total,
         })
     })
@@ -111,51 +105,6 @@ pub async fn handle(req: &SearchReq, state: &DaemonState) -> Response {
     Response::Search(result)
 }
 
-/// Emit one legend line per programming language that appears in the result
-/// set. Single-language responses borrow a `&'static str` (zero allocation);
-/// multi-language responses build one `String` joined by `\n`. Dedup keys are
-/// pointer-equal `&'static str` legends, so `Ts`+`Tsx` collapse to one line.
-fn build_legend(hits: &[SearchHit], appendix: &[SearchHit]) -> Cow<'static, str> {
-    let mut legends: Vec<&'static str> = Vec::with_capacity(2);
-
-    let mut push_for = |path: &str| {
-        if let Some(lang) = detect_from_path(Path::new(path)) {
-            let leg = lang_search_legend(lang);
-            if !legends.iter().any(|l| std::ptr::eq(*l, leg)) {
-                legends.push(leg);
-            }
-        }
-    };
-
-    for h in hits {
-        push_for(&h.file_path);
-    }
-    for h in appendix {
-        push_for(&h.file_path);
-    }
-
-    match legends.as_slice() {
-        [] => Cow::Borrowed(""),
-        [only] => Cow::Borrowed(*only),
-        many => {
-            let cap = many.iter().map(|l| l.len() + 1).sum::<usize>();
-            let mut out = String::with_capacity(cap);
-            for (i, line) in many.iter().enumerate() {
-                if i > 0 {
-                    out.push('\n');
-                }
-                out.push_str(line);
-            }
-            Cow::Owned(out)
-        }
-    }
-}
-
-/// Consume a `ChunkHit` and produce the wire-format `SearchHit`. All heap
-/// fields (`chunk_id`, `symbol_qualified`, `symbol_kind`, `content`) are moved
-/// — no `.clone()`. `file_path` is rewritten in place: the project-root
-/// prefix and any leading slashes are removed via `String::drain` so the
-/// existing heap allocation is reused.
 fn chunk_to_hit(mut c: ChunkHit, score: f32, project_root: &str) -> SearchHit {
     if c.file_path.starts_with(project_root) {
         c.file_path.drain(..project_root.len());

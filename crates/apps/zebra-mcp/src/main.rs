@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -11,8 +11,8 @@ use rmcp::{ErrorData, ServiceExt, tool};
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 use zti_dsl::{
-    AsciiTreeRenderer, ProjectIndex, build_index, render::dsl::render_files_only,
-    render::dsl::DslRenderer,
+    AsciiTreeRenderer, ProjectIndex, build_index, render::dsl::DslRenderer,
+    render::dsl::render_files_only,
 };
 use zti_tree_sitter::{parse_kinds, parse_language};
 
@@ -131,9 +131,7 @@ impl ZebraMcpServer {
 
         let file_filter: Option<Vec<u16>> = params.language.as_ref().and_then(|l| {
             let lang = parse_language(l)?;
-            Some(
-                zti_dsl::files_by_language(&index.files, lang),
-            )
+            Some(zti_dsl::files_by_language(&index.files, lang))
         });
 
         let kind_filter = params.kinds.as_ref().map(|k| parse_kinds(k));

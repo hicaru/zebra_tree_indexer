@@ -61,10 +61,7 @@ pub struct Changes {
 pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
     let mut map = HashMap::new();
 
-    let walker = WalkBuilder::new(root)
-        .hidden(true)
-        .git_ignore(true)
-        .build();
+    let walker = WalkBuilder::new(root).hidden(true).git_ignore(true).build();
 
     for entry in walker {
         let entry = match entry {

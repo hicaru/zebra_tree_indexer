@@ -150,7 +150,7 @@ pub async fn index_project(
 
     let chunk_sym_set: HashSet<u32> = all_pending
         .iter()
-        .filter(|(c, _)| !c.is_document())
+        .filter(|(c, _)| c.sym_id != u32::MAX)
         .map(|(c, _)| c.sym_id)
         .collect();
 
@@ -204,14 +204,9 @@ pub async fn index_project(
 
     // Tokenize all chunks once, then sort by token length so each batch's
     // dynamic padding in `prepare_from_encs` stays tight (no long chunk
-    // forcing short batch-mates to pad up to its length). The formatted
-    // `embed_text` strings are dropped right after tokenization — the model
-    // only ever sees the encoded ids/mask, not the source text.
+    // forcing short batch-mates to pad up to its length).
     let encs: Vec<zti_embed::Tokenized> = {
-        let mut bodies: Vec<String> = Vec::with_capacity(all_pending.len());
-        bodies.extend(all_pending.iter().map(|(c, _)| c.embed_text().into_owned()));
-        let mut refs: Vec<&str> = Vec::with_capacity(bodies.len());
-        refs.extend(bodies.iter().map(String::as_str));
+        let refs: Vec<&str> = all_pending.iter().map(|(c, _)| c.body.as_str()).collect();
         engine.tokenize(&refs)?
     };
 
@@ -236,7 +231,9 @@ pub async fn index_project(
     // BATCH_CEILING so very short chunks don't inflate the working set just
     // because the token budget allows it.
     let budget_tokens = batch_size.saturating_mul(zti_embed::batch::TYPICAL_SEQ_LEN);
-    let max_items = batch_size.saturating_mul(4).min(zti_embed::batch::BATCH_CEILING);
+    let max_items = batch_size
+        .saturating_mul(4)
+        .min(zti_embed::batch::BATCH_CEILING);
 
     // Reusable per-batch view into `encs` (no per-batch allocation: cleared
     // and refilled with references each iteration).
@@ -250,9 +247,7 @@ pub async fn index_project(
             let l = effective_len(order[end]);
             let new_pad = pad_len.max(l);
             let count = end - cursor + 1;
-            if count > 1
-                && (count.saturating_mul(new_pad) > budget_tokens || count > max_items)
-            {
+            if count > 1 && (count.saturating_mul(new_pad) > budget_tokens || count > max_items) {
                 break;
             }
             pad_len = new_pad;
@@ -321,7 +316,7 @@ pub async fn index_project(
                         }
                     };
 
-                    let parent_sym_id = if chunk.is_document() {
+                    let parent_sym_id = if chunk.sym_id == u32::MAX {
                         None
                     } else {
                         dsl_index
@@ -329,7 +324,7 @@ pub async fn index_project(
                             .get(chunk.sym_id as usize)
                             .and_then(|s| s.parent)
                     };
-                    let appendix_ids: Vec<u32> = if chunk.is_document() {
+                    let appendix_ids: Vec<u32> = if chunk.sym_id == u32::MAX {
                         Vec::new()
                     } else {
                         appendix_for(chunk.sym_id)

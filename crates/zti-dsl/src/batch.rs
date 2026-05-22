@@ -1,15 +1,12 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use zti_common::dsl::SymbolBodyEntry;
 
 use crate::chunking::find_doc_start_line;
 use crate::model::ProjectIndex;
 
-pub fn resolve_symbol_bodies(
-    index: &ProjectIndex,
-    symbol_ids: &[u32],
-) -> Vec<SymbolBodyEntry> {
+pub fn resolve_symbol_bodies(index: &ProjectIndex, symbol_ids: &[u32]) -> Vec<SymbolBodyEntry> {
     let mut entries = Vec::with_capacity(symbol_ids.len());
     let mut file_cache: HashMap<u16, Result<String, String>> =
         HashMap::with_capacity(symbol_ids.len());

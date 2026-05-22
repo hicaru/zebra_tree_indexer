@@ -22,8 +22,10 @@ pub async fn handle(req: &SymbolBodyReq, state: &DaemonState) -> Response {
                 body,
                 ..
             }) => {
-                let text =
-                    format!("{}#{} : {}-{}\n{}", kind_short, symbol_id, start_line, end_line, body);
+                let text = format!(
+                    "{}#{} : {}-{}\n{}",
+                    kind_short, symbol_id, start_line, end_line, body
+                );
                 Ok(SymbolBodyBody { text })
             }
             Some(SymbolBodyEntry::Err { message, .. }) => Err(anyhow::anyhow!(message)),

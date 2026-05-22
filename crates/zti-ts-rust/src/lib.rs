@@ -296,10 +296,18 @@ mod tests {
         "#};
         let (symbols, _, _) = parse_rust(source);
         let recip = symbols.iter().find(|s| s.name == "recip");
-        assert!(recip.is_some(), "recip with const generic should be found, symbols: {symbols:?}");
+        assert!(
+            recip.is_some(),
+            "recip with const generic should be found, symbols: {symbols:?}"
+        );
         let r = recip.unwrap();
         assert_eq!(r.kind, Kind::Method);
-        assert!(r.doc.as_ref().is_some_and(|d| d.contains("Computes the inverse")),
-            "doc comment should be extracted, got: {:?}", r.doc);
+        assert!(
+            r.doc
+                .as_ref()
+                .is_some_and(|d| d.contains("Computes the inverse")),
+            "doc comment should be extracted, got: {:?}",
+            r.doc
+        );
     }
 }

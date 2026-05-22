@@ -66,8 +66,7 @@ fn merge_unique_by_chunk_id(candidates: &mut Vec<ChunkHit>, additions: Vec<Chunk
     if additions.is_empty() {
         return;
     }
-    let mut seen: HashSet<[u8; 16]> =
-        HashSet::with_capacity(candidates.len() + additions.len());
+    let mut seen: HashSet<[u8; 16]> = HashSet::with_capacity(candidates.len() + additions.len());
     for c in candidates.iter() {
         if c.chunk_id.len() >= 16 {
             let mut id = [0u8; 16];
@@ -326,7 +325,11 @@ mod tests {
 
     #[test]
     fn keyword_boost_accumulates_per_word_on_name() {
-        let mut hits = vec![mk_chunk([1u8; 16], "Rq::recip", "let x = fq::recip(RATIO);")];
+        let mut hits = vec![mk_chunk(
+            [1u8; 16],
+            "Rq::recip",
+            "let x = fq::recip(RATIO);",
+        )];
         apply_keyword_boost(&["recip", "rq"], &mut hits);
         // "recip" matches symbol_qualified → +0.5
         // "rq"    matches symbol_qualified → +0.5
@@ -335,10 +338,18 @@ mod tests {
 
     #[test]
     fn keyword_boost_falls_back_to_content_when_name_misses() {
-        let mut hits = vec![mk_chunk([1u8; 16], "PolyErrors", "let scale = recip(f[0]);")];
+        let mut hits = vec![mk_chunk(
+            [1u8; 16],
+            "PolyErrors",
+            "let scale = recip(f[0]);",
+        )];
         apply_keyword_boost(&["recip"], &mut hits);
         // Not in name → use content boost (0.3), not name (0.5).
-        assert!((hits[0].score - KEYWORD_CONTENT_BOOST).abs() < 1e-6, "got {}", hits[0].score);
+        assert!(
+            (hits[0].score - KEYWORD_CONTENT_BOOST).abs() < 1e-6,
+            "got {}",
+            hits[0].score
+        );
     }
 
     #[test]
@@ -366,10 +377,7 @@ mod tests {
 
     #[test]
     fn merge_unique_by_chunk_id_dedups_and_moves() {
-        let mut existing = vec![
-            mk_chunk([1u8; 16], "a", ""),
-            mk_chunk([2u8; 16], "b", ""),
-        ];
+        let mut existing = vec![mk_chunk([1u8; 16], "a", ""), mk_chunk([2u8; 16], "b", "")];
         let lex = vec![
             mk_chunk([2u8; 16], "b-dup", ""), // dup by chunk_id
             mk_chunk([3u8; 16], "c", ""),     // new

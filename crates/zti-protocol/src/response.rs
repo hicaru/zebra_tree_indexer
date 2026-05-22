@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,7 +40,6 @@ pub struct SearchHit {
 pub struct SearchResults {
     pub hits: Vec<SearchHit>,
     pub appendix: Vec<SearchHit>,
-    pub legend: Cow<'static, str>,
     pub total: usize,
 }
 

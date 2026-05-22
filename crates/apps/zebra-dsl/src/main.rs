@@ -4,7 +4,6 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use zti_dsl::chunking::DslChunker;
 use zti_dsl::render::dsl::{DslRenderer, render_files_only};
 use zti_dsl::render::tree::AsciiTreeRenderer;
 use zti_tree_sitter::{parse_kinds, parse_language};
@@ -68,18 +67,6 @@ enum Commands {
     SymbolBodies {
         #[arg(short, long, num_args(1..), help = "Symbol IDs")]
         ids: Vec<u32>,
-    },
-    #[command(about = "Show chunks in embed or display format")]
-    Chunks {
-        #[arg(short, long, help = "File path relative to root (omit for all files)")]
-        file: Option<String>,
-        #[arg(
-            long,
-            help = "Use embed format (header-body-header) instead of display format"
-        )]
-        embed: bool,
-        #[arg(long, help = "Show template (manifest + legend) without chunking")]
-        template: bool,
     },
 }
 
@@ -170,49 +157,6 @@ fn main() -> Result<()> {
             let entries = zti_dsl::resolve_symbol_bodies(&index, &ids);
             for entry in &entries {
                 println!("{}\n---", entry);
-            }
-        }
-        Commands::Chunks {
-            file,
-            embed,
-            template,
-        } => {
-            let mut preamble = String::with_capacity(8192);
-            zti_dsl::chunking::write_preamble(&index, &mut preamble);
-
-            if template {
-                print!("{}", preamble);
-                return Ok(());
-            }
-
-            let chunker = DslChunker::new(&index);
-            print!("{}", preamble);
-
-            let files: Vec<(String, String)> = match &file {
-                Some(path) => {
-                    let full = cli.root.join(path);
-                    vec![(full.display().to_string(), std::fs::read_to_string(&full)?)]
-                }
-                None => {
-                    let mut v = Vec::with_capacity(index.files.len());
-                    for f in &index.files {
-                        if let Ok(c) = std::fs::read_to_string(&f.path) {
-                            v.push((f.path.clone(), c));
-                        }
-                    }
-                    v
-                }
-            };
-
-            for (label, content) in &files {
-                for chunk in chunker.chunks_for_file(label, content) {
-                    if embed {
-                        println!("{}", chunk.embed_text());
-                    } else {
-                        println!("{}", chunk.display_text());
-                    }
-                    println!("---");
-                }
             }
         }
     }

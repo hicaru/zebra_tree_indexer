@@ -1,16 +1,13 @@
-use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use zti_common::line_byte_range;
-use zti_tree_sitter::Language;
 use zti_ts_core::types::Kind;
 
 use crate::model::ProjectIndex;
-use crate::render::dsl::{AST_HEADER, lang_label, lang_legend, load_manifest_content};
+use crate::render::dsl::load_manifest_content;
 
 pub fn find_manifest(root: &Path) -> Option<String> {
     crate::index::MANIFEST_NAMES.iter().find_map(|name| {
@@ -19,28 +16,12 @@ pub fn find_manifest(root: &Path) -> Option<String> {
     })
 }
 
-/// Writes the project-map-style preamble (AST_HEADER + all manifests +
-/// per-language section headers) into `out`. Used once at the top of
-/// `zebra-dsl chunks` output so the preamble is not duplicated per chunk.
 pub fn write_preamble(index: &ProjectIndex, out: &mut String) {
-    out.push_str(AST_HEADER);
-    out.push('\n');
-
     for rel in &index.manifest_paths {
         if let Some(content) = load_manifest_content(&index.root, rel) {
             let _ = writeln!(out, "@ {}\n{}", rel, content);
             out.push('\n');
         }
-    }
-
-    let mut by_label: BTreeMap<&'static str, Language> = BTreeMap::new();
-    for file in &index.files {
-        by_label.entry(lang_label(file.language)).or_insert(file.language);
-    }
-    for (label, lang) in &by_label {
-        let _ = writeln!(out, "## {}", label);
-        out.push_str(lang_legend(*lang));
-        out.push('\n');
     }
 }
 
@@ -54,37 +35,6 @@ pub struct Chunk {
     pub body: String,
     pub qualified: String,
     pub kind: Kind,
-}
-
-impl Chunk {
-    pub const DOCUMENT_SYM_ID: u32 = u32::MAX;
-
-    pub fn is_document(&self) -> bool {
-        self.sym_id == Self::DOCUMENT_SYM_ID
-    }
-
-    /// Text used by the embedding model and stored in `chunks.content`.
-    /// One `String::with_capacity` allocation, no `format!` intermediate.
-    /// Emits a `KIND:` line (via `Kind::as_str`) so the embedding model gets
-    /// a natural-language signal for the symbol kind — without it, a trivial
-    /// associated `type Item = i16;` lands near the centroid of the embedding
-    /// space and matches arbitrary queries.
-    pub fn embed_text(&self) -> Cow<'_, str> {
-        let kind = self.kind.as_str();
-        let mut out = String::with_capacity(self.rel_file.len() + self.body.len() + kind.len() + 40);
-        let _ = writeln!(out, "KIND: {}", kind);
-        let _ = writeln!(out, "FILE: {} :{}-{}", self.rel_file, self.start_line, self.end_line);
-        out.push_str(&self.body);
-        Cow::Owned(out)
-    }
-
-    /// Same as `embed_text` (the body already contains the kind#id tag on the
-    /// signature line and any preceding doc comments). Kept as a distinct
-    /// method so the CLI display path can diverge later without touching the
-    /// embedding format.
-    pub fn display_text(&self) -> Cow<'_, str> {
-        self.embed_text()
-    }
 }
 
 pub struct DslChunker<'a> {
@@ -159,16 +109,10 @@ impl<'a> DslChunker<'a> {
         }
         let raw = &source[range];
 
-        // Single pass over body bytes: emit each line, prepend `<kind>#<id> `
-        // to the signature line. No alloc beyond the final body String.
-        let mut body = String::with_capacity(raw.len() + 16);
-        let sig_offset = (sym.line - doc_start) as usize;
+        let mut body = String::with_capacity(raw.len());
         for (i, line) in raw.split('\n').enumerate() {
             if i > 0 {
                 body.push('\n');
-            }
-            if i == sig_offset {
-                let _ = write!(body, "{}#{} ", sym.kind.short(), sym.id);
             }
             body.push_str(line);
         }
@@ -237,7 +181,7 @@ pub fn chunk_text_file(rel_path: String, full_path: String, content: String) -> 
         rel_file: rel_path,
         start_line: 1,
         end_line,
-        sym_id: Chunk::DOCUMENT_SYM_ID,
+        sym_id: u32::MAX,
         body: content,
         qualified: String::new(),
         kind: Kind::Document,
@@ -296,53 +240,15 @@ mod tests {
     }
 
     #[test]
-    fn embed_text_emits_kind_file_header_and_body() {
-        let c = Chunk {
-            file: "/abs/src/foo.rs".to_string(),
-            rel_file: "src/foo.rs".to_string(),
-            start_line: 10,
-            end_line: 12,
-            sym_id: 7,
-            body: "f#7 fn bar() {}".to_string(),
-            qualified: "foo::bar".to_string(),
-            kind: Kind::Function,
-        };
-        let txt = c.embed_text();
-        assert_eq!(&*txt, "KIND: function\nFILE: src/foo.rs :10-12\nf#7 fn bar() {}");
-    }
-
-    #[test]
-    fn embed_text_kind_line_uses_kind_as_str() {
-        // Trivial associated type alias — without the KIND line its embedding
-        // sits near the centroid and crowds out real methods. The label here
-        // anchors it to a "typealias" region instead.
-        let c = Chunk {
-            file: "/abs/src/poly/rq.rs".to_string(),
-            rel_file: "src/poly/rq.rs".to_string(),
-            start_line: 348,
-            end_line: 348,
-            sym_id: 40,
-            body: "t#40     type Item = i16;".to_string(),
-            qualified: "Rq::Item".to_string(),
-            kind: Kind::TypeAlias,
-        };
-        let txt = c.embed_text();
-        assert!(txt.starts_with("KIND: typealias\n"), "got: {}", &*txt);
-        assert!(txt.contains("FILE: src/poly/rq.rs :348-348\n"));
-        assert!(txt.ends_with("t#40     type Item = i16;"));
-    }
-
-    #[test]
     fn chunk_text_file_counts_lines() {
         let c = chunk_text_file(
             "README.md".to_string(),
             "/abs/README.md".to_string(),
             "# Title\n\nSecond para\n".to_string(),
         );
-        assert!(c.is_document());
+        assert_eq!(c.kind, Kind::Document);
         assert_eq!(c.start_line, 1);
         assert_eq!(c.end_line, 4);
-        assert_eq!(c.kind, Kind::Document);
     }
 
     #[test]
