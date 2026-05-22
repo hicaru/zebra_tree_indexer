@@ -3,7 +3,7 @@ use lancedb::connect;
 
 use crate::chunks_table::ChunksTable;
 use crate::files_table::FilesTable;
-use crate::projects_table::ProjectsTable;
+use crate::projects_table::{ProjectRow, ProjectsTable};
 
 #[derive(Clone)]
 pub struct Db {
@@ -58,4 +58,45 @@ impl Db {
     pub async fn projects_table(&self) -> Result<ProjectsTable> {
         ProjectsTable::open(&self.db).await
     }
+}
+
+pub async fn list_projects() -> Result<Vec<ProjectRow>> {
+    let data = zti_common::paths::data_dir()?;
+    let projects_dir = data.join("projects");
+    if !projects_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let dir_entries: Vec<_> = std::fs::read_dir(&projects_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .collect();
+
+    let mut entries = Vec::with_capacity(dir_entries.len());
+    for entry in dir_entries {
+        let lance_dir = entry.path().join("lance");
+        if !lance_dir.is_dir() {
+            continue;
+        }
+
+        let db = connect(
+            lance_dir
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid path"))?,
+        )
+        .execute()
+        .await?;
+
+        let table_names = db.table_names().execute().await?;
+        if !table_names.iter().any(|n| n == "projects") {
+            continue;
+        }
+
+        let pt = ProjectsTable::open(&db).await?;
+        let rows = pt.list().await?;
+        entries.extend(rows);
+    }
+
+    entries.sort_by(|a, b| a.root_path.cmp(&b.root_path));
+    Ok(entries)
 }

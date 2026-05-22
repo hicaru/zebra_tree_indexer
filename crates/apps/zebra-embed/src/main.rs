@@ -87,6 +87,8 @@ enum Commands {
         #[arg(short, long)]
         root: PathBuf,
     },
+    #[command(about = "List all indexed projects")]
+    Projects,
 }
 
 /// Connect to the daemon (auto-spawning if needed) and complete the mandatory
@@ -109,6 +111,29 @@ fn canon(p: &Path) -> Result<String> {
 
 fn canon_opt(p: Option<PathBuf>) -> Result<Option<String>> {
     p.map(|r| canon(&r)).transpose()
+}
+
+fn format_elapsed(ns: u64) -> String {
+    if ns == 0 {
+        return String::from("never");
+    }
+    let now_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let diff = now_ns.saturating_sub(ns / 1_000_000_000);
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 3600;
+    const DAY: u64 = 86400;
+    if diff < MINUTE {
+        format!("{diff}s ago")
+    } else if diff < HOUR {
+        format!("{}m ago", diff / MINUTE)
+    } else if diff < DAY {
+        format!("{}h ago", diff / HOUR)
+    } else {
+        format!("{}d ago", diff / DAY)
+    }
 }
 
 #[tokio::main]
@@ -340,6 +365,27 @@ async fn main() -> Result<()> {
                 Response::RemoveProject(Err(e)) => eprintln!("Error: {}", e.message),
                 other => eprintln!("Unexpected response: {:?}", other),
             }
+        }
+        Commands::Projects => {
+            let projects = zti_store::list_projects().await?;
+            if projects.is_empty() {
+                println!("No indexed projects found.");
+                return Ok(());
+            }
+            println!("| Project | Model | Chunks | Files | Last Indexed |");
+            println!("|---------|-------|--------|-------|-------------|");
+            for p in &projects {
+                let name = Path::new(&p.root_path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_else(|| std::borrow::Cow::Borrowed(&p.root_path));
+                let ago = format_elapsed(p.last_indexed_ns);
+                println!(
+                    "| {} | {} | {} | {} | {} |",
+                    name, p.model_id, p.total_chunks, p.total_files, ago
+                );
+            }
+            println!("\n{} project(s)", projects.len());
         }
     }
 
