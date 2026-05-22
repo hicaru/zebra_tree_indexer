@@ -56,14 +56,7 @@ pub struct DepTreeParams {
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct SymbolBodyParams {
-    pub project_root: String,
-    pub symbol_id: u32,
-}
-
-#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SymbolBodiesParams {
+pub struct ReadCodeParams {
     pub project_root: String,
     pub symbol_ids: Vec<u32>,
 }
@@ -183,16 +176,20 @@ impl ZebraMcpServer {
         let index = self.get_index(&params.project_root).await?;
         let max_tokens = params.max_tokens.unwrap_or(8000);
 
-        let file_filter: Option<Vec<u16>> = params.language.as_ref().and_then(|l| {
-            let lang = parse_language(l)?;
-            Some(zti_dsl::files_by_language(&index.files, lang))
-        });
+        let lang = params.language.as_deref().and_then(parse_language);
+        let file_filter = zti_dsl::filter_files(
+            &index.files,
+            &index.root,
+            params.path_glob.as_deref(),
+            lang,
+        )
+        .map_err(internal_err)?;
 
         let kind_filter = params.kinds.as_ref().map(|k| parse_kinds(k));
 
         let renderer = DslRenderer::new(&index, max_tokens);
-        let mut out = renderer.render(file_filter.as_deref(), kind_filter.as_deref());
-        out.push_str("\n\n[SYSTEM HINT: To read any symbol's source code, use `symbolBody` with its #ID. To trace dependencies, use `depTree`.]");
+        let mut out = renderer.render(Some(&file_filter), kind_filter.as_deref());
+        out.push_str("\n\n[SYSTEM HINT: To read source code, use `readCode` with the #ID wrapped in an array (e.g. [ID]). To trace dependencies, use `depTree`.]");
         Ok(ok_text(out))
     }
 
@@ -218,44 +215,10 @@ impl ZebraMcpServer {
         Ok(ok_text(text))
     }
 
-    #[tool(name = "symbolBody", description = "READ CODE: Once you find a symbol #ID using `search` or `projectMap`, use this tool to read its exact, full source code. Never guess the ID.")]
-    async fn symbol_body(
+    #[tool(name = "readCode", description = "READ CODE: Fetches exact source code. Pass an array of ONE OR MORE #IDs (e.g. [204] or [12, 45, 99]). RULE: You MUST obtain the #IDs from `search` or `projectMap` first. NEVER guess IDs.")]
+    async fn read_code(
         &self,
-        Parameters(params): Parameters<SymbolBodyParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let index = self.get_index(&params.project_root).await?;
-        let entries = zti_dsl::resolve_symbol_bodies(&index, &[params.symbol_id]);
-
-        let text = match entries.first() {
-            Some(zti_common::dsl::SymbolBodyEntry::Ok {
-                kind_short,
-                symbol_id,
-                start_line,
-                end_line,
-                body,
-                ..
-            }) => format!(
-                "{}#{} : {}-{}\n{}",
-                kind_short, symbol_id, start_line, end_line, body
-            ),
-            Some(zti_common::dsl::SymbolBodyEntry::Err { message, .. }) => {
-                return Err(internal_err(message.clone()));
-            }
-            None => {
-                return Err(internal_err(format!(
-                    "Symbol {} not found",
-                    params.symbol_id
-                )));
-            }
-        };
-
-        Ok(ok_text(text))
-    }
-
-    #[tool(name = "symbolBodies", description = "Bulk read multiple source code blocks. Pass an array of known symbol #IDs to read them all at once contextually.")]
-    async fn symbol_bodies(
-        &self,
-        Parameters(params): Parameters<SymbolBodiesParams>,
+        Parameters(params): Parameters<ReadCodeParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let index = self.get_index(&params.project_root).await?;
         let entries = zti_dsl::resolve_symbol_bodies(&index, &params.symbol_ids);
@@ -297,7 +260,7 @@ impl ZebraMcpServer {
         match client.request(Request::Search(req)).await {
             Ok(Response::Search(Ok(results))) => {
                 let mut out = format_search_results(&results);
-                out.push_str("\n\n[SYSTEM HINT: To read the full code for any result, use `symbolBody` with its #ID. To trace where it's used, use `depTree` with direction 'callers'.]");
+                out.push_str("\n\n[SYSTEM HINT: To read the full code for any result, use `readCode` with the #ID wrapped in an array (e.g. [ID]). To trace where it's used, use `depTree` with direction 'callers'.]");
                 Ok(ok_text(out))
             }
             Ok(Response::Search(Err(e))) => Err(internal_err(e.message)),
@@ -391,10 +354,10 @@ impl rmcp::ServerHandler for ZebraMcpServer {
              or `projectMap` (for architecture overview). \n\
              2. IDENTIFY: Pay close attention to the numeric `#ID` returned \
              by these tools.\n\
-             3. DEEP DIVE: Use `symbolBody` passing the exact `#ID` to read \
-             the actual source code.\n\
+             3. DEEP DIVE: Use `readCode` passing the exact `#ID` wrapped in an array \
+             (e.g., [123] or [12, 45]) to read the actual source code.\n\
              4. TRACE: Use `depTree` passing the `#ID` to find callers or callees.\n\n\
-             Rule: Never use `symbolBody` or `depTree` without first finding \
+             Rule: Never use `readCode` or `depTree` without first finding \
              the correct `#ID`."
                 .into(),
         );

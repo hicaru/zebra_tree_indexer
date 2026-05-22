@@ -366,6 +366,42 @@ pub fn glob_match_files(
         .collect())
 }
 
+pub fn filter_files(
+    files: &[FileEntry],
+    root: &str,
+    glob: Option<&str>,
+    lang: Option<Language>,
+) -> Result<Vec<u16>, String> {
+    let matcher = glob
+        .map(|p| {
+            globset::Glob::new(p)
+                .map_err(|e| format!("Invalid glob '{}': {}", p, e))
+                .map(|g| g.compile_matcher())
+        })
+        .transpose()?;
+
+    Ok(files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| {
+            if let Some(ref g) = matcher {
+                let rel = f.path.strip_prefix(root).unwrap_or(&f.path);
+                let rel = rel.trim_start_matches('/');
+                if !(g.is_match(rel) || g.is_match(&f.path)) {
+                    return false;
+                }
+            }
+            if let Some(l) = lang
+                && f.language != l
+            {
+                return false;
+            }
+            true
+        })
+        .map(|(i, _)| i as u16)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use zti_tree_sitter::Language;
@@ -551,5 +587,98 @@ mod tests {
         ];
         let result = glob_match_files(&files, "/p", "src/**/*.rs").unwrap();
         assert_eq!(result, vec![0u16]);
+    }
+
+    #[test]
+    fn filter_files_combined_glob_and_lang() {
+        let files = vec![
+            FileEntry {
+                path: "/p/src/a.rs".into(),
+                language: Language::Rust,
+                imports: HashMap::new(),
+            },
+            FileEntry {
+                path: "/p/src/b.dart".into(),
+                language: Language::Dart,
+                imports: HashMap::new(),
+            },
+            FileEntry {
+                path: "/p/src/c.rs".into(),
+                language: Language::Rust,
+                imports: HashMap::new(),
+            },
+        ];
+        let result =
+            filter_files(&files, "/p", Some("src/**/*.rs"), Some(Language::Rust)).unwrap();
+        assert_eq!(result, vec![0u16, 2u16]);
+    }
+
+    #[test]
+    fn filter_files_glob_only() {
+        let files = vec![
+            FileEntry {
+                path: "/p/src/a.rs".into(),
+                language: Language::Rust,
+                imports: HashMap::new(),
+            },
+            FileEntry {
+                path: "/p/lib/b.ts".into(),
+                language: Language::Ts,
+                imports: HashMap::new(),
+            },
+        ];
+        let result = filter_files(&files, "/p", Some("src/**/*"), None).unwrap();
+        assert_eq!(result, vec![0u16]);
+    }
+
+    #[test]
+    fn filter_files_lang_only() {
+        let files = vec![
+            FileEntry {
+                path: "/p/a.rs".into(),
+                language: Language::Rust,
+                imports: HashMap::new(),
+            },
+            FileEntry {
+                path: "/p/b.ts".into(),
+                language: Language::Ts,
+                imports: HashMap::new(),
+            },
+            FileEntry {
+                path: "/p/c.rs".into(),
+                language: Language::Rust,
+                imports: HashMap::new(),
+            },
+        ];
+        let result = filter_files(&files, "/p", None, Some(Language::Rust)).unwrap();
+        assert_eq!(result, vec![0u16, 2u16]);
+    }
+
+    #[test]
+    fn filter_files_bad_glob_returns_err() {
+        let files = vec![FileEntry {
+            path: "/p/a.rs".into(),
+            language: Language::Rust,
+            imports: HashMap::new(),
+        }];
+        assert!(filter_files(&files, "/p", Some("[invalid"), None).is_err());
+    }
+
+    #[test]
+    fn filter_files_none_returns_all() {
+        let files = vec![
+            FileEntry {
+                path: "/p/a.rs".into(),
+                language: Language::Rust,
+                imports: HashMap::new(),
+            },
+            FileEntry {
+                path: "/p/b.ts".into(),
+                language: Language::Ts,
+                imports: HashMap::new(),
+            },
+        ];
+        let result = filter_files(&files, "/p", None, None).unwrap();
+        assert_eq!(result, vec![0u16, 1u16]);
     }
 }
