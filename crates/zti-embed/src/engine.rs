@@ -141,7 +141,13 @@ impl EmbedEngine {
     }
 
     pub fn load_with(model_id: &str, hw: &Hardware, opts: &LoadOverrides<'_>) -> Result<Self> {
-        let mut profile = resolve_profile(model_id, &opts.variant, hw, opts.query_prefix, opts.passage_prefix)?;
+        let mut profile = resolve_profile(
+            model_id,
+            &opts.variant,
+            hw,
+            opts.query_prefix,
+            opts.passage_prefix,
+        )?;
 
         tracing::info!(path = %profile.onnx_path.display(), "loading ONNX model");
 

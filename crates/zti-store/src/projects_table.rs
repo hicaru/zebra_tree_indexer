@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use arrow::array::{
     FixedSizeBinaryArray, RecordBatch, RecordBatchIterator, StringArray, UInt32Array, UInt64Array,
 };
@@ -69,9 +69,7 @@ impl ProjectsTable {
                 .and_then(|c| c.as_any().downcast_ref::<FixedSizeBinaryArray>());
 
             for i in 0..batch.num_rows() {
-                let project_id = ids
-                    .map(|a| a.value(i).to_vec())
-                    .unwrap_or_default();
+                let project_id = ids.map(|a| a.value(i).to_vec()).unwrap_or_default();
                 rows.push(row_from_batch(&batch, i, &project_id));
             }
         }

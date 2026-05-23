@@ -319,7 +319,10 @@ fn guess_prefixes_from_model_id(model_id: &str) -> (Option<String>, Option<Strin
         );
     }
     if name.contains("nomic-embed") {
-        return (Some("search_query: ".into()), Some("search_document: ".into()));
+        return (
+            Some("search_query: ".into()),
+            Some("search_document: ".into()),
+        );
     }
     if name.contains("instructor") {
         return (

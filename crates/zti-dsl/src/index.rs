@@ -608,8 +608,7 @@ mod tests {
                 imports: HashMap::new(),
             },
         ];
-        let result =
-            filter_files(&files, "/p", Some("src/**/*.rs"), Some(Language::Rust)).unwrap();
+        let result = filter_files(&files, "/p", Some("src/**/*.rs"), Some(Language::Rust)).unwrap();
         assert_eq!(result, vec![0u16, 2u16]);
     }
 
