@@ -12,7 +12,7 @@ use crate::response::{SearchHit, SearchResults};
 /// #1 0.7407 recip
 /// m#183 src/poly/rq.rs:127-203
 ///     pub fn recip(...) -> ... { ... }
-/// --- APPENDIX ---
+/// --- DEPENDENCIES (source code referenced by results above) ---
 /// f#97 src/math/nums.rs:21-26
 ///     pub fn i16_negative_mask(...) -> i16 { ... }
 /// ```

@@ -413,8 +413,8 @@ impl rmcp::ServerHandler for ZebraMcpServer {
              * **Results contain complete source code**, not just file paths. \
              The indented blocks are the full implementation — use them \
              directly without re-reading files via a file reader.\n\
-             * The APPENDIX section contains dependency functions \
-             referenced by the main results — also complete source code.\n\
+             * The DEPENDENCIES section lists functions called by \
+             the main results — also complete source code.\n\
              * If the fast index misses results, exhaustive search \
              runs automatically. No manual retry needed."
                 .into(),
