@@ -23,6 +23,12 @@ fn is_license_file(name: &str) -> bool {
     stem.eq_ignore_ascii_case("LICENSE")
 }
 
+const NON_CODE_ASSET_EXTS: &[&str] = &[".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".otf"];
+
+fn is_non_code_asset(name: &str) -> bool {
+    NON_CODE_ASSET_EXTS.iter().any(|ext| name.ends_with(ext))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Code(Language),
@@ -80,6 +86,7 @@ pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
         if MANIFEST_NAMES.contains(&file_name)
             || is_lock_file(file_name)
             || is_license_file(file_name)
+            || is_non_code_asset(file_name)
         {
             continue;
         }

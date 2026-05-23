@@ -1,6 +1,4 @@
 use std::borrow::Cow;
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,10 +9,9 @@ use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
 use rmcp::{tool, ErrorData, ServiceExt};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 use zti_common::format::format_elapsed;
-use zti_dsl::{build_index, render::dsl::render_files_only, ProjectIndex};
 use zti_ipc_client::Client;
 use zti_protocol::format_search_results;
 use zti_protocol::request::{DoctorReq, Request, SearchMode, SearchReq};
@@ -71,7 +68,6 @@ pub struct ProjectListParams {}
 struct ZebraMcpServer {
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
-    indexes: Arc<RwLock<HashMap<String, Arc<ProjectIndex>>>>,
     daemon: Arc<Mutex<Option<Client>>>,
 }
 
@@ -79,31 +75,7 @@ impl ZebraMcpServer {
     fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
-            indexes: Arc::new(RwLock::new(HashMap::with_capacity(4))),
             daemon: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    async fn get_index(&self, project_root: &str) -> Result<Arc<ProjectIndex>, ErrorData> {
-        let root = std::path::Path::new(project_root)
-            .canonicalize()
-            .map_err(|e| internal_err(format!("invalid project_root: {e}")))?;
-        let root_key = root.to_string_lossy().to_string();
-
-        let mut guard = self.indexes.write().await;
-        match guard.entry(root_key) {
-            Entry::Occupied(e) => Ok(Arc::clone(e.get())),
-            Entry::Vacant(e) => {
-                let key = e.key().clone();
-                let idx = Arc::new(
-                    tokio::task::spawn_blocking(move || build_index(&key))
-                        .await
-                        .map_err(|e| internal_err(format!("indexing task failed: {e}")))?
-                        .map_err(|e| internal_err(format!("indexing failed: {e}")))?,
-                );
-                e.insert(Arc::clone(&idx));
-                Ok(idx)
-            }
         }
     }
 
@@ -234,6 +206,19 @@ impl ZebraMcpServer {
     }
 }
 
+fn match_file(
+    file_path: &str,
+    root: &str,
+    matcher: Option<&globset::GlobMatcher>,
+) -> bool {
+    let Some(m) = matcher else { return true };
+    let rel = file_path
+        .strip_prefix(root)
+        .unwrap_or(file_path)
+        .trim_start_matches('/');
+    m.is_match(rel) || m.is_match(file_path)
+}
+
 fn ok_text(text: String) -> CallToolResult {
     CallToolResult::success(vec![Content::text(text)])
 }
@@ -260,18 +245,56 @@ impl ZebraMcpServer {
         &self,
         Parameters(params): Parameters<FileTreeParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let index = self.get_index(&params.project_root).await?;
+        let root = std::path::Path::new(&params.project_root)
+            .canonicalize()
+            .map_err(|e| internal_err(format!("invalid project_root: {e}")))?;
+        let pid = zti_common::ids::project_id(&root);
+        let db = zti_store::Db::open(&pid)
+            .await
+            .map_err(|e| internal_err(format!("store open: {e}")))?;
+        let files = db
+            .files_table()
+            .await
+            .map_err(|e| internal_err(format!("files_table: {e}")))?
+            .list()
+            .await
+            .map_err(|e| internal_err(format!("list files: {e}")))?;
 
-        let file_indices: Vec<u16> = if let Some(glob) = &params.path_glob {
-            zti_dsl::glob_match_files(&index.files, &index.root, glob)
-                .map_err(|e| internal_err(format!("bad glob: {e}")))?
-        } else {
-            (0..index.files.len() as u16).collect()
-        };
+        let root_str = root.to_string_lossy();
 
-        let mut out = render_files_only(&index, &file_indices);
+        let matcher = params
+            .path_glob
+            .as_deref()
+            .map(|p| {
+                globset::Glob::new(p)
+                    .map_err(|e| internal_err(format!("bad glob: {e}")))
+                    .map(|g| g.compile_matcher())
+            })
+            .transpose()?;
+
+        let matched: Vec<&zti_store::FileRow> = files
+            .iter()
+            .filter(|f| match_file(&f.file_path, &root_str, matcher.as_ref()))
+            .collect();
+
+        let mut out = String::with_capacity(32 + matched.len() * 80);
+        out.push_str("FILES\n");
+        for (i, &f) in matched.iter().enumerate() {
+            let rel = f
+                .file_path
+                .strip_prefix(root_str.as_ref())
+                .unwrap_or(&f.file_path)
+                .trim_start_matches('/');
+            let _ = writeln!(out, "#{} [{}] {}", i, f.language, rel);
+        }
+
+        if matched.is_empty() {
+            out.push_str("  (no files indexed)\n");
+        }
+
         out.push_str(
-            "\n\n[SYSTEM HINT: Files discovered. Use `searchQuery` to find code concepts or `searchPassage` to find similar code.]",
+            "\n\n[SYSTEM HINT: Files discovered. Use `searchQuery` to find code concepts \
+             or `searchPassage` to find similar code.]",
         );
         Ok(ok_text(out))
     }
@@ -357,8 +380,8 @@ impl ZebraMcpServer {
         }
 
         let mut out = String::with_capacity(projects.len() * 128);
-        out.push_str("| Project | Model | Chunks | Files | Last Indexed |\n");
-        out.push_str("|---------|-------|--------|-------|-------------|\n");
+        out.push_str("| Project | Root | Model | Chunks | Files | Last Indexed |\n");
+        out.push_str("|---------|------|-------|--------|-------|-------------|\n");
         for p in &projects {
             let name = std::path::Path::new(&p.root_path)
                 .file_name()
@@ -367,8 +390,8 @@ impl ZebraMcpServer {
             let ago = format_elapsed(p.last_indexed_ns);
             let _ = writeln!(
                 out,
-                "| {} | {} | {} | {} | {} |",
-                name, p.model_id, p.total_chunks, p.total_files, ago
+                "| {} | {} | {} | {} | {} | {} |",
+                name, p.root_path, p.model_id, p.total_chunks, p.total_files, ago
             );
         }
 
