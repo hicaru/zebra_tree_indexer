@@ -271,9 +271,9 @@ async fn rebuild(
     dim: usize,
     params: &SearchParams,
 ) -> Result<zti_ann::AnnIndex> {
-    let n = params.indexed_chunks as usize;
+    let actual = chunks.len().await?;
     let mut builder = AnnIndexBuilder::new(dim, params)?;
-    builder.reserve(n.max(1_024))?;
+    builder.reserve(actual.max(1_024))?;
 
     chunks
         .iter_vectors(|id, v| {

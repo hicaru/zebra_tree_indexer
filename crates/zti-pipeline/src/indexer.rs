@@ -422,11 +422,12 @@ pub async fn index_project(
         .as_ref()
         .and_then(|r| r.search_params.as_deref())
         .and_then(|s| serde_json::from_str(s).ok());
-    let params = zti_ann::choose_method(total_embedded, engine.dim(), hw, previous_params.as_ref());
+    let total_in_db = chunks_table.len().await?;
+    let params = zti_ann::choose_method(total_in_db, engine.dim(), hw, previous_params.as_ref());
     info!(
         "search method: {:?} (n={}, dim={}, ram_avail={} MB)",
         params.method,
-        total_embedded,
+        total_in_db,
         engine.dim(),
         hw.mem_avail >> 20
     );
@@ -447,7 +448,7 @@ pub async fn index_project(
         db,
         &pid,
         root_str,
-        total_embedded,
+        total_in_db,
         snapshots.len(),
         &languages,
         engine,
