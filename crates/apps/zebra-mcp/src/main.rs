@@ -38,7 +38,7 @@ pub struct FileTreeParams {
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
 pub struct SearchQueryParams {
-    #[schemars(description = "Natural language query. Use full phrases: \"user authentication middleware\" not \"auth\".")]
+    #[schemars(description = "What you're looking for, in natural language. Use descriptive phrases: \"polynomial inversion\" not \"invert\".")]
     pub text: String,
     #[schemars(description = "Project root path. Auto-resolved when omitted if only one project is indexed.")]
     pub root: Option<String>,
@@ -254,7 +254,7 @@ const HINT_NO_RESULTS: &str =
 impl ZebraMcpServer {
     #[tool(
         name = "fileTree",
-        description = "Maps the file structure. Use this to discover available source files and project roots in any project. Prefer this over `glob` or `find` — it uses the indexed project tree."
+        description = "List project files and directory structure. Use this instead of `find`, `ls -R`, or `glob` to discover source files — reads from the pre-built project index and returns instantly."
     )]
     async fn file_tree(
         &self,
@@ -278,7 +278,7 @@ impl ZebraMcpServer {
 
     #[tool(
         name = "searchQuery",
-        description = "Semantic search with natural language. Returns pre-chunked code snippets with file paths and line ranges — more token-efficient than reading entire files. Understands intent: \"authentication middleware\" finds auth handlers even without that exact string."
+        description = "Search the codebase by intent. Use this FIRST when exploring code, answering questions about the codebase, or finding implementations — before grep, find, or reading files. Describe what you need in plain language (e.g. \"polynomial inversion\", \"error retry logic\"). Returns complete source code with file paths and line ranges — no follow-up file reads needed."
     )]
     async fn search_query(
         &self,
@@ -290,7 +290,7 @@ impl ZebraMcpServer {
 
     #[tool(
         name = "searchPassage",
-        description = "Find similar code by example. Paste a code snippet, error message, or describe an implementation pattern to locate related code across the project."
+        description = "Find similar code by example. Paste a code snippet, error message, or pattern description to locate related implementations. Use this instead of grepping for exact matches when you want semantically similar code."
     )]
     async fn search_passage(
         &self,
@@ -302,7 +302,7 @@ impl ZebraMcpServer {
 
     #[tool(
         name = "doctor",
-        description = "DEBUG ONLY: Run diagnostics on the embedding engine and database. Use this ONLY if searchQuery or searchPassage return system errors."
+        description = "DEBUG ONLY: Run diagnostics on the embedding engine and index. Use this ONLY when searchQuery or searchPassage return errors — not for empty results."
     )]
     async fn doctor(
         &self,
@@ -342,7 +342,7 @@ impl ZebraMcpServer {
 
     #[tool(
         name = "projectList",
-        description = "Lists all indexed projects with root paths. Useful when multiple projects are indexed and you need to pick the right `root`."
+        description = "Lists all indexed projects with root paths and stats. Call this when you need the `root` parameter for other tools and are unsure which project to target."
     )]
     async fn project_list(
         &self,
@@ -384,39 +384,37 @@ impl rmcp::ServerHandler for ZebraMcpServer {
         info.instructions = Some(
             "# zebra-mcp — Semantic Code Search\n\
              \n\
-             Semantic search over your codebase using vector embeddings. \
-             Returns pre-chunked code snippets with file paths and line \
-             ranges — more token-efficient than reading entire files.\n\
+             ## When to use these tools\n\
              \n\
-             ## Tools\n\
+             Use `searchQuery` as your **first step** when exploring code, answering \
+             questions, or locating implementations. It replaces grep, find, and \
+             manual file browsing — it understands what you mean, not just what you \
+             type, and returns complete source code in a single call.\n\
              \n\
-             * **`searchQuery`** — Natural language search. Ask a question \
-             or describe what you're looking for: \"database connection pool\", \
-             \"error retry logic\", \"the function that parses CLI arguments\".\n\
+             ## Workflow\n\
              \n\
-             * **`searchPassage`** — Similarity search. Paste a code snippet \
-             or describe a pattern to find related implementations.\n\
+             1. **Start with `searchQuery`** — describe what you're looking for \
+             in natural language. Results include the full source code with \
+             file paths and line ranges. No second read step needed.\n\
              \n\
-             * **`fileTree`** — Browse the indexed project file structure.\n\
+             2. **Use `searchPassage`** when you have a code snippet or error \
+             message and want to find similar patterns across the project.\n\
              \n\
-             * **`projectList`** — List all indexed projects with root paths.\n\
+             3. **Use `fileTree`** to discover project structure — prefer it \
+             over `find` or `ls`.\n\
              \n\
-             * **`doctor`** — Debug connectivity and index health \
-             (use only when tools return errors).\n\
+             4. **Use `projectList`** when multiple projects are indexed and you \
+             need the correct `root` path.\n\
              \n\
              ## Tips\n\
              \n\
              * Use descriptive phrases, not single keywords. \
              \"user session validation\" finds more than \"auth\".\n\
-             * The `root` parameter is optional when only one project \
-             is indexed — it auto-resolves.\n\
-             * **Results contain complete source code**, not just file paths. \
-             The indented blocks are the full implementation — use them \
-             directly without re-reading files via a file reader.\n\
-             * The DEPENDENCIES section lists functions called by \
-             the main results — also complete source code.\n\
-             * If the fast index misses results, exhaustive search \
-             runs automatically. No manual retry needed."
+             * The `root` parameter auto-resolves when only one project is indexed.\n\
+             * Results contain complete source code — use it directly without \
+             re-reading files.\n\
+             * If the fast index misses results, exhaustive search runs \
+             automatically."
                 .into(),
         );
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
