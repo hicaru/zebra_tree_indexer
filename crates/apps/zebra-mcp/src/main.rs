@@ -206,9 +206,7 @@ impl ZebraMcpServer {
 
         if !results.hits.is_empty() {
             let mut out = format_search_results(&results);
-            out.push_str(
-                "\n\n[SYSTEM HINT: Use `fileTree` to explore the project file structure.]",
-            );
+            out.push_str(HINT_CODE_IN_CONTEXT);
             return Ok(ok_text(out));
         }
 
@@ -228,13 +226,9 @@ impl ZebraMcpServer {
         let mut out = format_search_results(&retry_results);
 
         if retry_results.hits.is_empty() {
-            out.push_str(
-                "\n\n[SYSTEM HINT: No results found. Try rephrasing with more descriptive terms.]",
-            );
+            out.push_str(HINT_NO_RESULTS);
         } else {
-            out.push_str(
-                "\n\n[SYSTEM HINT: Use `fileTree` to explore the project file structure.]",
-            );
+            out.push_str(HINT_CODE_IN_CONTEXT);
         }
         Ok(ok_text(out))
     }
@@ -247,6 +241,14 @@ fn ok_text(text: String) -> CallToolResult {
 fn internal_err(msg: String) -> ErrorData {
     ErrorData::internal_error(msg, None)
 }
+
+const HINT_CODE_IN_CONTEXT: &str =
+    "\n\n[SYSTEM HINT: The source code above is already in your context. \
+     Do NOT re-read these files — use the code directly. \
+     For other files, use `searchQuery` or `fileTree`.]";
+
+const HINT_NO_RESULTS: &str =
+    "\n\n[SYSTEM HINT: No results found. Try rephrasing with more descriptive terms.]";
 
 #[rmcp::tool_router]
 impl ZebraMcpServer {
@@ -408,8 +410,11 @@ impl rmcp::ServerHandler for ZebraMcpServer {
              \"user session validation\" finds more than \"auth\".\n\
              * The `root` parameter is optional when only one project \
              is indexed — it auto-resolves.\n\
-             * Results include line ranges — read just the relevant \
-             section instead of whole files.\n\
+             * **Results contain complete source code**, not just file paths. \
+             The indented blocks are the full implementation — use them \
+             directly without re-reading files via a file reader.\n\
+             * The APPENDIX section contains dependency functions \
+             referenced by the main results — also complete source code.\n\
              * If the fast index misses results, exhaustive search \
              runs automatically. No manual retry needed."
                 .into(),

@@ -31,13 +31,19 @@ pub fn format_search_results(results: &SearchResults) -> String {
         return out;
     }
 
+    let _ = writeln!(
+        out,
+        "SOURCE CODE ({} hits, {} related):\n",
+        results.hits.len(),
+        results.appendix.len()
+    );
     for (i, hit) in results.hits.iter().enumerate() {
         let _ = writeln!(out, "#{} {:.4}", i + 1, hit.score);
         write_hit_block(&mut out, hit);
     }
 
     if !results.appendix.is_empty() {
-        out.push_str("--- APPENDIX ---\n");
+        out.push_str("--- DEPENDENCIES (source code referenced by results above) ---\n");
         for hit in &results.appendix {
             write_hit_block(&mut out, hit);
         }
@@ -95,6 +101,11 @@ mod tests {
             total: 1,
         };
         let out = format_search_results(&r);
+        assert!(
+            out.contains("SOURCE CODE (1 hits, 1 related)"),
+            "header: {}",
+            out
+        );
         assert!(out.contains("#1 0.7407\n"), "hit rank line: {}", out);
         assert!(
             out.contains("src/poly/rq.rs:127-203\n"),
@@ -103,7 +114,7 @@ mod tests {
         );
         assert!(out.contains("    pub fn recip"), "body indent: {}", out);
         assert!(
-            out.contains("--- APPENDIX ---\n"),
+            out.contains("--- DEPENDENCIES (source code referenced by results above) ---\n"),
             "appendix marker: {}",
             out
         );
