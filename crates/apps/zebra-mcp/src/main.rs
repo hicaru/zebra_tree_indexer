@@ -69,13 +69,15 @@ struct ZebraMcpServer {
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
     daemon: Arc<Mutex<Option<Client>>>,
+    indexed_projects_roots: String,
 }
 
 impl ZebraMcpServer {
-    fn new() -> Self {
+    fn new(indexed_projects_roots: String) -> Self {
         Self {
             tool_router: Self::tool_router(),
             daemon: Arc::new(Mutex::new(None)),
+            indexed_projects_roots,
         }
     }
 
@@ -404,7 +406,8 @@ impl ZebraMcpServer {
 impl rmcp::ServerHandler for ZebraMcpServer {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
-        info.instructions = Some(
+        let mut instructions = String::with_capacity(1024 + self.indexed_projects_roots.len());
+        instructions.push_str(
             "# zebra-mcp — Semantic Code Search\n\
              \n\
              ## When to use these tools\n\
@@ -426,9 +429,6 @@ impl rmcp::ServerHandler for ZebraMcpServer {
              3. **Use `fileTree`** to discover project structure — prefer it \
              over `find` or `ls`.\n\
              \n\
-             4. **Use `projectList`** when multiple projects are indexed and you \
-             need the correct `root` path.\n\
-             \n\
              ## Tips\n\
              \n\
              * Use descriptive phrases, not single keywords. \
@@ -437,9 +437,10 @@ impl rmcp::ServerHandler for ZebraMcpServer {
              * Results contain complete source code — use it directly without \
              re-reading files.\n\
              * If the fast index misses results, exhaustive search runs \
-             automatically."
-                .into(),
+             automatically.",
         );
+        instructions.push_str(&self.indexed_projects_roots);
+        info.instructions = Some(instructions);
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info
     }
@@ -456,7 +457,20 @@ async fn main() -> Result<()> {
         .init();
 
     let _cli = Cli::parse();
-    let server = ZebraMcpServer::new();
+
+    let indexed_projects_roots = match zti_store::list_projects().await {
+        Ok(projects) if projects.len() > 1 => {
+            let mut s = String::with_capacity(32 + projects.len() * 64);
+            s.push_str("\n\n## Indexed Projects\n");
+            for p in &projects {
+                let _ = writeln!(s, "- {}", p.root_path);
+            }
+            s
+        }
+        _ => String::new(),
+    };
+
+    let server = ZebraMcpServer::new(indexed_projects_roots);
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
 
