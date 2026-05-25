@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -83,13 +85,25 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             model_id,
             device,
             uptime_secs,
+            loaded_models,
+            loading_model,
         } => {
             let mins = uptime_secs / 60;
             let hrs = mins / 60;
-            spans.push(Span::raw(format!(
-                "Running  Model: {}  Device: {}  Uptime: {}h {}m",
-                model_id, device, hrs, mins % 60
-            )));
+            let mut text = String::with_capacity(128);
+            write!(text, "Running  Model: {}  Device: {}", model_id, device).ok();
+            if let Some(loading) = loading_model {
+                write!(text, "  Loading: {}...", loading).ok();
+            }
+            write!(
+                text,
+                "  Models: {}  Uptime: {}h {}m",
+                loaded_models.len(),
+                hrs,
+                mins % 60,
+            )
+            .ok();
+            spans.push(Span::raw(text));
         }
         DaemonStatus::Stopped => spans.push(Span::raw("Stopped")),
         DaemonStatus::Error(e) => {

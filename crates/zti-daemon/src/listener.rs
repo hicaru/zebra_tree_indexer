@@ -98,7 +98,7 @@ async fn handle_request(req: Request, state: &DaemonState) -> Response {
         Request::Index(_) => unreachable!("Index is handled in streaming path"),
         Request::Search(s) => crate::handlers::search::handle(&s, state).await,
         Request::ProjectStatus(ps) => crate::handlers::status::handle(&ps, state).await,
-        Request::DaemonStatus => crate::handlers::daemon_status::handle(state),
+        Request::DaemonStatus => crate::handlers::daemon_status::handle(state).await,
         Request::RemoveProject(rp) => crate::handlers::remove_project::handle(&rp, state).await,
         Request::Stop => Response::Stop(()),
         Request::Doctor(d) => crate::handlers::doctor::handle(&d, state).await,

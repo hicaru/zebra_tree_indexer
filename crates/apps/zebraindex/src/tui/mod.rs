@@ -796,6 +796,8 @@ async fn daemon_monitor(
                         model_id: info.model_id,
                         device: info.device,
                         uptime_secs: info.uptime_secs,
+                        loaded_models: info.loaded_models,
+                        loading_model: info.loading_model,
                     }),
                     Ok(_) => None,
                     Err(e) => {

@@ -60,6 +60,8 @@ pub struct DaemonStatusInfo {
     pub projects_loaded: usize,
     pub model_id: String,
     pub device: String,
+    pub loaded_models: Vec<String>,
+    pub loading_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -55,6 +55,8 @@ pub enum DaemonStatus {
         model_id: String,
         device: String,
         uptime_secs: u64,
+        loaded_models: Vec<String>,
+        loading_model: Option<String>,
     },
     Stopped,
     Error(String),

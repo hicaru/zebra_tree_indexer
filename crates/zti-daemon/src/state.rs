@@ -22,6 +22,7 @@ pub struct DaemonState {
     pub primary_model: Arc<str>,
     primary_engine: Arc<EmbedEngine>,
     pub engines: RwLock<HashMap<Arc<str>, Arc<EmbedEngine>>>,
+    pub loading_model: RwLock<Option<Arc<str>>>,
     pub hardware: Hardware,
     pub registry: RwLock<HashMap<[u8; 32], Arc<LoadedProject>>>,
     pub ann: Arc<AnnCache>,
@@ -49,6 +50,7 @@ impl DaemonState {
             primary_model: model_id,
             primary_engine: primary,
             engines: RwLock::new(engines),
+            loading_model: RwLock::new(None),
             hardware,
             registry: RwLock::new(HashMap::new()),
             ann: Arc::new(AnnCache::default()),
@@ -72,16 +74,21 @@ impl DaemonState {
             }
         }
 
+        { *self.loading_model.write().await = Some(Arc::from(model_id)); }
+
         let hw = self.hardware;
         let owned = model_id.to_owned();
-        let engine = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             EmbedEngine::load_with(&owned, &hw, &LoadOverrides::default())
         })
-        .await??;
+        .await?;
 
+        { *self.loading_model.write().await = None; }
+
+        let engine = result?;
         let arc = Arc::new(engine);
         let mut engines = self.engines.write().await;
-        engines.insert(Arc::from(model_id.to_owned()), Arc::clone(&arc));
+        engines.insert(Arc::from(model_id), Arc::clone(&arc));
         Ok(arc)
     }
 
