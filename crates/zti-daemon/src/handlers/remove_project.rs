@@ -1,11 +1,31 @@
 use zti_protocol::request::RemoveProjectReq;
-use zti_protocol::response::Response;
+use zti_protocol::response::{ErrorBody, Response};
 
 use crate::state::DaemonState;
 
 pub async fn handle(req: &RemoveProjectReq, state: &DaemonState) -> Response {
-    let root_path = std::path::Path::new(&req.project_root);
-    let pid = zti_common::ids::project_id(root_path);
+    let projects = match zti_store::list_projects().await {
+        Ok(p) => p,
+        Err(e) => {
+            return Response::RemoveProject(Err(ErrorBody {
+                message: e.to_string(),
+            }))
+        }
+    };
+
+    let row = match projects.iter().find(|p| p.root_path == req.project_root) {
+        Some(r) => r,
+        None => return Response::RemoveProject(Ok(())),
+    };
+
+    let pid: [u8; 32] = match row.project_id.clone().try_into() {
+        Ok(p) => p,
+        Err(_) => {
+            return Response::RemoveProject(Err(ErrorBody {
+                message: "invalid project_id length".into(),
+            }))
+        }
+    };
 
     state.ann.invalidate(&pid).await;
 
