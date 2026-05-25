@@ -343,7 +343,12 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
         },
         event::Action::SetupBack => match &app.screen {
             app::Screen::Setup(app::SetupPhase::ModelSelection { .. }) => {
-                app.should_quit = true;
+                if app.model.is_some() {
+                    app.should_run.store(true, Ordering::Relaxed);
+                    app.screen = app::Screen::Main;
+                } else {
+                    app.should_quit = true;
+                }
             }
             app::Screen::Setup(app::SetupPhase::VariantSelection { .. }) => {
                 if let Some(ref entries) = app.setup_registry {
