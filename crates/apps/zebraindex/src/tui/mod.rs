@@ -6,6 +6,8 @@ mod setup;
 mod ui;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -187,6 +189,7 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
         } => {
             app.model = Some(Arc::from(m.as_str()));
             app.variant = variant.map(|v| Arc::from(v.as_str()));
+            app.should_run.store(true, Ordering::Relaxed);
             app.screen = app::Screen::Main;
             spawn_daemon_monitor(app, tx);
         }
@@ -234,6 +237,7 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
         AppMessage::SetupComplete { model, variant } => {
             app.model = Some(Arc::clone(&model));
             app.variant = Some(Arc::clone(&variant));
+            app.should_run.store(true, Ordering::Relaxed);
             app.screen = app::Screen::Main;
             spawn_daemon_monitor(app, tx);
         }
@@ -248,8 +252,9 @@ fn spawn_daemon_monitor(app: &App, tx: &mpsc::Sender<AppMessage>) {
     let v = app.variant.clone();
     let qp = app.query_prefix.clone();
     let pp = app.passage_prefix.clone();
+    let should_run = app.should_run.clone();
     tokio::spawn(async move {
-        daemon_monitor(tx_m, client, m, v, qp, pp).await;
+        daemon_monitor(tx_m, client, m, v, qp, pp, should_run).await;
     });
 }
 
@@ -407,6 +412,7 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
             }
         }
         event::Action::StopDaemon => {
+            app.should_run.store(false, Ordering::Relaxed);
             let client = app.client.clone();
             tokio::spawn(async move {
                 let mut guard = client.lock().await;
@@ -416,6 +422,7 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
             });
         }
         event::Action::RestartDaemon => {
+            app.should_run.store(true, Ordering::Relaxed);
             {
                 let mut guard = app.client.lock().await;
                 *guard = None;
@@ -423,6 +430,7 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
             app.daemon_status = app::DaemonStatus::Starting;
         }
         event::Action::ChangeModel => {
+            app.should_run.store(false, Ordering::Relaxed);
             app.screen = app::Screen::Setup(app::SetupPhase::FetchingRegistry);
             let tx_c = tx.clone();
             tokio::spawn(async move { fetch_registry(tx_c).await });
@@ -454,6 +462,26 @@ async fn ensure_client(
     Ok(())
 }
 
+fn read_daemon_log_tail(msg: &mut String) {
+    if let Ok(log_path) = zti_common::paths::daemon_log()
+        && let Ok(log) = std::fs::read_to_string(&log_path)
+    {
+        let tail: String = log
+            .lines()
+            .rev()
+            .take(5)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !tail.is_empty() {
+            msg.push_str("\n\ndaemon.log:\n");
+            msg.push_str(&tail);
+        }
+    }
+}
+
 async fn daemon_monitor(
     tx: mpsc::Sender<AppMessage>,
     client: Arc<Mutex<Option<zti_ipc_client::Client>>>,
@@ -461,6 +489,7 @@ async fn daemon_monitor(
     variant: Option<Arc<str>>,
     query_prefix: Option<Arc<str>>,
     passage_prefix: Option<Arc<str>>,
+    should_run: Arc<AtomicBool>,
 ) {
     loop {
         let socket_path = match zti_common::paths::daemon_socket() {
@@ -477,9 +506,29 @@ async fn daemon_monitor(
         };
 
         if !socket_path.exists() {
+            if !should_run.load(Ordering::Relaxed) {
+                let _ = tx
+                    .send(AppMessage::DaemonStatusUpdate(app::DaemonStatus::Stopped))
+                    .await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
             let _ = tx
-                .send(AppMessage::DaemonStatusUpdate(app::DaemonStatus::Stopped))
+                .send(AppMessage::DaemonStatusUpdate(app::DaemonStatus::Starting))
                 .await;
+            let m = model.as_deref();
+            let v = variant.as_deref();
+            let qp = query_prefix.as_deref();
+            let pp = passage_prefix.as_deref();
+            if let Err(e) = ensure_client(&client, m, v, qp, pp).await {
+                let mut msg = e.to_string();
+                read_daemon_log_tail(&mut msg);
+                let _ = tx
+                    .send(AppMessage::DaemonStatusUpdate(app::DaemonStatus::Error(
+                        msg,
+                    )))
+                    .await;
+            }
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         }
@@ -515,23 +564,7 @@ async fn daemon_monitor(
             let pp = passage_prefix.as_deref();
             if let Err(e) = ensure_client(&client, m, v, qp, pp).await {
                 let mut msg = e.to_string();
-                if let Ok(log_path) = zti_common::paths::daemon_log()
-                    && let Ok(log) = std::fs::read_to_string(&log_path)
-                {
-                    let tail: String = log
-                        .lines()
-                        .rev()
-                        .take(5)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    if !tail.is_empty() {
-                        msg.push_str("\n\ndaemon.log:\n");
-                        msg.push_str(&tail);
-                    }
-                }
+                read_daemon_log_tail(&mut msg);
                 let _ = tx
                     .send(AppMessage::DaemonStatusUpdate(app::DaemonStatus::Error(
                         msg,

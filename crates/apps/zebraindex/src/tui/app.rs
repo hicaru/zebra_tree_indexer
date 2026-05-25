@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use tokio::sync::Mutex;
 use zti_ipc_client::Client;
@@ -103,6 +104,7 @@ pub struct App {
     pub variant: Option<Arc<str>>,
     pub query_prefix: Option<Arc<str>>,
     pub passage_prefix: Option<Arc<str>>,
+    pub should_run: Arc<AtomicBool>,
 }
 
 impl Default for App {
@@ -125,6 +127,7 @@ impl Default for App {
             variant: None,
             query_prefix: None,
             passage_prefix: None,
+            should_run: Arc::new(AtomicBool::new(true)),
         }
     }
 }
