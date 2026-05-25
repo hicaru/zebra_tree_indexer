@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use arrow::array::{
     FixedSizeBinaryArray, RecordBatch, RecordBatchIterator, StringArray, UInt32Array, UInt64Array,
 };
-use arrow_array::Array;
+use arrow_array::{Array, ListArray};
 use futures::StreamExt;
 use lancedb::query::ExecutableQuery;
 use lancedb::table::Table;
@@ -98,6 +98,20 @@ fn row_from_batch(batch: &RecordBatch, i: usize, project_id: &[u8]) -> ProjectRo
     let root_paths = batch
         .column_by_name("root_path")
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let languages_col = batch
+        .column_by_name("languages")
+        .and_then(|c| c.as_any().downcast_ref::<ListArray>());
+    let languages = languages_col
+        .and_then(|list| {
+            let inner = list.value(i);
+            let strings = inner.as_any().downcast_ref::<StringArray>()?;
+            Some(
+                (0..strings.len())
+                    .map(|j| strings.value(j).to_string())
+                    .collect::<Vec<String>>(),
+            )
+        })
+        .unwrap_or_default();
     let model_ids = batch
         .column_by_name("model_id")
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
@@ -128,6 +142,7 @@ fn row_from_batch(batch: &RecordBatch, i: usize, project_id: &[u8]) -> ProjectRo
         root_path: root_paths
             .map(|a| a.value(i).to_string())
             .unwrap_or_default(),
+        languages,
         model_id: model_ids
             .map(|a| a.value(i).to_string())
             .unwrap_or_default(),
@@ -157,6 +172,7 @@ fn row_from_batch(batch: &RecordBatch, i: usize, project_id: &[u8]) -> ProjectRo
 pub struct ProjectRow {
     pub project_id: Vec<u8>,
     pub root_path: String,
+    pub languages: Vec<String>,
     pub model_id: String,
     pub model_dim: u32,
     pub total_chunks: u64,

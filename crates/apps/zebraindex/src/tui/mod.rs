@@ -241,6 +241,18 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
             app.screen = app::Screen::Main;
             spawn_daemon_monitor(app, tx);
         }
+        AppMessage::ProjectRemoved => {
+            app.modal = None;
+        }
+        AppMessage::ProjectRemoveError(e) => {
+            app.modal = Some(app::Modal::Error { message: e });
+        }
+        AppMessage::ReindexStarted => {
+            app.modal = None;
+        }
+        AppMessage::ReindexError(e) => {
+            app.modal = Some(app::Modal::Error { message: e });
+        }
         other => app.apply_message(other),
     }
 }
@@ -439,6 +451,84 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
             app.screen = app::Screen::Setup(app::SetupPhase::FetchingRegistry);
             let tx_c = tx.clone();
             tokio::spawn(async move { fetch_registry(tx_c).await });
+        }
+
+        event::Action::OpenProjectDetail => {
+            if !app.projects.is_empty() {
+                app.modal = Some(app::Modal::ProjectDetail {
+                    selected_button: app::DetailButton::default(),
+                });
+            }
+        }
+        event::Action::DetailButtonNext => {
+            if let Some(app::Modal::ProjectDetail { selected_button }) = &mut app.modal {
+                *selected_button = match selected_button {
+                    app::DetailButton::Remove => app::DetailButton::Reindex,
+                    app::DetailButton::Reindex => app::DetailButton::Back,
+                    app::DetailButton::Back => app::DetailButton::Remove,
+                };
+            }
+        }
+        event::Action::DetailButtonPrev => {
+            if let Some(app::Modal::ProjectDetail { selected_button }) = &mut app.modal {
+                *selected_button = match selected_button {
+                    app::DetailButton::Remove => app::DetailButton::Back,
+                    app::DetailButton::Reindex => app::DetailButton::Remove,
+                    app::DetailButton::Back => app::DetailButton::Reindex,
+                };
+            }
+        }
+        event::Action::DetailConfirm => {
+            if let Some(app::Modal::ProjectDetail { selected_button }) = app.modal.take() {
+                match selected_button {
+                    app::DetailButton::Remove => {
+                        app.modal = Some(app::Modal::ConfirmRemove);
+                    }
+                    app::DetailButton::Reindex => {
+                        if let Some(root) = app.selected_project_root().map(|s| s.to_string()) {
+                            let client = app.client.clone();
+                            let tx_c = tx.clone();
+                            let model = app.model.clone();
+                            let variant = app.variant.clone();
+                            let qp = app.query_prefix.clone();
+                            let pp = app.passage_prefix.clone();
+                            tokio::spawn(async move {
+                                do_reindex(
+                                    root, client, tx_c, model, variant, qp, pp,
+                                )
+                                .await;
+                            });
+                        }
+                    }
+                    app::DetailButton::Back => {}
+                }
+            }
+        }
+        event::Action::DetailBack => {
+            app.modal = None;
+        }
+        event::Action::ConfirmRemoveYes => {
+            app.modal = None;
+            if let Some(root) = app.selected_project_root().map(|s| s.to_string()) {
+                let client = app.client.clone();
+                let tx_c = tx.clone();
+                let model = app.model.clone();
+                let variant = app.variant.clone();
+                let qp = app.query_prefix.clone();
+                let pp = app.passage_prefix.clone();
+                tokio::spawn(async move {
+                    do_remove_project(root, client, tx_c, model, variant, qp, pp).await;
+                });
+            }
+        }
+        event::Action::ConfirmRemoveNo => {
+            if app.projects.get(app.selected_project).is_some() {
+                app.modal = Some(app::Modal::ProjectDetail {
+                    selected_button: app::DetailButton::Remove,
+                });
+            } else {
+                app.modal = None;
+            }
         }
         event::Action::None => {}
     }
@@ -648,6 +738,97 @@ async fn do_search(
         }
         Err(e) => {
             let _ = tx.send(AppMessage::SearchError(e.to_string())).await;
+        }
+    }
+}
+
+async fn do_remove_project(
+    project_root: String,
+    client: Arc<Mutex<Option<zti_ipc_client::Client>>>,
+    tx: mpsc::Sender<AppMessage>,
+    model: Option<Arc<str>>,
+    variant: Option<Arc<str>>,
+    query_prefix: Option<Arc<str>>,
+    passage_prefix: Option<Arc<str>>,
+) {
+    let result = async {
+        let m = model.as_deref();
+        let v = variant.as_deref();
+        let qp = query_prefix.as_deref();
+        let pp = passage_prefix.as_deref();
+        ensure_client(&client, m, v, qp, pp).await?;
+
+        let mut guard = client.lock().await;
+        let c = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("client not initialized"))?;
+
+        let resp = c
+            .request(Request::RemoveProject(
+                zti_protocol::request::RemoveProjectReq { project_root },
+            ))
+            .await?;
+
+        match resp {
+            Response::RemoveProject(Ok(())) => Ok(()),
+            Response::RemoveProject(Err(e)) => Err(anyhow::anyhow!(e.message)),
+            other => Err(anyhow::anyhow!("unexpected: {:?}", other)),
+        }
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
+            let _ = tx.send(AppMessage::ProjectRemoved).await;
+        }
+        Err(e) => {
+            let _ = tx.send(AppMessage::ProjectRemoveError(e.to_string())).await;
+        }
+    }
+}
+
+async fn do_reindex(
+    project_root: String,
+    client: Arc<Mutex<Option<zti_ipc_client::Client>>>,
+    tx: mpsc::Sender<AppMessage>,
+    model: Option<Arc<str>>,
+    variant: Option<Arc<str>>,
+    query_prefix: Option<Arc<str>>,
+    passage_prefix: Option<Arc<str>>,
+) {
+    let result = async {
+        let m = model.as_deref();
+        let v = variant.as_deref();
+        let qp = query_prefix.as_deref();
+        let pp = passage_prefix.as_deref();
+        ensure_client(&client, m, v, qp, pp).await?;
+
+        let mut guard = client.lock().await;
+        let c = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("client not initialized"))?;
+
+        let resp = c
+            .request(Request::Index(zti_protocol::request::IndexReq {
+                project_root,
+                refresh: true,
+            }))
+            .await?;
+
+        match resp {
+            Response::Index(Ok(_)) => Ok(()),
+            Response::Index(Err(e)) => Err(anyhow::anyhow!(e.message)),
+            other => Err(anyhow::anyhow!("unexpected: {:?}", other)),
+        }
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
+            let _ = tx.send(AppMessage::ReindexStarted).await;
+        }
+        Err(e) => {
+            let _ = tx.send(AppMessage::ReindexError(e.to_string())).await;
         }
     }
 }

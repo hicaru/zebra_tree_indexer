@@ -2,11 +2,30 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
-use super::app::{ActivePanel, App, DaemonStatus};
+use super::app::{ActivePanel, App, DaemonStatus, DetailButton, Modal};
 
 const PREVIEW_LINES: usize = 6;
+
+pub fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - pct_y) / 2),
+            Constraint::Percentage(pct_y),
+            Constraint::Percentage((100 - pct_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - pct_x) / 2),
+            Constraint::Percentage(pct_x),
+            Constraint::Percentage((100 - pct_x) / 2),
+        ])
+        .split(vert[1])[1]
+}
 
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -21,6 +40,10 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_status_bar(f, app, chunks[0]);
     draw_main(f, app, chunks[1]);
     draw_help_bar(f, app, chunks[2]);
+
+    if app.modal.is_some() {
+        draw_modal(f, app);
+    }
 }
 
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
@@ -231,14 +254,219 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
-    let keys = match &app.daemon_status {
-        DaemonStatus::Stopped => "  Tab: switch panel  r: restart daemon  q: quit ",
-        DaemonStatus::Error(_) => {
-            "  Tab: switch panel  r: restart daemon  m: change model  q: quit  (see daemon.log) "
+    let keys = if app.modal.is_some() {
+        match &app.modal {
+            Some(Modal::ConfirmRemove) => "  y: confirm remove   n/Esc: cancel ",
+            Some(Modal::Error { .. }) => "  Esc/Enter: dismiss ",
+            _ => "  Tab/←→: select   Enter: confirm   Esc: back ",
         }
-        _ => "  Tab: switch panel  /: search  Enter: submit  j/k: scroll  s: stop  m: change model  q: quit ",
+    } else {
+        match &app.daemon_status {
+            DaemonStatus::Stopped => "  Tab: switch panel  r: restart daemon  q: quit ",
+            DaemonStatus::Error(_) => {
+                "  Tab: switch panel  r: restart daemon  m: change model  q: quit  (see daemon.log) "
+            }
+            _ => "  Tab: switch panel  /: search  Enter: open project  j/k: scroll  s: stop  m: change model  q: quit ",
+        }
     };
     let block = Block::default().borders(Borders::ALL);
     let para = Paragraph::new(keys).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_modal(f: &mut Frame, app: &App) {
+    match &app.modal {
+        Some(Modal::ProjectDetail { selected_button }) => {
+            if let Some(p) = app.projects.get(app.selected_project) {
+                draw_project_detail(f, p, *selected_button);
+            }
+        }
+        Some(Modal::ConfirmRemove) => {
+            if let Some(p) = app.projects.get(app.selected_project) {
+                draw_confirm_remove(f, &p.root_path);
+            }
+        }
+        Some(Modal::Error { message }) => {
+            draw_modal_error(f, message);
+        }
+        None => {}
+    }
+}
+
+fn draw_project_detail(f: &mut Frame, project: &zti_store::ProjectRow, selected: DetailButton) {
+    let area = centered_rect(70, 60, f.area());
+    f.render_widget(Clear, area);
+
+    let name = std::path::Path::new(&project.root_path)
+        .file_name()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or(std::borrow::Cow::Borrowed("?"));
+
+    let title = format!(" Project: {} ", name);
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let ago_indexed = zti_common::format::format_elapsed(project.last_indexed_ns);
+    let ago_created = zti_common::format::format_elapsed(project.created_at_ns);
+    let search = project
+        .search_method
+        .as_deref()
+        .unwrap_or("unknown");
+    let langs = if project.languages.is_empty() {
+        String::from("unknown")
+    } else {
+        project.languages.join(", ")
+    };
+
+    let dim_str = format!("{} (dim={})", project.model_id, project.model_dim);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Root:          "),
+            Span::styled(&project.root_path, Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::raw("  Model:         "),
+            Span::styled(dim_str, Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::raw("  Languages:     "),
+            Span::styled(langs, Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::raw("  Chunks:        "),
+            Span::styled(
+                project.total_chunks.to_string(),
+                Style::default().fg(Color::Gray),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  Files:         "),
+            Span::styled(
+                project.total_files.to_string(),
+                Style::default().fg(Color::Gray),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  Search method: "),
+            Span::styled(search, Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::raw("  Last indexed:  "),
+            Span::styled(ago_indexed, Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::raw("  Created:       "),
+            Span::styled(ago_created, Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  ─────────────────────────────────────",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(draw_buttons(selected)),
+    ];
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_buttons(selected: DetailButton) -> Line<'static> {
+    const BUTTONS: &[(&str, DetailButton)] = &[
+        ("Remove", DetailButton::Remove),
+        ("Reindex", DetailButton::Reindex),
+        ("Back", DetailButton::Back),
+    ];
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(BUTTONS.len() * 3);
+    for (i, (label, btn)) in BUTTONS.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("    "));
+        }
+        let is_sel = *btn == selected;
+        let style = if is_sel {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let prefix = if is_sel { "> [" } else { "  [" };
+        spans.push(Span::styled(
+            format!("{}{}]{}", prefix, label, if is_sel { "] <" } else { "]" }),
+            style,
+        ));
+    }
+    Line::from(spans)
+}
+
+fn draw_confirm_remove(f: &mut Frame, root_path: &str) {
+    let area = centered_rect(50, 25, f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Confirm Remove ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  This will permanently delete all indexed",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(Span::styled(
+            "  data for this project. This cannot be undone.",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Project: "),
+            Span::styled(root_path, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  y: remove   n/Esc: cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+    ];
+
+    let para = Paragraph::new(text)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    f.render_widget(para, area);
+}
+
+fn draw_modal_error(f: &mut Frame, message: &str) {
+    let area = centered_rect(50, 25, f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Error ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {}", message),
+            Style::default().fg(Color::Red),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Esc/Enter: dismiss",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+    ];
+
+    let para = Paragraph::new(text)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }

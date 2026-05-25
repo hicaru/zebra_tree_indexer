@@ -67,6 +67,24 @@ pub enum ActivePanel {
     Search,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum DetailButton {
+    #[default]
+    Remove,
+    Reindex,
+    Back,
+}
+
+pub enum Modal {
+    ProjectDetail {
+        selected_button: DetailButton,
+    },
+    ConfirmRemove,
+    Error {
+        message: String,
+    },
+}
+
 pub enum AppMessage {
     DaemonStatusUpdate(DaemonStatus),
     ProjectsLoaded(Vec<ProjectRow>),
@@ -84,6 +102,10 @@ pub enum AppMessage {
         model: Arc<str>,
         variant: Arc<str>,
     },
+    ProjectRemoved,
+    ProjectRemoveError(String),
+    ReindexStarted,
+    ReindexError(String),
 }
 
 pub struct App {
@@ -93,6 +115,7 @@ pub struct App {
     pub projects: Vec<ProjectRow>,
     pub selected_project: usize,
     pub active_panel: ActivePanel,
+    pub modal: Option<Modal>,
     pub search_input: String,
     pub search_results: Option<SearchResults>,
     pub search_error: Option<String>,
@@ -116,6 +139,7 @@ impl Default for App {
             projects: Vec::with_capacity(8),
             selected_project: 0,
             active_panel: ActivePanel::default(),
+            modal: None,
             search_input: String::with_capacity(256),
             search_results: None,
             search_error: None,

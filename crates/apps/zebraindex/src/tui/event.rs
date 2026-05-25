@@ -1,6 +1,6 @@
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
-use super::app::{ActivePanel, App, DaemonStatus, Screen, SetupPhase};
+use super::app::{ActivePanel, App, DaemonStatus, Modal, Screen, SetupPhase};
 
 pub enum Action {
     Quit,
@@ -22,6 +22,13 @@ pub enum Action {
     SetupBack,
     SetupRetry,
     ChangeModel,
+    OpenProjectDetail,
+    DetailButtonNext,
+    DetailButtonPrev,
+    DetailConfirm,
+    DetailBack,
+    ConfirmRemoveYes,
+    ConfirmRemoveNo,
 }
 
 pub fn map_key(key: &event::KeyEvent, app: &App) -> Action {
@@ -30,7 +37,13 @@ pub fn map_key(key: &event::KeyEvent, app: &App) -> Action {
     }
     match &app.screen {
         Screen::Setup(phase) => map_setup_key(key, phase),
-        Screen::Main => map_main_key(key, app),
+        Screen::Main => {
+            if app.modal.is_some() {
+                map_modal_key(key, app)
+            } else {
+                map_main_key(key, app)
+            }
+        }
     }
 }
 
@@ -60,6 +73,7 @@ fn map_main_key(key: &event::KeyEvent, app: &App) -> Action {
         KeyCode::Char('q') if !in_search(app) => Action::Quit,
         KeyCode::Tab => Action::SwitchPanel,
         KeyCode::Char('/') if !in_search(app) => Action::FocusSearch,
+        KeyCode::Enter if in_projects(app) => Action::OpenProjectDetail,
         KeyCode::Enter => Action::SubmitSearch,
         KeyCode::Char('j') | KeyCode::Down if in_projects(app) => Action::SelectNextProject,
         KeyCode::Char('k') | KeyCode::Up if in_projects(app) => Action::SelectPrevProject,
@@ -76,6 +90,27 @@ fn map_main_key(key: &event::KeyEvent, app: &App) -> Action {
         KeyCode::Backspace if in_search(app) => Action::Backspace,
         KeyCode::Esc if in_search(app) => Action::SwitchPanel,
         _ => Action::None,
+    }
+}
+
+fn map_modal_key(key: &event::KeyEvent, app: &App) -> Action {
+    match &app.modal {
+        Some(Modal::ConfirmRemove) => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => Action::ConfirmRemoveYes,
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Action::ConfirmRemoveNo,
+            _ => Action::None,
+        },
+        Some(Modal::Error { .. }) => match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Action::DetailBack,
+            _ => Action::None,
+        },
+        _ => match key.code {
+            KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => Action::DetailButtonNext,
+            KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => Action::DetailButtonPrev,
+            KeyCode::Enter => Action::DetailConfirm,
+            KeyCode::Esc | KeyCode::Char('q') => Action::DetailBack,
+            _ => Action::None,
+        },
     }
 }
 

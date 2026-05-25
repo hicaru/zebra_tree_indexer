@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+
+use super::ui::centered_rect;
 
 use super::app::SetupPhase;
 use super::registry::ModelEntry;
@@ -13,25 +15,6 @@ const SPINNER: &[&str] = &[
     "\u{2807}", "\u{280b}", "\u{2819}", "\u{2838}",
     "\u{2830}", "\u{2826}", "\u{280e}", "\u{2803}",
 ];
-
-fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
-    let vert = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - pct_y) / 2),
-            Constraint::Percentage(pct_y),
-            Constraint::Percentage((100 - pct_y) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - pct_x) / 2),
-            Constraint::Percentage(pct_x),
-            Constraint::Percentage((100 - pct_x) / 2),
-        ])
-        .split(vert[1])[1]
-}
 
 fn spinner_ch(tick: u16) -> &'static str {
     SPINNER[tick as usize % SPINNER.len()]
