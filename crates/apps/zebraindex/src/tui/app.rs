@@ -5,7 +5,9 @@ use zti_ipc_client::Client;
 use zti_protocol::response::SearchResults;
 use zti_store::ProjectRow;
 
+#[derive(Default)]
 pub enum DaemonStatus {
+    #[default]
     Unknown,
     Starting,
     Running {
@@ -17,7 +19,9 @@ pub enum DaemonStatus {
     Error(String),
 }
 
+#[derive(Default)]
 pub enum ActivePanel {
+    #[default]
     Projects,
     Search,
 }
@@ -43,13 +47,13 @@ pub struct App {
     pub client: Arc<Mutex<Option<Client>>>,
 }
 
-impl App {
-    pub fn new() -> Self {
+impl Default for App {
+    fn default() -> Self {
         Self {
-            daemon_status: DaemonStatus::Unknown,
-            projects: Vec::new(),
+            daemon_status: DaemonStatus::default(),
+            projects: Vec::with_capacity(8),
             selected_project: 0,
-            active_panel: ActivePanel::Projects,
+            active_panel: ActivePanel::default(),
             search_input: String::with_capacity(256),
             search_results: None,
             search_error: None,
@@ -59,7 +63,9 @@ impl App {
             client: Arc::new(Mutex::new(None)),
         }
     }
+}
 
+impl App {
     pub fn selected_project_root(&self) -> Option<&str> {
         self.projects
             .get(self.selected_project)

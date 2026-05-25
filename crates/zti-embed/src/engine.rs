@@ -51,17 +51,19 @@ pub fn apply_prefix<'a>(text: &'a str, prefix: &Option<String>) -> Cow<'a, str> 
     }
 }
 
+static ONNX_AUTO: OnnxVariant = OnnxVariant::Auto;
+
 #[derive(Debug, Clone)]
 pub struct LoadOverrides<'a> {
-    pub variant: OnnxVariant,
+    pub variant: &'a OnnxVariant,
     pub query_prefix: Option<&'a str>,
     pub passage_prefix: Option<&'a str>,
 }
 
-impl<'a> Default for LoadOverrides<'a> {
+impl Default for LoadOverrides<'_> {
     fn default() -> Self {
         Self {
-            variant: OnnxVariant::Auto,
+            variant: &ONNX_AUTO,
             query_prefix: None,
             passage_prefix: None,
         }
@@ -143,7 +145,7 @@ impl EmbedEngine {
     pub fn load_with(model_id: &str, hw: &Hardware, opts: &LoadOverrides<'_>) -> Result<Self> {
         let mut profile = resolve_profile(
             model_id,
-            &opts.variant,
+            opts.variant,
             hw,
             opts.query_prefix,
             opts.passage_prefix,

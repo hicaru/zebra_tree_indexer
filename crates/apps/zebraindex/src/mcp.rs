@@ -212,8 +212,8 @@ fn match_file(
     m.is_match(rel) || m.is_match(file_path)
 }
 
-fn ok_text(text: String) -> CallToolResult {
-    CallToolResult::success(vec![Content::text(text)])
+fn ok_text(text: impl Into<String>) -> CallToolResult {
+    CallToolResult::success(vec![Content::text(text.into())])
 }
 
 fn internal_err(msg: String) -> ErrorData {
@@ -369,9 +369,7 @@ impl ZebraMcpServer {
             .map_err(|e| internal_err(format!("list_projects: {e}")))?;
 
         if projects.is_empty() {
-            return Ok(ok_text(String::from(
-                "No indexed projects found.",
-            )));
+            return Ok(ok_text("No indexed projects found."));
         }
 
         let mut out = String::with_capacity(projects.len() * 128);

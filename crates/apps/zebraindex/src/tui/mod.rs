@@ -30,7 +30,7 @@ pub fn run_tui(
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        let mut app = App::new();
+        let mut app = App::default();
         let (tx, mut rx) = mpsc::channel::<AppMessage>(32);
 
         let client = app.client.clone();
@@ -38,13 +38,16 @@ pub fn run_tui(
         let model_owned = model.map(|s| s.to_string());
         let query_prefix_owned = query_prefix.map(|s| s.to_string());
         let passage_prefix_owned = passage_prefix.map(|s| s.to_string());
+        let monitor_model = model_owned.clone();
+        let monitor_query = query_prefix_owned.clone();
+        let monitor_passage = passage_prefix_owned.clone();
         tokio::spawn(async move {
             daemon_monitor(
                 tx_monitor,
                 client,
-                model_owned.as_deref(),
-                query_prefix_owned.as_deref(),
-                passage_prefix_owned.as_deref(),
+                monitor_model.as_deref(),
+                monitor_query.as_deref(),
+                monitor_passage.as_deref(),
             )
             .await;
         });
@@ -60,7 +63,15 @@ pub fn run_tui(
                 && let crossterm::event::Event::Key(key) = crossterm::event::read()?
             {
                 let action = event::map_key(&key, &app);
-                handle_action(&mut app, action, &tx).await;
+                handle_action(
+                    &mut app,
+                    action,
+                    &tx,
+                    model_owned.as_deref(),
+                    query_prefix_owned.as_deref(),
+                    passage_prefix_owned.as_deref(),
+                )
+                .await;
             }
 
             if app.should_quit {
@@ -173,33 +184,28 @@ async fn do_search(
     root: Option<String>,
     client: Arc<Mutex<Option<zti_ipc_client::Client>>>,
     tx: mpsc::Sender<AppMessage>,
+    model: Option<&str>,
+    query_prefix: Option<&str>,
+    passage_prefix: Option<&str>,
 ) {
     let result = async {
-        let mut guard = client.lock().await;
-        if guard.is_none() {
-            let mut c = zti_ipc_client::Client::connect(
-                Duration::from_secs(10),
-                None,
-                None,
-                None,
-                None,
-            )
-            .await?;
-            c.handshake().await?;
-            *guard = Some(c);
-        }
-        let c = guard.as_mut().unwrap();
+        ensure_client(&client, model, query_prefix, passage_prefix).await?;
 
         let project_root = match root {
             Some(r) => r,
             None => {
                 let projects = zti_store::list_projects().await?;
-                if projects.is_empty() {
-                    anyhow::bail!("No indexed projects");
+                match projects.into_iter().next() {
+                    Some(p) => p.root_path,
+                    None => anyhow::bail!("No indexed projects"),
                 }
-                projects[0].root_path.clone()
             }
         };
+
+        let mut guard = client.lock().await;
+        let c = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("client not initialized"))?;
 
         let resp = c
             .request(Request::Search(zti_protocol::request::SearchReq {
@@ -233,7 +239,14 @@ async fn do_search(
     }
 }
 
-async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<AppMessage>) {
+async fn handle_action(
+    app: &mut App,
+    action: event::Action,
+    tx: &mpsc::Sender<AppMessage>,
+    model: Option<&str>,
+    query_prefix: Option<&str>,
+    passage_prefix: Option<&str>,
+) {
     match action {
         event::Action::Quit => app.should_quit = true,
         event::Action::SwitchPanel => {
@@ -277,8 +290,20 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                 let root = app.selected_project_root().map(|s| s.to_string());
                 let tx_clone = tx.clone();
                 let client = app.client.clone();
+                let owned_model = model.map(|s| s.to_string());
+                let owned_qp = query_prefix.map(|s| s.to_string());
+                let owned_pp = passage_prefix.map(|s| s.to_string());
                 tokio::spawn(async move {
-                    do_search(query, root, client, tx_clone).await;
+                    do_search(
+                        query,
+                        root,
+                        client,
+                        tx_clone,
+                        owned_model.as_deref(),
+                        owned_qp.as_deref(),
+                        owned_pp.as_deref(),
+                    )
+                    .await;
                 });
             }
         }

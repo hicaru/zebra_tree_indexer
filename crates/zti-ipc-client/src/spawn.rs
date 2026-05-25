@@ -23,7 +23,7 @@ pub async fn connect_or_spawn(
 
     match model {
         Some(m) => tracing::info!("daemon not running, spawning with model {m}..."),
-        None => tracing::info!("daemon not running, spawning with daemon default model..."),
+        None => tracing::info!("daemon not running, spawning (no model specified)..."),
     }
     spawn_daemon(model, variant, query_prefix, passage_prefix)?;
     wait_for_socket(&socket_path, timeout).await
@@ -74,8 +74,11 @@ fn spawn_daemon(
 
     if needs_subcommand {
         cmd.arg("daemon");
-    }
-    if let Some(m) = model {
+        let m = model.ok_or_else(|| {
+            anyhow::anyhow!("--model is required to spawn the daemon")
+        })?;
+        cmd.args(["--model", m]);
+    } else if let Some(m) = model {
         cmd.args(["--model", m]);
     }
     if let Some(v) = variant {

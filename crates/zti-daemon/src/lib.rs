@@ -22,22 +22,6 @@ pub struct DaemonConfig<'a> {
     pub passage_prefix: Option<&'a str>,
 }
 
-impl<'a> DaemonConfig<'a> {
-    pub fn new(
-        model: Cow<'a, str>,
-        variant: OnnxVariant,
-        query_prefix: Option<&'a str>,
-        passage_prefix: Option<&'a str>,
-    ) -> Self {
-        Self {
-            model,
-            variant,
-            query_prefix,
-            passage_prefix,
-        }
-    }
-}
-
 pub fn run_daemon(config: &DaemonConfig<'_>) -> Result<()> {
     let pid_path = zti_common::paths::daemon_pid()?;
     let mut pid_file = std::fs::OpenOptions::new()
@@ -80,7 +64,7 @@ pub fn run_daemon(config: &DaemonConfig<'_>) -> Result<()> {
     tracing::info!(device = ?hw.device, "hardware detected");
 
     let opts = LoadOverrides {
-        variant: config.variant.clone(),
+        variant: &config.variant,
         query_prefix: config.query_prefix,
         passage_prefix: config.passage_prefix,
     };

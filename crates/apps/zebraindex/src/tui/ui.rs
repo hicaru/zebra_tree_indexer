@@ -150,13 +150,8 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(border_style);
 
-    let input_text = if app.search_input.is_empty() && !highlight {
-        "  press / to search"
-    } else {
-        ""
-    };
     let input_para = if app.search_input.is_empty() && !highlight {
-        Paragraph::new(input_text)
+        Paragraph::new("  press / to search")
             .block(input_block)
             .style(Style::default().fg(Color::DarkGray))
     } else {
@@ -214,11 +209,10 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
             }
         }
 
-        let scroll = app.results_scroll as usize;
-        let visible: Vec<Line> = lines.into_iter().skip(scroll).collect();
-        let para = Paragraph::new(visible)
+        let para = Paragraph::new(lines)
             .block(results_block)
-            .wrap(Wrap { trim: false });
+            .wrap(Wrap { trim: false })
+            .scroll((app.results_scroll, 0));
         f.render_widget(para, inner[1]);
     } else {
         let para = Paragraph::new("  no results yet")
