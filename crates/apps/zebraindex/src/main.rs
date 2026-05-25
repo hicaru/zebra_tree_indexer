@@ -86,7 +86,7 @@ fn main() -> Result<()> {
     match top.command {
         None => {
             init_tracing("warn");
-            tui::run_tui(model, top.variant, query_prefix, passage_prefix)
+            tui::run_tui(model, query_prefix, passage_prefix)
         }
         Some(TopCommand::Daemon {
             model,

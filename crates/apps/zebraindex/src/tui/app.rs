@@ -45,6 +45,9 @@ pub struct App {
     pub results_scroll: u16,
     pub should_quit: bool,
     pub client: Arc<Mutex<Option<Client>>>,
+    pub model: Option<Arc<str>>,
+    pub query_prefix: Option<Arc<str>>,
+    pub passage_prefix: Option<Arc<str>>,
 }
 
 impl Default for App {
@@ -61,6 +64,9 @@ impl Default for App {
             results_scroll: 0,
             should_quit: false,
             client: Arc::new(Mutex::new(None)),
+            model: None,
+            query_prefix: None,
+            passage_prefix: None,
         }
     }
 }

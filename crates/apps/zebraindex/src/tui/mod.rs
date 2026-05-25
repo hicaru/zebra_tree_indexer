@@ -18,7 +18,6 @@ use app::{App, AppMessage};
 
 pub fn run_tui(
     model: Option<&str>,
-    _variant: Option<zti_embed::OnnxVariant>,
     query_prefix: Option<&str>,
     passage_prefix: Option<&str>,
 ) -> Result<()> {
@@ -30,24 +29,27 @@ pub fn run_tui(
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        let mut app = App::default();
+        let mut app = App {
+            model: model.map(Arc::from),
+            query_prefix: query_prefix.map(Arc::from),
+            passage_prefix: passage_prefix.map(Arc::from),
+            ..App::default()
+        };
+
         let (tx, mut rx) = mpsc::channel::<AppMessage>(32);
 
         let client = app.client.clone();
         let tx_monitor = tx.clone();
-        let model_owned = model.map(|s| s.to_string());
-        let query_prefix_owned = query_prefix.map(|s| s.to_string());
-        let passage_prefix_owned = passage_prefix.map(|s| s.to_string());
-        let monitor_model = model_owned.clone();
-        let monitor_query = query_prefix_owned.clone();
-        let monitor_passage = passage_prefix_owned.clone();
+        let monitor_model = app.model.clone();
+        let monitor_query = app.query_prefix.clone();
+        let monitor_passage = app.passage_prefix.clone();
         tokio::spawn(async move {
             daemon_monitor(
                 tx_monitor,
                 client,
-                monitor_model.as_deref(),
-                monitor_query.as_deref(),
-                monitor_passage.as_deref(),
+                monitor_model,
+                monitor_query,
+                monitor_passage,
             )
             .await;
         });
@@ -63,15 +65,7 @@ pub fn run_tui(
                 && let crossterm::event::Event::Key(key) = crossterm::event::read()?
             {
                 let action = event::map_key(&key, &app);
-                handle_action(
-                    &mut app,
-                    action,
-                    &tx,
-                    model_owned.as_deref(),
-                    query_prefix_owned.as_deref(),
-                    passage_prefix_owned.as_deref(),
-                )
-                .await;
+                handle_action(&mut app, action, &tx).await;
             }
 
             if app.should_quit {
@@ -110,9 +104,9 @@ async fn ensure_client(
 async fn daemon_monitor(
     tx: mpsc::Sender<AppMessage>,
     client: Arc<Mutex<Option<zti_ipc_client::Client>>>,
-    model: Option<&str>,
-    query_prefix: Option<&str>,
-    passage_prefix: Option<&str>,
+    model: Option<Arc<str>>,
+    query_prefix: Option<Arc<str>>,
+    passage_prefix: Option<Arc<str>>,
 ) {
     loop {
         let socket_path = match zti_common::paths::daemon_socket() {
@@ -161,10 +155,10 @@ async fn daemon_monitor(
             let _ = tx
                 .send(AppMessage::DaemonStatusUpdate(app::DaemonStatus::Starting))
                 .await;
-            if ensure_client(&client, model, query_prefix, passage_prefix)
-                .await
-                .is_err()
-            {
+            let m = model.as_deref();
+            let qp = query_prefix.as_deref();
+            let pp = passage_prefix.as_deref();
+            if ensure_client(&client, m, qp, pp).await.is_err() {
                 let _ = tx
                     .send(AppMessage::DaemonStatusUpdate(app::DaemonStatus::Stopped))
                     .await;
@@ -184,12 +178,15 @@ async fn do_search(
     root: Option<String>,
     client: Arc<Mutex<Option<zti_ipc_client::Client>>>,
     tx: mpsc::Sender<AppMessage>,
-    model: Option<&str>,
-    query_prefix: Option<&str>,
-    passage_prefix: Option<&str>,
+    model: Option<Arc<str>>,
+    query_prefix: Option<Arc<str>>,
+    passage_prefix: Option<Arc<str>>,
 ) {
     let result = async {
-        ensure_client(&client, model, query_prefix, passage_prefix).await?;
+        let m = model.as_deref();
+        let qp = query_prefix.as_deref();
+        let pp = passage_prefix.as_deref();
+        ensure_client(&client, m, qp, pp).await?;
 
         let project_root = match root {
             Some(r) => r,
@@ -239,14 +236,7 @@ async fn do_search(
     }
 }
 
-async fn handle_action(
-    app: &mut App,
-    action: event::Action,
-    tx: &mpsc::Sender<AppMessage>,
-    model: Option<&str>,
-    query_prefix: Option<&str>,
-    passage_prefix: Option<&str>,
-) {
+async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<AppMessage>) {
     match action {
         event::Action::Quit => app.should_quit = true,
         event::Action::SwitchPanel => {
@@ -290,20 +280,11 @@ async fn handle_action(
                 let root = app.selected_project_root().map(|s| s.to_string());
                 let tx_clone = tx.clone();
                 let client = app.client.clone();
-                let owned_model = model.map(|s| s.to_string());
-                let owned_qp = query_prefix.map(|s| s.to_string());
-                let owned_pp = passage_prefix.map(|s| s.to_string());
+                let model = app.model.clone();
+                let qp = app.query_prefix.clone();
+                let pp = app.passage_prefix.clone();
                 tokio::spawn(async move {
-                    do_search(
-                        query,
-                        root,
-                        client,
-                        tx_clone,
-                        owned_model.as_deref(),
-                        owned_qp.as_deref(),
-                        owned_pp.as_deref(),
-                    )
-                    .await;
+                    do_search(query, root, client, tx_clone, model, qp, pp).await;
                 });
             }
         }
@@ -311,8 +292,7 @@ async fn handle_action(
             let client = app.client.clone();
             tokio::spawn(async move {
                 let mut guard = client.lock().await;
-                if let Some(c) = guard.take() {
-                    let mut c = c;
+                if let Some(mut c) = guard.take() {
                     let _ = c.request(Request::Stop).await;
                 }
             });

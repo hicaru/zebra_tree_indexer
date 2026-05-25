@@ -24,28 +24,6 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
-    let (indicator, spans) = match &app.daemon_status {
-        DaemonStatus::Unknown => ("?", vec![Span::raw("Checking...")]),
-        DaemonStatus::Starting => ("◌", vec![Span::raw("Starting...")]),
-        DaemonStatus::Running {
-            model_id,
-            device,
-            uptime_secs,
-        } => {
-            let mins = uptime_secs / 60;
-            let hrs = mins / 60;
-            (
-                "●",
-                vec![Span::raw(format!(
-                    "Running  Model: {}  Device: {}  Uptime: {}h {}m",
-                    model_id, device, hrs, mins % 60
-                ))],
-            )
-        }
-        DaemonStatus::Stopped => ("○", vec![Span::raw("Stopped")]),
-        DaemonStatus::Error(e) => ("!", vec![Span::raw(format!("Error: {}", e))]),
-    };
-
     let color = match &app.daemon_status {
         DaemonStatus::Running { .. } => Color::Green,
         DaemonStatus::Starting => Color::Yellow,
@@ -53,15 +31,39 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         _ => Color::DarkGray,
     };
 
-    let line = Line::from(vec![
-        Span::styled("  Daemon: ", Style::default()),
-        Span::styled(indicator, Style::default().fg(color)),
-        Span::raw(" "),
-    ]
-    .into_iter()
-    .chain(spans)
-    .collect::<Vec<_>>());
+    let indicator = match &app.daemon_status {
+        DaemonStatus::Unknown => "?",
+        DaemonStatus::Starting => "◌",
+        DaemonStatus::Running { .. } => "●",
+        DaemonStatus::Stopped => "○",
+        DaemonStatus::Error(_) => "!",
+    };
 
+    let mut spans = Vec::with_capacity(5);
+    spans.push(Span::styled("  Daemon: ", Style::default()));
+    spans.push(Span::styled(indicator, Style::default().fg(color)));
+    spans.push(Span::raw(" "));
+
+    match &app.daemon_status {
+        DaemonStatus::Unknown => spans.push(Span::raw("Checking...")),
+        DaemonStatus::Starting => spans.push(Span::raw("Starting...")),
+        DaemonStatus::Running {
+            model_id,
+            device,
+            uptime_secs,
+        } => {
+            let mins = uptime_secs / 60;
+            let hrs = mins / 60;
+            spans.push(Span::raw(format!(
+                "Running  Model: {}  Device: {}  Uptime: {}h {}m",
+                model_id, device, hrs, mins % 60
+            )));
+        }
+        DaemonStatus::Stopped => spans.push(Span::raw("Stopped")),
+        DaemonStatus::Error(e) => spans.push(Span::raw(format!("Error: {}", e))),
+    }
+
+    let line = Line::from(spans);
     let block = Block::default()
         .title(" zebraindex ")
         .borders(Borders::ALL);
@@ -87,34 +89,30 @@ fn draw_projects(f: &mut Frame, app: &App, area: Rect) {
         Style::default()
     };
 
-    let items: Vec<ListItem> = app
-        .projects
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let name = std::path::Path::new(&p.root_path)
-                .file_name()
-                .map(|s| s.to_string_lossy())
-                .unwrap_or(std::borrow::Cow::Borrowed("?"));
-            let prefix = if i == app.selected_project {
-                "> "
-            } else {
-                "  "
-            };
-            let style = if i == app.selected_project {
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .fg(Color::Cyan)
-            } else {
-                Style::default()
-            };
-            let line = Line::from(vec![
-                Span::styled(prefix, style),
-                Span::styled(name, style),
-            ]);
-            ListItem::new(line)
-        })
-        .collect();
+    let mut items: Vec<ListItem> = Vec::with_capacity(app.projects.len());
+    for (i, p) in app.projects.iter().enumerate() {
+        let name = std::path::Path::new(&p.root_path)
+            .file_name()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or(std::borrow::Cow::Borrowed("?"));
+        let prefix = if i == app.selected_project {
+            "> "
+        } else {
+            "  "
+        };
+        let style = if i == app.selected_project {
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+        let line = Line::from(vec![
+            Span::styled(prefix, style),
+            Span::styled(name, style),
+        ]);
+        items.push(ListItem::new(line));
+    }
 
     let block = Block::default()
         .title(" Projects ")
@@ -155,7 +153,11 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
             .block(input_block)
             .style(Style::default().fg(Color::DarkGray))
     } else {
-        Paragraph::new(format!("  {}", app.search_input)).block(input_block)
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::raw(app.search_input.as_str()),
+        ]))
+        .block(input_block)
     };
     f.render_widget(input_para, inner[0]);
 
