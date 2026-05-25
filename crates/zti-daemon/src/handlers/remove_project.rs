@@ -18,7 +18,7 @@ pub async fn handle(req: &RemoveProjectReq, state: &DaemonState) -> Response {
         None => return Response::RemoveProject(Ok(())),
     };
 
-    let pid: [u8; 32] = match row.project_id.clone().try_into() {
+    let pid: [u8; 32] = match <[u8; 32]>::try_from(row.project_id.as_slice()) {
         Ok(p) => p,
         Err(_) => {
             return Response::RemoveProject(Err(ErrorBody {
@@ -34,8 +34,22 @@ pub async fn handle(req: &RemoveProjectReq, state: &DaemonState) -> Response {
         reg.remove(&pid);
     }
 
-    if let Ok(dir) = zti_common::paths::project_dir_path(&pid) {
-        let _ = std::fs::remove_dir_all(&dir);
+    drop(projects);
+
+    match zti_common::paths::project_dir_path(&pid) {
+        Ok(dir) if dir.exists() => {
+            if let Err(e) = std::fs::remove_dir_all(&dir) {
+                return Response::RemoveProject(Err(ErrorBody {
+                    message: format!("failed to delete project data: {e}"),
+                }));
+            }
+        }
+        Err(e) => {
+            return Response::RemoveProject(Err(ErrorBody {
+                message: format!("failed to resolve project path: {e}"),
+            }));
+        }
+        _ => {}
     }
 
     Response::RemoveProject(Ok(()))

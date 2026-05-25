@@ -414,7 +414,7 @@ fn draw_buttons(selected: DetailButton) -> Line<'static> {
         };
         let prefix = if is_sel { "> [" } else { "  [" };
         spans.push(Span::styled(
-            format!("{}{}]{}", prefix, label, if is_sel { "] <" } else { "]" }),
+            format!("{}{}{}", prefix, label, if is_sel { "] <" } else { "]" }),
             style,
         ));
     }

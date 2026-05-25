@@ -517,11 +517,14 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
         }
         event::Action::ConfirmRemoveYes => {
             app.modal = None;
-            if let Some(root) = app.selected_project_root_owned() {
+            if let Some(p) = app.projects.get(app.selected_project)
+                && let Ok(pid) = <[u8; 32]>::try_from(p.project_id.as_slice())
+            {
+                let root = p.root_path.clone();
                 let ctx = ClientCtx::from_app(app);
                 let tx_c = tx.clone();
                 tokio::spawn(async move {
-                    do_remove_project(root, ctx, tx_c).await;
+                    do_remove_project(root, pid, ctx, tx_c).await;
                 });
             }
         }
@@ -751,10 +754,11 @@ async fn do_search(
 
 async fn do_remove_project(
     project_root: String,
+    project_id: [u8; 32],
     ctx: ClientCtx,
     tx: mpsc::Sender<AppMessage>,
 ) {
-    let result = async {
+    let daemon_err = async {
         let (m, v, qp, pp) = ctx.deref_opts();
         ensure_client(&ctx.client, m, v, qp, pp).await?;
 
@@ -775,16 +779,21 @@ async fn do_remove_project(
             other => Err(anyhow::anyhow!("unexpected: {:?}", other)),
         }
     }
-    .await;
+    .await
+    .err();
 
-    match result {
-        Ok(()) => {
-            let _ = tx.send(AppMessage::ProjectRemoved).await;
-        }
-        Err(e) => {
-            let _ = tx.send(AppMessage::ProjectRemoveError(e.to_string())).await;
-        }
+    if let Ok(dir) = zti_common::paths::project_dir_path(&project_id)
+        && dir.exists()
+        && let Err(e) = std::fs::remove_dir_all(&dir)
+    {
+        let msg = daemon_err
+            .map(|de| format!("{de}; disk: {e}"))
+            .unwrap_or_else(|| format!("failed to delete project data: {e}"));
+        let _ = tx.send(AppMessage::ProjectRemoveError(msg)).await;
+        return;
     }
+
+    let _ = tx.send(AppMessage::ProjectRemoved).await;
 }
 
 async fn do_reindex(
