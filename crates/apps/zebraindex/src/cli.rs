@@ -110,7 +110,11 @@ pub async fn run(
 
             let resp = client
                 .request_streaming(
-                    Request::Index(IndexReq { project_root, refresh }),
+                    Request::Index(IndexReq {
+                        project_root,
+                        refresh,
+                        search_method: None,
+                    }),
                     |frame| {
                         if let Response::IndexProgress(p) = frame {
                             let mut slot = bar.borrow_mut();

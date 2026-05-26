@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct TuiConfig {
     pub default_model: String,
     pub default_variant: String,
+    #[serde(default)]
+    pub default_search_method: Option<String>,
 }
 
 pub fn config_path() -> Result<PathBuf> {
@@ -23,10 +25,11 @@ pub fn load() -> Result<Option<TuiConfig>> {
     Ok(Some(cfg))
 }
 
-pub fn save(model: &str, variant: &str) -> Result<()> {
+pub fn save(model: &str, variant: &str, search_method: Option<&str>) -> Result<()> {
     let cfg = TuiConfig {
         default_model: model.to_string(),
         default_variant: variant.to_string(),
+        default_search_method: search_method.map(str::to_string),
     };
     let path = config_path()?;
     let json = serde_json::to_vec(&cfg)?;

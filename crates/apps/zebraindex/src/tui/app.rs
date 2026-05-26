@@ -37,6 +37,12 @@ pub enum SetupPhase {
         variants: Vec<(Arc<str>, Arc<str>)>,
         selected: usize,
     },
+    IndexMethodSelection {
+        model_id: Arc<str>,
+        variant: Arc<str>,
+        methods: Arc<[(zti_ann::SearchMethod, bool)]>,
+        selected: usize,
+    },
     Launching {
         model_id: Arc<str>,
         variant: Arc<str>,
@@ -75,6 +81,7 @@ pub enum DetailButton {
     #[default]
     Remove,
     Reindex,
+    IndexMethod,
     Back,
 }
 
@@ -108,6 +115,12 @@ pub enum Modal {
         already_indexed: bool,
         selected_button: AddConfirmButton,
     },
+    ChangeIndexMethod {
+        project_root: Option<String>,
+        is_reindex: bool,
+        methods: Arc<[(zti_ann::SearchMethod, bool)]>,
+        selected: usize,
+    },
 }
 
 pub enum AppMessage {
@@ -118,6 +131,7 @@ pub enum AppMessage {
     ConfigResolved {
         model: Option<String>,
         variant: Option<String>,
+        search_method: Option<String>,
     },
     RegistryLoaded(Vec<ModelEntry>),
     RegistryError(String),
@@ -164,6 +178,7 @@ pub struct App {
     pub variant: Option<Arc<str>>,
     pub query_prefix: Option<Arc<str>>,
     pub passage_prefix: Option<Arc<str>>,
+    pub search_method: Option<zti_ann::SearchMethod>,
     pub should_run: Arc<AtomicBool>,
     pub monitor_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -199,6 +214,7 @@ impl Default for App {
             variant: None,
             query_prefix: None,
             passage_prefix: None,
+            search_method: None,
             should_run: Arc::new(AtomicBool::new(true)),
             monitor_handle: None,
         }

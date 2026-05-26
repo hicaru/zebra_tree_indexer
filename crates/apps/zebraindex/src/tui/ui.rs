@@ -366,6 +366,11 @@ fn draw_modal(f: &mut Frame, app: &App, tick: u16) {
         }) => {
             draw_add_project_confirm(f, canonical_path, *already_indexed, *selected_button);
         }
+        Some(Modal::ChangeIndexMethod {
+            methods, selected, ..
+        }) => {
+            super::setup::draw_method_selection_modal(f, methods, *selected);
+        }
         None => {}
     }
 }
@@ -478,6 +483,7 @@ fn draw_buttons(selected: DetailButton) -> Line<'static> {
     render_button_row(&[
         ("Remove", selected == DetailButton::Remove),
         ("Reindex", selected == DetailButton::Reindex),
+        ("Index Method", selected == DetailButton::IndexMethod),
         ("Back", selected == DetailButton::Back),
     ])
 }

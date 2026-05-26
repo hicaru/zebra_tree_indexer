@@ -5,7 +5,10 @@ use arrow::array::{
 };
 use futures::StreamExt;
 use lancedb::index::Index;
-use lancedb::index::vector::IvfHnswSqIndexBuilder;
+use lancedb::index::vector::{
+    IvfHnswPqIndexBuilder, IvfHnswSqIndexBuilder, IvfPqIndexBuilder, IvfRqIndexBuilder,
+    IvfSqIndexBuilder,
+};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::Table;
 use std::fmt::Write as _;
@@ -56,12 +59,7 @@ impl ChunksTable {
             return Ok(());
         }
         let n = self.table.count_rows(None).await?;
-        if n == 0
-            || matches!(
-                params.method,
-                zti_ann::SearchMethod::Flat | zti_ann::SearchMethod::Usearch
-            )
-        {
+        if n == 0 || !params.method.is_lancedb_index() {
             self.index_created = true;
             return Ok(());
         }
@@ -71,13 +69,54 @@ impl ChunksTable {
             return Ok(());
         }
 
-        let builder = IvfHnswSqIndexBuilder::default()
-            .distance_type(lancedb::DistanceType::Cosine)
-            .num_partitions(params.num_partitions)
-            .num_edges(params.m)
-            .ef_construction(params.ef_construction);
+        let dist = lancedb::DistanceType::Cosine;
+        let np = params.num_partitions;
+        let m = params.m;
+        let efc = params.ef_construction;
+        let nsv = params.num_sub_vectors;
+
+        let index = match params.method {
+            zti_ann::SearchMethod::IvfHnswSq => Index::IvfHnswSq(
+                IvfHnswSqIndexBuilder::default()
+                    .distance_type(dist)
+                    .num_partitions(np)
+                    .num_edges(m)
+                    .ef_construction(efc),
+            ),
+            zti_ann::SearchMethod::IvfHnswPq => Index::IvfHnswPq(
+                IvfHnswPqIndexBuilder::default()
+                    .distance_type(dist)
+                    .num_partitions(np)
+                    .num_edges(m)
+                    .ef_construction(efc)
+                    .num_sub_vectors(nsv),
+            ),
+            zti_ann::SearchMethod::IvfPq => Index::IvfPq(
+                IvfPqIndexBuilder::default()
+                    .distance_type(dist)
+                    .num_partitions(np)
+                    .num_sub_vectors(nsv),
+            ),
+            zti_ann::SearchMethod::IvfSq => Index::IvfSq(
+                IvfSqIndexBuilder::default()
+                    .distance_type(dist)
+                    .num_partitions(np),
+            ),
+            zti_ann::SearchMethod::IvfRq => Index::IvfRq(
+                IvfRqIndexBuilder::default()
+                    .distance_type(dist)
+                    .num_partitions(np),
+            ),
+            zti_ann::SearchMethod::Flat
+            | zti_ann::SearchMethod::Usearch
+            | zti_ann::SearchMethod::TurboQuant => {
+                self.index_created = true;
+                return Ok(());
+            }
+        };
+
         self.table
-            .create_index(&["embedding"], Index::IvfHnswSq(builder))
+            .create_index(&["embedding"], index)
             .execute()
             .await?;
         self.index_created = true;
@@ -112,11 +151,16 @@ impl ChunksTable {
             .distance_type(lancedb::DistanceType::Cosine)
             .limit(k);
 
-        if matches!(params.method, zti_ann::SearchMethod::IvfHnswSq) {
+        if params.method.is_lancedb_index() {
             q = q
                 .nprobes(params.nprobes as usize)
-                .ef(params.ef_search as usize)
                 .refine_factor(params.refine_factor);
+            if matches!(
+                params.method,
+                zti_ann::SearchMethod::IvfHnswSq | zti_ann::SearchMethod::IvfHnswPq
+            ) {
+                q = q.ef(params.ef_search as usize);
+            }
         }
 
         if let Some(filter) = build_lang_path_filter(languages, path_glob) {
@@ -439,8 +483,11 @@ fn decode_batch(batch: &RecordBatch, has_distance: bool, out: &mut Vec<ChunkHit>
             .unwrap_or_default();
         let parent_sym_id =
             parent_sym_ids.and_then(|a| if a.is_null(i) { None } else { Some(a.value(i)) });
+        let cid: [u8; 16] = chunk_ids
+            .and_then(|a| a.value(i).try_into().ok())
+            .unwrap_or([0u8; 16]);
         out.push(ChunkHit {
-            chunk_id: chunk_ids.map(|a| a.value(i).to_vec()).unwrap_or_default(),
+            chunk_id: cid,
             file_path: file_paths
                 .map(|a| a.value(i).to_string())
                 .unwrap_or_default(),
@@ -527,7 +574,7 @@ mod tests {
 
 #[derive(Debug, Clone)]
 pub struct ChunkHit {
-    pub chunk_id: Vec<u8>,
+    pub chunk_id: [u8; 16],
     pub file_path: String,
     pub symbol_qualified: String,
     pub symbol_kind: String,

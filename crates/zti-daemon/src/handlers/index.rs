@@ -33,12 +33,16 @@ where
     let root = std::path::Path::new(&req.project_root).to_path_buf();
     let engine = state.primary_engine();
     let db = project.db.clone();
+    let override_method = req
+        .search_method
+        .as_deref()
+        .and_then(zti_ann::SearchMethod::parse);
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let reporter = IpcReporter::new(tx);
 
     let mut indexing = Box::pin(async move {
-        zti_pipeline::indexer::index_project(&root, &engine, &db, &reporter).await
+        zti_pipeline::indexer::index_project(&root, &engine, &db, &reporter, override_method).await
     });
 
     let final_result = loop {

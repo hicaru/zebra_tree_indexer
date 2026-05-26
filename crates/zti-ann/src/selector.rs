@@ -7,23 +7,28 @@ const HNSW_RS_MAX: usize = 10_000;
 const HYSTERESIS_PCT: u64 = 25;
 
 #[inline]
+pub fn recommend(n_chunks: usize, dim: usize, hw: &Hardware) -> SearchMethod {
+    let bytes_per_vec = dim.saturating_mul(std::mem::size_of::<f32>());
+    let est_full_vec_mem = (n_chunks as u64).saturating_mul(bytes_per_vec as u64);
+    let mem_quarter = hw.mem_avail / 4;
+
+    if n_chunks < FLAT_MAX {
+        SearchMethod::Flat
+    } else if n_chunks < HNSW_RS_MAX && est_full_vec_mem < mem_quarter {
+        SearchMethod::Usearch
+    } else {
+        SearchMethod::IvfHnswSq
+    }
+}
+
+#[inline]
 pub fn choose_method(
     n_chunks: usize,
     dim: usize,
     hw: &Hardware,
     previous: Option<&SearchParams>,
 ) -> SearchParams {
-    let bytes_per_vec = dim.saturating_mul(std::mem::size_of::<f32>());
-    let est_full_vec_mem = (n_chunks as u64).saturating_mul(bytes_per_vec as u64);
-    let mem_quarter = hw.mem_avail / 4;
-
-    let mut method = if n_chunks < FLAT_MAX {
-        SearchMethod::Flat
-    } else if n_chunks < HNSW_RS_MAX && est_full_vec_mem < mem_quarter {
-        SearchMethod::Usearch
-    } else {
-        SearchMethod::IvfHnswSq
-    };
+    let mut method = recommend(n_chunks, dim, hw);
 
     if let Some(prev) = previous {
         let lo = prev
@@ -49,6 +54,7 @@ pub fn choose_method(
         num_partitions,
         nprobes: (num_partitions / 10).max(4),
         refine_factor: 2,
+        num_sub_vectors: (dim as u32 / 8).max(1),
     }
 }
 
@@ -109,5 +115,19 @@ mod tests {
         let prev = choose_method(9_900, 768, &hw(32 * 1024 * 1024 * 1024), None);
         let now = choose_method(15_000, 768, &hw(32 * 1024 * 1024 * 1024), Some(&prev));
         assert_eq!(now.method, SearchMethod::IvfHnswSq);
+    }
+
+    #[test]
+    fn num_sub_vectors_computed() {
+        let p = choose_method(5_000, 768, &hw(32 * 1024 * 1024 * 1024), None);
+        assert_eq!(p.num_sub_vectors, 96); // 768 / 8
+    }
+
+    #[test]
+    fn recommend_matches_choose_method() {
+        let big_hw = hw(32 * 1024 * 1024 * 1024);
+        assert_eq!(recommend(500, 768, &big_hw), SearchMethod::Flat);
+        assert_eq!(recommend(5_000, 768, &big_hw), SearchMethod::Usearch);
+        assert_eq!(recommend(50_000, 768, &big_hw), SearchMethod::IvfHnswSq);
     }
 }

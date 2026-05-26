@@ -4,8 +4,8 @@ pub mod selector;
 pub mod usearch_graph;
 
 pub use cache::{AnnCache, AnnHandle};
-pub use method::{SearchMethod, SearchParams};
-pub use selector::choose_method;
+pub use method::{MethodStats, SearchMethod, SearchParams};
+pub use selector::{choose_method, recommend};
 pub use usearch_graph::{AnnIndex, AnnIndexBuilder};
 
 #[cfg(test)]

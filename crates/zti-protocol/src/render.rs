@@ -111,7 +111,7 @@ mod tests {
 
     fn mk_hit(name: &str, kind: &str, sym_id: u32, body: &str) -> SearchHit {
         SearchHit {
-            chunk_id: Vec::new(),
+            chunk_id: [0u8; 16],
             file_path: "src/poly/rq.rs".to_string(),
             symbol_qualified: format!("foo::{}", name),
             symbol_kind: kind.to_string(),

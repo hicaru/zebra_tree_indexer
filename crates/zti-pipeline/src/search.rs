@@ -68,20 +68,11 @@ fn merge_unique_by_chunk_id(candidates: &mut Vec<ChunkHit>, additions: Vec<Chunk
     }
     let mut seen: HashSet<[u8; 16]> = HashSet::with_capacity(candidates.len() + additions.len());
     for c in candidates.iter() {
-        if c.chunk_id.len() >= 16 {
-            let mut id = [0u8; 16];
-            id.copy_from_slice(&c.chunk_id[..16]);
-            seen.insert(id);
-        }
+        seen.insert(c.chunk_id);
     }
     candidates.reserve(additions.len());
     for a in additions {
-        if a.chunk_id.len() < 16 {
-            continue;
-        }
-        let mut id = [0u8; 16];
-        id.copy_from_slice(&a.chunk_id[..16]);
-        if seen.insert(id) {
+        if seen.insert(a.chunk_id) {
             candidates.push(a);
         }
     }
@@ -156,9 +147,9 @@ pub async fn search(
     let words = split_query_words(&query_lc);
 
     let mut candidates: Vec<ChunkHit> = match params.method {
-        SearchMethod::IvfHnswSq | SearchMethod::Flat => {
+        SearchMethod::TurboQuant => {
             chunks_table
-                .knn(query_emb, raw_k, &params, opts.languages, opts.path_glob)
+                .knn_exhaustive(query_emb, raw_k, opts.languages, opts.path_glob)
                 .await?
         }
         SearchMethod::Usearch => {
@@ -179,13 +170,16 @@ pub async fn search(
                 .await?;
 
             for hit in &mut fetched {
-                let mut key = [0u8; 16];
-                key.copy_from_slice(&hit.chunk_id[..16]);
-                if let Some(s) = score_by_id.get(&key) {
+                if let Some(s) = score_by_id.get(&hit.chunk_id) {
                     hit.score = *s;
                 }
             }
             fetched
+        }
+        _ => {
+            chunks_table
+                .knn(query_emb, raw_k, &params, opts.languages, opts.path_glob)
+                .await?
         }
     };
 
@@ -293,7 +287,7 @@ mod tests {
 
     fn mk_chunk(chunk_id: [u8; 16], qualified: &str, content: &str) -> ChunkHit {
         ChunkHit {
-            chunk_id: chunk_id.to_vec(),
+            chunk_id,
             file_path: "src/poly/rq.rs".into(),
             symbol_qualified: qualified.into(),
             symbol_kind: "method".into(),

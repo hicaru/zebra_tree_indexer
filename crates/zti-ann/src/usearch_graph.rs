@@ -152,6 +152,7 @@ mod tests {
             num_partitions: 4,
             nprobes: 4,
             refine_factor: 2,
+            num_sub_vectors: 16,
         }
     }
 

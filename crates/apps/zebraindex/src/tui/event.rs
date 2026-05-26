@@ -31,6 +31,7 @@ pub enum Action {
     ConfirmRemoveYes,
     ConfirmRemoveNo,
     SubmitPath,
+    SetupAutoRecommend,
 }
 
 pub fn map_key(key: &event::KeyEvent, app: &App) -> Action {
@@ -55,6 +56,14 @@ fn map_setup_key(key: &event::KeyEvent, phase: &SetupPhase) -> Action {
             KeyCode::Char('j') | KeyCode::Down => Action::SetupNext,
             KeyCode::Char('k') | KeyCode::Up => Action::SetupPrev,
             KeyCode::Enter => Action::SetupConfirm,
+            KeyCode::Char('q') | KeyCode::Esc => Action::SetupBack,
+            _ => Action::None,
+        },
+        SetupPhase::IndexMethodSelection { .. } => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => Action::SetupNext,
+            KeyCode::Char('k') | KeyCode::Up => Action::SetupPrev,
+            KeyCode::Enter => Action::SetupConfirm,
+            KeyCode::Char('a') => Action::SetupAutoRecommend,
             KeyCode::Char('q') | KeyCode::Esc => Action::SetupBack,
             _ => Action::None,
         },
@@ -119,6 +128,14 @@ fn map_modal_key(key: &event::KeyEvent, app: &App) -> Action {
             KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => Action::DetailButtonNext,
             KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => Action::DetailButtonPrev,
             KeyCode::Enter => Action::DetailConfirm,
+            KeyCode::Esc | KeyCode::Char('q') => Action::DetailBack,
+            _ => Action::None,
+        },
+        Some(Modal::ChangeIndexMethod { .. }) => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => Action::SetupNext,
+            KeyCode::Char('k') | KeyCode::Up => Action::SetupPrev,
+            KeyCode::Enter => Action::DetailConfirm,
+            KeyCode::Char('a') => Action::SetupAutoRecommend,
             KeyCode::Esc | KeyCode::Char('q') => Action::DetailBack,
             _ => Action::None,
         },

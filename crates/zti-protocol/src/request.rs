@@ -39,6 +39,8 @@ pub struct HandshakeReq {
 pub struct IndexReq {
     pub project_root: String,
     pub refresh: bool,
+    #[serde(default)]
+    pub search_method: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

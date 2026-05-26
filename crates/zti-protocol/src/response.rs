@@ -25,7 +25,7 @@ pub struct IndexingProgress {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchHit {
-    pub chunk_id: Vec<u8>,
+    pub chunk_id: [u8; 16],
     pub file_path: String,
     pub symbol_qualified: String,
     pub symbol_kind: String,

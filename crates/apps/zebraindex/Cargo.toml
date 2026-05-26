@@ -15,6 +15,7 @@ zti-ipc-client.workspace   = true
 zti-protocol.workspace     = true
 zti-store.workspace        = true
 zti-common.workspace       = true
+zti-ann.workspace          = true
 zti-embed.workspace        = true
 zti-hw.workspace           = true
 zti-dsl.workspace          = true

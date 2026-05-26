@@ -21,6 +21,10 @@ use zti_protocol::response::Response;
 
 use app::{App, AppMessage};
 
+// Fallback dimension for method recommendation when model is not yet loaded.
+// Only affects RAM estimation in the Usearch threshold — conservative for common models.
+const DEFAULT_DIM: usize = 768;
+
 const REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/hicaru/zebra_tree_indexer/refs/heads/master/models.toml";
 
@@ -94,6 +98,7 @@ async fn resolve_startup(tx: mpsc::Sender<AppMessage>) {
             .send(AppMessage::ConfigResolved {
                 model: Some(cfg.default_model),
                 variant: Some(cfg.default_variant),
+                search_method: cfg.default_search_method,
             })
             .await;
         return;
@@ -106,11 +111,12 @@ async fn resolve_startup(tx: mpsc::Sender<AppMessage>) {
             .max_by_key(|p| p.last_indexed_ns)
         && registry::is_model_downloaded(&p.model_id)
     {
-        let _ = config::save(&p.model_id, "auto");
+        let _ = config::save(&p.model_id, "auto", None);
         let _ = tx
             .send(AppMessage::ConfigResolved {
                 model: Some(p.model_id),
                 variant: Some("auto".into()),
+                search_method: None,
             })
             .await;
         return;
@@ -120,6 +126,7 @@ async fn resolve_startup(tx: mpsc::Sender<AppMessage>) {
         .send(AppMessage::ConfigResolved {
             model: None,
             variant: None,
+            search_method: None,
         })
         .await;
 }
@@ -186,9 +193,12 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
         AppMessage::ConfigResolved {
             model: Some(m),
             variant,
+            search_method,
         } => {
             app.model = Some(Arc::from(m.as_str()));
             app.variant = variant.map(|v| Arc::from(v.as_str()));
+            app.search_method =
+                search_method.as_deref().and_then(zti_ann::SearchMethod::parse);
             app.should_run.store(true, Ordering::Relaxed);
             app.screen = app::Screen::Main;
             spawn_daemon_monitor(app, tx);
@@ -304,27 +314,63 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
     match action {
         event::Action::Quit => app.should_quit = true,
 
-        event::Action::SetupNext => match &mut app.screen {
-            app::Screen::Setup(app::SetupPhase::ModelSelection { entries, selected })
-                if *selected + 1 < entries.len() =>
+        event::Action::SetupNext => {
+            match &mut app.screen {
+                app::Screen::Setup(app::SetupPhase::ModelSelection { entries, selected })
+                    if *selected + 1 < entries.len() =>
+                {
+                    *selected += 1;
+                }
+                app::Screen::Setup(app::SetupPhase::VariantSelection {
+                    variants, selected, ..
+                }) if *selected + 1 < variants.len() => {
+                    *selected += 1;
+                }
+                app::Screen::Setup(app::SetupPhase::IndexMethodSelection {
+                    methods, selected, ..
+                }) if *selected + 1 < methods.len() => {
+                    *selected += 1;
+                }
+                _ => {}
+            }
+            if let Some(app::Modal::ChangeIndexMethod {
+                methods, selected, ..
+            }) = &mut app.modal
+                && *selected + 1 < methods.len()
             {
                 *selected += 1;
             }
-            app::Screen::Setup(app::SetupPhase::VariantSelection {
-                variants, selected, ..
-            }) if *selected + 1 < variants.len() => {
-                *selected += 1;
-            }
-            _ => {}
-        },
+        }
         event::Action::SetupPrev => {
             if let app::Screen::Setup(
                 app::SetupPhase::ModelSelection { selected, .. }
-                | app::SetupPhase::VariantSelection { selected, .. },
+                | app::SetupPhase::VariantSelection { selected, .. }
+                | app::SetupPhase::IndexMethodSelection { selected, .. },
             ) = &mut app.screen
                 && *selected > 0
             {
                 *selected -= 1;
+            }
+            if let Some(app::Modal::ChangeIndexMethod { selected, .. }) = &mut app.modal
+                && *selected > 0
+            {
+                *selected -= 1;
+            }
+        }
+        event::Action::SetupAutoRecommend => {
+            if let app::Screen::Setup(app::SetupPhase::IndexMethodSelection {
+                methods, selected, ..
+            }) = &mut app.screen
+                && let Some(pos) = methods.iter().position(|(_, r)| *r)
+            {
+                *selected = pos;
+            }
+            if let Some(app::Modal::ChangeIndexMethod {
+                methods, selected, ..
+            }) = &mut app.modal
+                && let Some(pos) = methods.iter().position(|(_, r)| *r)
+            {
+                *selected = pos;
             }
         }
         event::Action::SetupConfirm => match &app.screen {
@@ -355,13 +401,43 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                 } else {
                     Arc::clone(&variants[*selected].0)
                 };
+                let mid = Arc::clone(model_id);
+                let hw = zti_hw::probe();
+                let max_chunks = app
+                    .projects
+                    .iter()
+                    .map(|p| p.total_chunks as usize)
+                    .max()
+                    .unwrap_or(5_000);
+                let recommended = zti_ann::recommend(max_chunks, DEFAULT_DIM, &hw);
+                let methods: Arc<[(zti_ann::SearchMethod, bool)]> =
+                    Arc::from(zti_ann::SearchMethod::ALL.map(|m| (m, m == recommended)));
+                let rec_idx = methods.iter().position(|(_, r)| *r).unwrap_or(0);
+                app.screen = app::Screen::Setup(app::SetupPhase::IndexMethodSelection {
+                    model_id: mid,
+                    variant: variant_str,
+                    methods,
+                    selected: rec_idx,
+                });
+            }
+            app::Screen::Setup(app::SetupPhase::IndexMethodSelection {
+                model_id,
+                variant,
+                methods,
+                selected,
+            }) => {
+                let (method, _) = methods[*selected];
+                app.search_method = Some(method);
                 let save_model = Arc::clone(model_id);
-                let save_variant = Arc::clone(&variant_str);
+                let save_variant = Arc::clone(variant);
                 let launch_model = Arc::clone(model_id);
-                let launch_variant = Arc::clone(&variant_str);
+                let launch_variant = Arc::clone(variant);
                 let complete_model = Arc::clone(model_id);
+                let complete_variant = Arc::clone(variant);
 
-                if let Err(e) = config::save(&save_model, &save_variant) {
+                if let Err(e) =
+                    config::save(&save_model, &save_variant, Some(method.as_str()))
+                {
                     app.screen = app::Screen::Setup(app::SetupPhase::Error {
                         message: format!("Failed to save config: {e}"),
                         can_retry: false,
@@ -377,7 +453,7 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                 let _ = tx
                     .send(AppMessage::SetupComplete {
                         model: complete_model,
-                        variant: variant_str,
+                        variant: complete_variant,
                     })
                     .await;
             }
@@ -396,6 +472,23 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                 if let Some(ref entries) = app.setup_registry {
                     app.screen = app::Screen::Setup(app::SetupPhase::ModelSelection {
                         entries: Arc::clone(entries),
+                        selected: 0,
+                    });
+                }
+            }
+            app::Screen::Setup(app::SetupPhase::IndexMethodSelection {
+                model_id,
+                ..
+            }) => {
+                if let Some(ref reg) = app.setup_registry
+                    && let Some(entry) =
+                        reg.iter().find(|e| e.model_id.as_str() == model_id.as_ref())
+                {
+                    let mid = Arc::clone(model_id);
+                    let variants = entry.variant_list();
+                    app.screen = app::Screen::Setup(app::SetupPhase::VariantSelection {
+                        model_id: mid,
+                        variants,
                         selected: 0,
                     });
                 }
@@ -526,7 +619,8 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                 Some(app::Modal::ProjectDetail { selected_button }) => {
                     *selected_button = match selected_button {
                         app::DetailButton::Remove => app::DetailButton::Reindex,
-                        app::DetailButton::Reindex => app::DetailButton::Back,
+                        app::DetailButton::Reindex => app::DetailButton::IndexMethod,
+                        app::DetailButton::IndexMethod => app::DetailButton::Back,
                         app::DetailButton::Back => app::DetailButton::Remove,
                     };
                 }
@@ -545,7 +639,8 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                     *selected_button = match selected_button {
                         app::DetailButton::Remove => app::DetailButton::Back,
                         app::DetailButton::Reindex => app::DetailButton::Remove,
-                        app::DetailButton::Back => app::DetailButton::Reindex,
+                        app::DetailButton::IndexMethod => app::DetailButton::Reindex,
+                        app::DetailButton::Back => app::DetailButton::IndexMethod,
                     };
                 }
                 Some(app::Modal::AddProjectConfirm { selected_button, .. }) => {
@@ -574,6 +669,15 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                                 });
                             }
                         }
+                        app::DetailButton::IndexMethod => {
+                            let root = app.selected_project_root().map(str::to_string);
+                            app.modal = Some(build_change_method_modal(
+                                root,
+                                true,
+                                app.search_method,
+                                &app.projects,
+                            ));
+                        }
                         app::DetailButton::Back => {}
                     }
                 }
@@ -583,17 +687,12 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                     ..
                 }) => match selected_button {
                     app::AddConfirmButton::Confirm => {
-                        app.modal = Some(app::Modal::Indexing {
-                            current: 0,
-                            total: 0,
-                            message: String::with_capacity(64),
-                            is_reindex: false,
-                        });
-                        let ctx = ClientCtx::from_app(app);
-                        let tx_c = tx.clone();
-                        tokio::spawn(async move {
-                            do_index(canonical_path, false, ctx, tx_c).await;
-                        });
+                        app.modal = Some(build_change_method_modal(
+                            Some(canonical_path),
+                            false,
+                            app.search_method,
+                            &app.projects,
+                        ));
                     }
                     app::AddConfirmButton::Cancel => {
                         app.modal = Some(app::Modal::AddProject {
@@ -602,6 +701,39 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                         });
                     }
                 },
+                Some(app::Modal::ChangeIndexMethod {
+                    project_root,
+                    is_reindex,
+                    methods,
+                    selected,
+                }) => {
+                    let (method, _) = methods[selected];
+                    app.search_method = Some(method);
+                    if let Err(e) = config::save(
+                        app.model.as_deref().unwrap_or(""),
+                        app.variant.as_deref().unwrap_or("auto"),
+                        Some(method.as_str()),
+                    ) {
+                        app.modal = Some(app::Modal::Error {
+                            message: format!("Failed to save config: {e}"),
+                        });
+                        return;
+                    }
+                    if let Some(root) = project_root {
+                        app.modal = Some(app::Modal::Indexing {
+                            current: 0,
+                            total: 0,
+                            message: String::with_capacity(64),
+                            is_reindex,
+                        });
+                        let ctx = ClientCtx::from_app(app);
+                        let tx_c = tx.clone();
+                        let refresh = is_reindex;
+                        tokio::spawn(async move {
+                            do_index(root, refresh, ctx, tx_c).await;
+                        });
+                    }
+                }
                 other => {
                     app.modal = other;
                 }
@@ -684,6 +816,7 @@ struct ClientCtx {
     variant: Option<Arc<str>>,
     query_prefix: Option<Arc<str>>,
     passage_prefix: Option<Arc<str>>,
+    search_method: Option<zti_ann::SearchMethod>,
 }
 
 impl ClientCtx {
@@ -694,6 +827,7 @@ impl ClientCtx {
             variant: app.variant.clone(),
             query_prefix: app.query_prefix.clone(),
             passage_prefix: app.passage_prefix.clone(),
+            search_method: app.search_method,
         }
     }
 
@@ -704,6 +838,33 @@ impl ClientCtx {
             self.query_prefix.as_deref(),
             self.passage_prefix.as_deref(),
         )
+    }
+}
+
+fn build_change_method_modal(
+    project_root: Option<String>,
+    is_reindex: bool,
+    current: Option<zti_ann::SearchMethod>,
+    projects: &[zti_store::ProjectRow],
+) -> app::Modal {
+    let hw = zti_hw::probe();
+    let max_chunks = projects
+        .iter()
+        .map(|p| p.total_chunks as usize)
+        .max()
+        .unwrap_or(5_000);
+    let recommended = zti_ann::recommend(max_chunks, DEFAULT_DIM, &hw);
+    let methods: Arc<[(zti_ann::SearchMethod, bool)]> =
+        Arc::from(zti_ann::SearchMethod::ALL.map(|m| (m, m == recommended)));
+    let selected = current
+        .and_then(|c| methods.iter().position(|(m, _)| *m == c))
+        .or_else(|| methods.iter().position(|(_, r)| *r))
+        .unwrap_or(0);
+    app::Modal::ChangeIndexMethod {
+        project_root,
+        is_reindex,
+        methods,
+        selected,
     }
 }
 
@@ -957,6 +1118,7 @@ async fn do_index(
                 Request::Index(zti_protocol::request::IndexReq {
                     project_root,
                     refresh,
+                    search_method: ctx.search_method.map(|m| m.as_str().to_string()),
                 }),
                 |frame| {
                     if let Response::IndexProgress(p) = frame {

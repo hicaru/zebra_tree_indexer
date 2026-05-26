@@ -36,6 +36,7 @@ pub async fn index_project(
     engine: &EmbedEngine,
     db: &Db,
     reporter: &dyn ProgressReporter,
+    override_method: Option<zti_ann::SearchMethod>,
 ) -> Result<IndexStats> {
     let start = std::time::Instant::now();
     let pid = project_id(root);
@@ -423,7 +424,11 @@ pub async fn index_project(
         .and_then(|r| r.search_params.as_deref())
         .and_then(|s| serde_json::from_str(s).ok());
     let total_in_db = chunks_table.len().await?;
-    let params = zti_ann::choose_method(total_in_db, engine.dim(), hw, previous_params.as_ref());
+    let mut params =
+        zti_ann::choose_method(total_in_db, engine.dim(), hw, previous_params.as_ref());
+    if let Some(m) = override_method {
+        params.method = m;
+    }
     info!(
         "search method: {:?} (n={}, dim={}, ram_avail={} MB)",
         params.method,
