@@ -121,6 +121,7 @@ mod tests {
             model_id: "test".into(),
             weights_path: std::path::PathBuf::from(weights),
             tokenizer_path: std::path::PathBuf::new(),
+            config_path: std::path::PathBuf::new(),
             dim: hidden,
             max_length: seq,
             pooling: crate::model_registry::PoolingStrategyEnum::Mean,

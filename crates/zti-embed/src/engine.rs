@@ -8,7 +8,7 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 
 use crate::batch::{BATCH_BUCKETS, BATCH_CEILING, SEQ_BUCKETS, next_bucket};
-use crate::model_registry::{ModelProfile, resolve_profile};
+use crate::model_registry::{ModelProfile, read_json, resolve_profile};
 use crate::normalize::normalize_l2;
 use crate::pooling::{PoolingStrategy, pool_row_into};
 use crate::tokenizer::{Tokenized, Tokenizer};
@@ -122,14 +122,7 @@ impl EmbedEngine {
             )?
         };
 
-        let config = BertConfig {
-            hidden_size: profile.hidden_size,
-            num_hidden_layers: profile.num_hidden_layers,
-            num_attention_heads: profile.num_attention_heads,
-            intermediate_size: profile.intermediate_size,
-            max_position_embeddings: profile.max_length,
-            ..Default::default()
-        };
+        let config: BertConfig = read_json(&profile.config_path)?;
 
         let model = BertModel::load(vb, &config)?;
         let tokenizer = Tokenizer::from_file(&profile.tokenizer_path)?;
@@ -144,8 +137,9 @@ impl EmbedEngine {
                 anyhow::bail!("warmup produced no tokens");
             }
             let ids = Tensor::from_slice(&enc.ids, (1, enc.ids.len()), &device)?;
-            let mask = Tensor::ones((1, enc.ids.len()), DType::F32, &device)?;
-            let out = model.forward(&ids, &mask, None)?;
+            let token_type_ids = Tensor::zeros_like(&ids)?;
+            let mask = Tensor::ones_like(&ids)?;
+            let out = model.forward(&ids, &token_type_ids, Some(&mask))?;
             profile.dim = out.dims()[2];
             tracing::info!(dim = profile.dim, "probed embedding dim");
         }
@@ -286,7 +280,7 @@ impl EmbedEngine {
         )?;
 
         Ok(Pooled {
-            data: scratch.pooled_flat.clone(),
+            data: std::mem::take(&mut scratch.pooled_flat),
             dim: self.profile.dim,
             batch: real_batch,
         })
@@ -341,23 +335,25 @@ fn run_and_pool(
         (batch, seq),
         device,
     )?;
+    let token_type_ids = Tensor::zeros_like(&ids)?;
     let mask = Tensor::from_slice(
         &scratch.attention_mask[..batch * seq],
         (batch, seq),
         device,
-    )?
-    .to_dtype(DType::F32)?;
+    )?;
 
-    let output = model.forward(&ids, &mask, None)?;
+    let output = model.forward(&ids, &token_type_ids, Some(&mask))?;
     let output = output.to_device(&candle_core::Device::Cpu)?.to_dtype(DType::F32)?;
-    let data = output.to_vec3::<f32>()?;
+    let data_flat = output.flatten_all()?.to_vec1::<f32>()?;
 
     scratch.pooled_flat.clear();
     scratch.pooled_flat.resize(real_batch * dim, 0.0);
 
-    for (i, row) in data.iter().enumerate().take(real_batch) {
+    for i in 0..real_batch {
+        let start = i * seq * dim;
+        let row_flat = &data_flat[start..start + seq * dim];
         let out = &mut scratch.pooled_flat[i * dim..(i + 1) * dim];
-        pool_row_into(strategy, &row.concat(), scratch.valid_counts[i], out);
+        pool_row_into(strategy, row_flat, scratch.valid_counts[i], out);
         normalize_l2(out);
     }
 

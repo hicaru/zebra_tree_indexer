@@ -10,6 +10,7 @@ pub struct ModelProfile {
     pub model_id: String,
     pub weights_path: PathBuf,
     pub tokenizer_path: PathBuf,
+    pub config_path: PathBuf,
     pub dim: usize,
     pub max_length: usize,
     pub pooling: PoolingStrategyEnum,
@@ -115,7 +116,7 @@ impl TokenizerCfg {
 const SAFETENSORS_SEARCH: &[&str] = &["", "safetensors"];
 const TOKENIZER_CANDIDATES: &[&str] = &["tokenizer.json", "onnx/tokenizer.json"];
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = std::io::BufReader::new(file);
     serde_json::from_reader(reader).with_context(|| format!("parsing {}", path.display()))
@@ -281,6 +282,7 @@ pub fn resolve_profile(
         model_id: model_id.to_string(),
         weights_path: files.weights_path,
         tokenizer_path: files.tokenizer_path,
+        config_path: files.config_path,
         dim: 0,
         max_length,
         pooling,
