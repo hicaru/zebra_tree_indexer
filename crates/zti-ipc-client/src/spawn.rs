@@ -7,6 +7,23 @@ use tokio::time;
 
 use zti_common::paths;
 
+pub async fn kill_daemon() -> Result<()> {
+    let pid_path = paths::daemon_pid()?;
+    let socket_path = paths::daemon_socket()?;
+
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_path)
+        && let Ok(pid) = pid_str.trim().parse::<u32>()
+    {
+        let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+        time::sleep(Duration::from_millis(200)).await;
+    }
+
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_file(&pid_path);
+
+    Ok(())
+}
+
 pub async fn connect_or_spawn(
     timeout: Duration,
     model: Option<&str>,

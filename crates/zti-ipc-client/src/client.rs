@@ -6,8 +6,9 @@ use tokio::net::UnixStream;
 use zti_protocol::codec::{read_frame, write_frame};
 use zti_protocol::request::{HandshakeReq, Request};
 use zti_protocol::response::{HandshakeResp, Response};
+use zti_protocol::PROTOCOL_VERSION;
 
-use crate::spawn::connect_or_spawn;
+use crate::spawn::{connect_or_spawn, kill_daemon};
 
 pub struct Client {
     stream: UnixStream,
@@ -23,18 +24,40 @@ impl Client {
     ) -> Result<Self> {
         let stream =
             connect_or_spawn(timeout, model, variant, query_prefix, passage_prefix).await?;
-        Ok(Self { stream })
+        let mut client = Self { stream };
+        match client.handshake().await {
+            Ok(_) => Ok(client),
+            Err(e) if e.to_string().contains("protocol mismatch") => {
+                tracing::warn!("daemon protocol mismatch, restarting...");
+                kill_daemon().await?;
+                let stream =
+                    connect_or_spawn(timeout, model, variant, query_prefix, passage_prefix).await?;
+                let mut client = Self { stream };
+                client.handshake().await?;
+                Ok(client)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn handshake(&mut self) -> Result<HandshakeResp> {
         let req = Request::Handshake(HandshakeReq {
             client_version: env!("CARGO_PKG_VERSION").to_string(),
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
         });
         write_frame(&mut self.stream, &req).await?;
         let resp: Response = read_frame(&mut self.stream).await?;
         match resp {
-            Response::Handshake(h) => Ok(h),
+            Response::Handshake(h) => {
+                if h.protocol_version != PROTOCOL_VERSION {
+                    anyhow::bail!(
+                        "protocol mismatch: daemon={}, client={}",
+                        h.protocol_version,
+                        PROTOCOL_VERSION
+                    );
+                }
+                Ok(h)
+            }
             other => anyhow::bail!("expected Handshake response, got {:?}", other),
         }
     }

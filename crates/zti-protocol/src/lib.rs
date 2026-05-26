@@ -1,3 +1,5 @@
+pub const PROTOCOL_VERSION: u32 = 2;
+
 // Wire protocol. Every connection MUST send `Request::Handshake` as its first
 // frame and consume the matching `Response::Handshake` before issuing any
 // other request — `Stop` included.

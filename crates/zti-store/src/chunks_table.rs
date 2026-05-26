@@ -3,6 +3,7 @@ use arrow::array::{
     Array, BinaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, ListArray,
     RecordBatch, RecordBatchIterator, StringArray, UInt32Array,
 };
+use arrow::datatypes::DataType;
 use futures::StreamExt;
 use lancedb::index::Index;
 use lancedb::index::vector::{
@@ -28,9 +29,33 @@ impl ChunksTable {
             .table_names()
             .execute()
             .await?
-            .contains(&name.to_string())
+            .iter()
+            .any(|n| n == name)
         {
-            db.open_table(name).execute().await?
+            let existing = db.open_table(name).execute().await?;
+            let existing_dim = existing
+                .schema()
+                .await?
+                .field_with_name("embedding")
+                .ok()
+                .and_then(|f| match f.data_type() {
+                    DataType::FixedSizeList(_, n) => Some(*n as usize),
+                    _ => None,
+                })
+                .unwrap_or(0);
+
+            if existing_dim != dim {
+                tracing::warn!(
+                    "embedding dim changed ({} → {}), recreating chunks table",
+                    existing_dim,
+                    dim
+                );
+                db.drop_table(name, &[]).await?;
+                let schema = Arc::new(schema::chunks_schema(dim));
+                db.create_empty_table(name, schema).execute().await?
+            } else {
+                existing
+            }
         } else {
             let schema = Arc::new(schema::chunks_schema(dim));
             db.create_empty_table(name, schema).execute().await?

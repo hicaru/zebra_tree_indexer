@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct HandshakeResp {
     pub ok: bool,
     pub daemon_version: String,
+    #[serde(default)]
+    pub protocol_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
