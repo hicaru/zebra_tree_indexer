@@ -124,21 +124,25 @@ fn map_modal_key(key: &event::KeyEvent, app: &App) -> Action {
             KeyCode::Backspace => Action::Backspace,
             _ => Action::None,
         },
-        Some(Modal::AddProjectConfirm { .. }) => match key.code {
-            KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => Action::DetailButtonNext,
-            KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => Action::DetailButtonPrev,
-            KeyCode::Enter => Action::DetailConfirm,
-            KeyCode::Esc | KeyCode::Char('q') => Action::DetailBack,
-            _ => Action::None,
-        },
-        Some(Modal::ChangeIndexMethod { .. }) => match key.code {
-            KeyCode::Char('j') | KeyCode::Down => Action::SetupNext,
-            KeyCode::Char('k') | KeyCode::Up => Action::SetupPrev,
-            KeyCode::Enter => Action::DetailConfirm,
-            KeyCode::Char('a') => Action::SetupAutoRecommend,
-            KeyCode::Esc | KeyCode::Char('q') => Action::DetailBack,
-            _ => Action::None,
-        },
+        Some(Modal::ChangeIndexMethod {
+            canonical_path, ..
+        }) => {
+            let is_add = canonical_path.is_some();
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => Action::SetupNext,
+                KeyCode::Char('k') | KeyCode::Up => Action::SetupPrev,
+                KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right if is_add => {
+                    Action::DetailButtonNext
+                }
+                KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left if is_add => {
+                    Action::DetailButtonPrev
+                }
+                KeyCode::Enter => Action::DetailConfirm,
+                KeyCode::Char('a') => Action::SetupAutoRecommend,
+                KeyCode::Esc | KeyCode::Char('q') => Action::DetailBack,
+                _ => Action::None,
+            }
+        }
         _ => match key.code {
             KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => Action::DetailButtonNext,
             KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => Action::DetailButtonPrev,

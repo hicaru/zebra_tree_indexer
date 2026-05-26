@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use zti_protocol::request::SearchMode;
 
-use super::app::{ActivePanel, AddConfirmButton, App, DaemonStatus, DetailButton, Modal};
+use super::app::{ActivePanel, App, DaemonStatus, DetailButton, Modal};
 
 const PREVIEW_LINES: usize = 6;
 
@@ -314,8 +314,11 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
             Some(Modal::Error { .. }) => "  Esc/Enter: dismiss ",
             Some(Modal::Indexing { .. }) => "  indexing in progress... ",
             Some(Modal::AddProject { .. }) => "  Enter: submit   Esc: cancel ",
-            Some(Modal::AddProjectConfirm { .. }) => {
-                "  Tab/←→: select   Enter: confirm   Esc: cancel "
+            Some(Modal::ChangeIndexMethod { canonical_path, .. }) if canonical_path.is_some() => {
+                "  j/k: navigate   Tab: switch   Enter: confirm   a: auto-recommend   Esc: back "
+            }
+            Some(Modal::ChangeIndexMethod { .. }) => {
+                "  j/k: navigate   Enter: select   a: auto-recommend   Esc: back "
             }
             _ => "  Tab/←→: select   Enter: confirm   Esc: back ",
         }
@@ -359,18 +362,24 @@ fn draw_modal(f: &mut Frame, app: &App, tick: u16) {
         Some(Modal::AddProject { path_input, error }) => {
             draw_add_project(f, path_input, error.as_deref());
         }
-        Some(Modal::AddProjectConfirm {
-            canonical_path,
-            already_indexed,
-            selected_button,
-        }) => {
-            draw_add_project_confirm(f, canonical_path, *already_indexed, *selected_button);
-        }
-        Some(Modal::ChangeIndexMethod {
-            methods, selected, ..
-        }) => {
-            super::setup::draw_method_selection_modal(f, methods, *selected);
-        }
+            Some(Modal::ChangeIndexMethod {
+                methods,
+                selected,
+                canonical_path,
+                already_indexed,
+                selected_button,
+                ..
+            }) => {
+                super::setup::draw_method_selection_modal(
+                    f,
+                    methods,
+                    *selected,
+                    canonical_path.as_deref(),
+                    already_indexed.unwrap_or(false),
+                    canonical_path.is_some(),
+                    *selected_button,
+                );
+            }
         None => {}
     }
 }
@@ -457,7 +466,7 @@ fn draw_project_detail(f: &mut Frame, project: &zti_store::ProjectRow, selected:
     f.render_widget(para, area);
 }
 
-fn render_button_row(buttons: &[(&str, bool)]) -> Line<'static> {
+pub fn render_button_row(buttons: &[(&str, bool)]) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(buttons.len() * 3);
     for (i, (label, is_sel)) in buttons.iter().enumerate() {
         if i > 0 {
@@ -662,57 +671,4 @@ fn draw_add_project(f: &mut Frame, path_input: &str, error: Option<&str>) {
     f.render_widget(para, area);
 }
 
-fn draw_add_project_confirm(
-    f: &mut Frame,
-    canonical_path: &str,
-    already_indexed: bool,
-    selected: AddConfirmButton,
-) {
-    let area = centered_rect(55, 30, f.area());
-    f.render_widget(Clear, area);
 
-    let name = std::path::Path::new(canonical_path)
-        .file_name()
-        .map(|s| s.to_string_lossy())
-        .unwrap_or(std::borrow::Cow::Borrowed("?"));
-
-    let status = if already_indexed {
-        "Already indexed (will re-index)"
-    } else {
-        "Not indexed"
-    };
-
-    let block = Block::default()
-        .title(" Confirm Index ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let lines = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("  Project:   "),
-            Span::styled(name, Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from(vec![
-            Span::raw("  Path:      "),
-            Span::styled(canonical_path, Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::raw("  Status:    "),
-            Span::styled(status, Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  ─────────────────────────────────────",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(""),
-        render_button_row(&[
-            ("Confirm", selected == AddConfirmButton::Confirm),
-            ("Cancel", selected == AddConfirmButton::Cancel),
-        ]),
-    ];
-
-    let para = Paragraph::new(lines).block(block);
-    f.render_widget(para, area);
-}

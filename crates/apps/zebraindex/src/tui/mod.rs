@@ -624,10 +624,14 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                         app::DetailButton::Back => app::DetailButton::Remove,
                     };
                 }
-                Some(app::Modal::AddProjectConfirm { selected_button, .. }) => {
+                Some(app::Modal::ChangeIndexMethod {
+                    selected_button,
+                    canonical_path,
+                    ..
+                }) if canonical_path.is_some() => {
                     *selected_button = match selected_button {
-                        app::AddConfirmButton::Confirm => app::AddConfirmButton::Cancel,
-                        app::AddConfirmButton::Cancel => app::AddConfirmButton::Confirm,
+                        app::IndexMethodButton::Confirm => app::IndexMethodButton::Cancel,
+                        app::IndexMethodButton::Cancel => app::IndexMethodButton::Confirm,
                     };
                 }
                 _ => {}
@@ -643,10 +647,14 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                         app::DetailButton::Back => app::DetailButton::IndexMethod,
                     };
                 }
-                Some(app::Modal::AddProjectConfirm { selected_button, .. }) => {
+                Some(app::Modal::ChangeIndexMethod {
+                    selected_button,
+                    canonical_path,
+                    ..
+                }) if canonical_path.is_some() => {
                     *selected_button = match selected_button {
-                        app::AddConfirmButton::Confirm => app::AddConfirmButton::Cancel,
-                        app::AddConfirmButton::Cancel => app::AddConfirmButton::Confirm,
+                        app::IndexMethodButton::Confirm => app::IndexMethodButton::Cancel,
+                        app::IndexMethodButton::Cancel => app::IndexMethodButton::Confirm,
                     };
                 }
                 _ => {}
@@ -673,7 +681,9 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                             let root = app.selected_project_root().map(str::to_string);
                             app.modal = Some(build_change_method_modal(
                                 root,
+                                None,
                                 true,
+                                None,
                                 app.search_method,
                                 &app.projects,
                             ));
@@ -681,32 +691,27 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                         app::DetailButton::Back => {}
                     }
                 }
-                Some(app::Modal::AddProjectConfirm {
-                    canonical_path,
-                    selected_button,
-                    ..
-                }) => match selected_button {
-                    app::AddConfirmButton::Confirm => {
-                        app.modal = Some(build_change_method_modal(
-                            Some(canonical_path),
-                            false,
-                            app.search_method,
-                            &app.projects,
-                        ));
-                    }
-                    app::AddConfirmButton::Cancel => {
-                        app.modal = Some(app::Modal::AddProject {
-                            path_input: canonical_path,
-                            error: None,
-                        });
-                    }
-                },
                 Some(app::Modal::ChangeIndexMethod {
                     project_root,
+                    canonical_path,
                     is_reindex,
                     methods,
                     selected,
+                    selected_button,
+                    ..
                 }) => {
+                    if let Some(cp) = canonical_path {
+                        match selected_button {
+                            app::IndexMethodButton::Cancel => {
+                                app.modal = Some(app::Modal::AddProject {
+                                    path_input: cp,
+                                    error: None,
+                                });
+                                return;
+                            }
+                            app::IndexMethodButton::Confirm => {}
+                        }
+                    }
                     let (method, _) = methods[selected];
                     app.search_method = Some(method);
                     if let Err(e) = config::save(
@@ -792,11 +797,14 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                             .projects
                             .iter()
                             .any(|p| p.root_path == canonical_str);
-                        app.modal = Some(app::Modal::AddProjectConfirm {
-                            canonical_path: canonical_str,
-                            already_indexed,
-                            selected_button: app::AddConfirmButton::default(),
-                        });
+                        app.modal = Some(build_change_method_modal(
+                            Some(canonical_str.clone()),
+                            Some(canonical_str),
+                            false,
+                            Some(already_indexed),
+                            app.search_method,
+                            &app.projects,
+                        ));
                     } else if let Some(app::Modal::AddProject {
                         ref mut error, ..
                     }) = app.modal
@@ -843,7 +851,9 @@ impl ClientCtx {
 
 fn build_change_method_modal(
     project_root: Option<String>,
+    canonical_path: Option<String>,
     is_reindex: bool,
+    already_indexed: Option<bool>,
     current: Option<zti_ann::SearchMethod>,
     projects: &[zti_store::ProjectRow],
 ) -> app::Modal {
@@ -862,9 +872,12 @@ fn build_change_method_modal(
         .unwrap_or(0);
     app::Modal::ChangeIndexMethod {
         project_root,
+        canonical_path,
         is_reindex,
+        already_indexed,
         methods,
         selected,
+        selected_button: app::IndexMethodButton::default(),
     }
 }
 

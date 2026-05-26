@@ -86,7 +86,7 @@ pub enum DetailButton {
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
-pub enum AddConfirmButton {
+pub enum IndexMethodButton {
     #[default]
     Confirm,
     Cancel,
@@ -110,16 +110,14 @@ pub enum Modal {
         path_input: String,
         error: Option<String>,
     },
-    AddProjectConfirm {
-        canonical_path: String,
-        already_indexed: bool,
-        selected_button: AddConfirmButton,
-    },
     ChangeIndexMethod {
         project_root: Option<String>,
+        canonical_path: Option<String>,
         is_reindex: bool,
+        already_indexed: Option<bool>,
         methods: Arc<[(zti_ann::SearchMethod, bool)]>,
         selected: usize,
+        selected_button: IndexMethodButton,
     },
 }
 

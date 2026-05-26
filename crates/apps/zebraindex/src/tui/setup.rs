@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use std::sync::Arc;
 
 use ratatui::Frame;
@@ -6,7 +8,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
-use super::ui::{centered_rect, spinner_ch};
+use super::app::IndexMethodButton;
+use super::ui::{centered_rect, render_button_row, spinner_ch};
 
 use super::app::SetupPhase;
 use super::registry::ModelEntry;
@@ -30,7 +33,7 @@ pub fn draw(f: &mut Frame, phase: &SetupPhase, tick: u16) {
         } => draw_variant_selection(f, model_id, variants, *selected),
         SetupPhase::IndexMethodSelection {
             methods, selected, ..
-        } => draw_method_selection(f, methods, *selected),
+        } => draw_method_selection(f, methods, *selected, None, false, false, IndexMethodButton::default()),
         SetupPhase::Launching {
             model_id, variant, ..
         } => draw_launching(f, model_id, variant, tick),
@@ -245,14 +248,22 @@ pub fn draw_method_selection_modal(
     f: &mut Frame,
     methods: &[(zti_ann::SearchMethod, bool)],
     selected: usize,
+    canonical_path: Option<&str>,
+    already_indexed: bool,
+    is_add: bool,
+    selected_button: IndexMethodButton,
 ) {
-    draw_method_selection(f, methods, selected);
+    draw_method_selection(f, methods, selected, canonical_path, already_indexed, is_add, selected_button);
 }
 
 fn draw_method_selection(
     f: &mut Frame,
     methods: &[(zti_ann::SearchMethod, bool)],
     selected: usize,
+    canonical_path: Option<&str>,
+    already_indexed: bool,
+    is_add: bool,
+    selected_button: IndexMethodButton,
 ) {
     let area = centered_rect(90, 85, f.area());
     f.render_widget(Clear, area);
@@ -267,7 +278,67 @@ fn draw_method_selection(
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(outer[0]);
 
-    // Left: method list
+    let left_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(if is_add {
+            let header_h = if canonical_path.is_some_and(|p| p.len() > 40) {
+                9u16
+            } else {
+                8
+            };
+            vec![
+                Constraint::Length(header_h),
+                Constraint::Min(5),
+            ]
+        } else {
+            vec![Constraint::Min(5)]
+        })
+        .split(cols[0]);
+
+    let method_area = if is_add { left_rows[1] } else { left_rows[0] };
+
+    if let Some(path) = canonical_path {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or(Cow::Borrowed("?"));
+
+        let status = if already_indexed {
+            "Already indexed (will re-index)"
+        } else {
+            "Not indexed"
+        };
+
+        let info_block = Block::default()
+            .title(" Project ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+
+        let info_lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  Name:   "),
+                Span::styled(name, Style::default().fg(Color::Cyan)),
+            ]),
+            Line::from(vec![
+                Span::raw("  Path:   "),
+                Span::styled(path, Style::default().fg(Color::Gray)),
+            ]),
+            Line::from(vec![
+                Span::raw("  Status: "),
+                Span::styled(status, Style::default().fg(Color::Gray)),
+            ]),
+            Line::from(""),
+        ];
+
+        f.render_widget(
+            Paragraph::new(info_lines)
+                .block(info_block)
+                .wrap(Wrap { trim: false }),
+            left_rows[0],
+        );
+    }
+
     let mut items: Vec<ListItem> = Vec::with_capacity(methods.len());
     for (i, &(method, recommended)) in methods.iter().enumerate() {
         let is_sel = i == selected;
@@ -290,9 +361,8 @@ fn draw_method_selection(
         .title(" Index Method ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
-    f.render_widget(List::new(items).block(list_block), cols[0]);
+    f.render_widget(List::new(items).block(list_block), method_area);
 
-    // Right: detail panel
     let (method, _) = methods[selected];
     let stats = method.stats();
 
@@ -313,7 +383,6 @@ fn draw_method_selection(
         ])
         .split(inner);
 
-    // Title + description
     let title_text = vec![
         Line::from(Span::styled(
             method.label(),
@@ -328,7 +397,6 @@ fn draw_method_selection(
     ];
     f.render_widget(Paragraph::new(title_text), rows[0]);
 
-    // Bar charts
     let bars = vec![
         render_bar("Accuracy", stats.accuracy),
         render_bar("Search Speed", stats.search_speed),
@@ -337,7 +405,6 @@ fn draw_method_selection(
     ];
     f.render_widget(Paragraph::new(bars), rows[1]);
 
-    // Parameters
     let mut param_lines: Vec<Line<'_>> = Vec::with_capacity(stats.params.len());
     for &(name, value) in stats.params {
         param_lines.push(Line::from(vec![
@@ -351,7 +418,6 @@ fn draw_method_selection(
         .border_style(Style::default().fg(Color::DarkGray));
     f.render_widget(Paragraph::new(param_lines).block(param_block), rows[2]);
 
-    // Notes
     let notes = vec![
         Line::from(vec![
             Span::styled("  Best for: ", Style::default().fg(Color::DarkGray)),
@@ -368,11 +434,33 @@ fn draw_method_selection(
     ];
     f.render_widget(Paragraph::new(notes), rows[3]);
 
-    // Help bar
-    let help =
-        Paragraph::new("  j/k: navigate   Enter: select   a: auto-recommend   Esc: back")
-            .block(Block::default().borders(Borders::ALL));
-    f.render_widget(help, outer[1]);
+    if is_add {
+        let buttons = render_button_row(&[
+            ("Confirm", selected_button == IndexMethodButton::Confirm),
+            ("Cancel", selected_button == IndexMethodButton::Cancel),
+        ]);
+        let help_text = "  j/k: navigate   Tab: switch   Enter: confirm   a: auto-recommend   Esc: back";
+        let help_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Length(1),
+            ])
+            .split(outer[1]);
+        f.render_widget(
+            Paragraph::new(vec![Line::from(""), buttons]),
+            help_area[0],
+        );
+        f.render_widget(
+            Paragraph::new(help_text).block(Block::default().borders(Borders::ALL)),
+            help_area[1],
+        );
+    } else {
+        let help =
+            Paragraph::new("  j/k: navigate   Enter: select   a: auto-recommend   Esc: back")
+                .block(Block::default().borders(Borders::ALL));
+        f.render_widget(help, outer[1]);
+    }
 }
 
 const FILLED_20: &str = "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}";
