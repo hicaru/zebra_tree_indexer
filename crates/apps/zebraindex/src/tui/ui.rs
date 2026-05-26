@@ -12,8 +12,7 @@ use super::app::{ActivePanel, App, DaemonStatus, DetailButton, Modal};
 const PREVIEW_LINES: usize = 6;
 
 const SPINNER: &[&str] = &[
-    "\u{2807}", "\u{280b}", "\u{2819}", "\u{2838}",
-    "\u{2830}", "\u{2826}", "\u{280e}", "\u{2803}",
+    "\u{2807}", "\u{280b}", "\u{2819}", "\u{2838}", "\u{2830}", "\u{2826}", "\u{280e}", "\u{2803}",
 ];
 
 pub fn spinner_ch(tick: u16) -> &'static str {
@@ -117,9 +116,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let line = Line::from(spans);
-    let block = Block::default()
-        .title(" zebraindex ")
-        .borders(Borders::ALL);
+    let block = Block::default().title(" zebraindex ").borders(Borders::ALL);
     let para = Paragraph::new(line).block(block);
     f.render_widget(para, area);
 }
@@ -160,10 +157,7 @@ fn draw_projects(f: &mut Frame, app: &App, area: Rect) {
         } else {
             Style::default()
         };
-        let line = Line::from(vec![
-            Span::styled(prefix, style),
-            Span::styled(name, style),
-        ]);
+        let line = Line::from(vec![Span::styled(prefix, style), Span::styled(name, style)]);
         items.push(ListItem::new(line));
     }
 
@@ -218,8 +212,14 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
         };
 
         let prefix = match input.mode {
-            SearchMode::Query => app.query_prefix.as_deref().unwrap_or(default_prefix(input.mode)),
-            SearchMode::Passage => app.passage_prefix.as_deref().unwrap_or(default_prefix(input.mode)),
+            SearchMode::Query => app
+                .query_prefix
+                .as_deref()
+                .unwrap_or(default_prefix(input.mode)),
+            SearchMode::Passage => app
+                .passage_prefix
+                .as_deref()
+                .unwrap_or(default_prefix(input.mode)),
         };
 
         let input_block = Block::default()
@@ -241,9 +241,7 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(input_para, inner[i]);
     }
 
-    let results_block = Block::default()
-        .title(" Results ")
-        .borders(Borders::ALL);
+    let results_block = Block::default().title(" Results ").borders(Borders::ALL);
 
     if app.searching {
         let para = Paragraph::new("  searching...")
@@ -325,7 +323,9 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
             DaemonStatus::Error(_) => {
                 "  Tab: switch panel  r: restart daemon  m: change model  q: quit  (see daemon.log) "
             }
-            _ => "  Tab: switch panel  /: search  Enter: open project  j/k: scroll  s: stop  m: change model  q: quit ",
+            _ => {
+                "  Tab: switch panel  /: search  Enter: open project  j/k: scroll  s: stop  m: change model  q: quit "
+            }
         }
     };
     let block = Block::default().borders(Borders::ALL);
@@ -359,24 +359,24 @@ fn draw_modal(f: &mut Frame, app: &App, tick: u16) {
         Some(Modal::AddProject { path_input, error }) => {
             draw_add_project(f, path_input, error.as_deref());
         }
-            Some(Modal::ChangeIndexMethod {
+        Some(Modal::ChangeIndexMethod {
+            methods,
+            selected,
+            canonical_path,
+            already_indexed,
+            selected_button,
+            ..
+        }) => {
+            super::setup::draw_method_selection_modal(
+                f,
                 methods,
-                selected,
-                canonical_path,
-                already_indexed,
-                selected_button,
-                ..
-            }) => {
-                super::setup::draw_method_selection_modal(
-                    f,
-                    methods,
-                    *selected,
-                    canonical_path.as_deref(),
-                    already_indexed.unwrap_or(false),
-                    canonical_path.is_some(),
-                    *selected_button,
-                );
-            }
+                *selected,
+                canonical_path.as_deref(),
+                already_indexed.unwrap_or(false),
+                canonical_path.is_some(),
+                *selected_button,
+            );
+        }
         None => {}
     }
 }
@@ -398,10 +398,7 @@ fn draw_project_detail(f: &mut Frame, project: &zti_store::ProjectRow, selected:
 
     let ago_indexed = zti_common::format::format_elapsed(project.last_indexed_ns);
     let ago_created = zti_common::format::format_elapsed(project.created_at_ns);
-    let search = project
-        .search_method
-        .as_deref()
-        .unwrap_or("unknown");
+    let search = project.search_method.as_deref().unwrap_or("unknown");
     let langs = if project.languages.is_empty() {
         String::from("unknown")
     } else {
@@ -525,9 +522,7 @@ fn draw_confirm_remove(f: &mut Frame, root_path: &str) {
         Line::from(""),
     ];
 
-    let para = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let para = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 
@@ -554,9 +549,7 @@ fn draw_modal_error(f: &mut Frame, message: &str) {
         Line::from(""),
     ];
 
-    let para = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let para = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 
@@ -571,7 +564,11 @@ fn draw_modal_indexing(
     let area = centered_rect(55, 30, f.area());
     f.render_widget(Clear, area);
 
-    let title = if is_reindex { " Reindexing " } else { " Indexing " };
+    let title = if is_reindex {
+        " Reindexing "
+    } else {
+        " Indexing "
+    };
     let label = if is_reindex {
         "Reindexing project..."
     } else {
@@ -612,16 +609,11 @@ fn draw_modal_indexing(
             Span::styled(bar, Style::default().fg(Color::Cyan)),
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::raw(message),
-        ]),
+        Line::from(vec![Span::raw("  "), Span::raw(message)]),
         Line::from(""),
     ];
 
-    let para = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let para = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 
@@ -666,5 +658,3 @@ fn draw_add_project(f: &mut Frame, path_input: &str, error: Option<&str>) {
         .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
-
-

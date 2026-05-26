@@ -3,10 +3,10 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::net::UnixStream;
 
+use zti_protocol::PROTOCOL_VERSION;
 use zti_protocol::codec::{read_frame, write_frame};
 use zti_protocol::request::{HandshakeReq, Request};
 use zti_protocol::response::{HandshakeResp, Response};
-use zti_protocol::PROTOCOL_VERSION;
 
 use crate::spawn::{connect_or_spawn, kill_daemon};
 
@@ -21,16 +21,14 @@ impl Client {
         query_prefix: Option<&str>,
         passage_prefix: Option<&str>,
     ) -> Result<Self> {
-        let stream =
-            connect_or_spawn(timeout, model, query_prefix, passage_prefix).await?;
+        let stream = connect_or_spawn(timeout, model, query_prefix, passage_prefix).await?;
         let mut client = Self { stream };
         match client.handshake().await {
             Ok(_) => Ok(client),
             Err(e) if e.to_string().contains("protocol mismatch") => {
                 tracing::warn!("daemon protocol mismatch, restarting...");
                 kill_daemon().await?;
-                let stream =
-                    connect_or_spawn(timeout, model, query_prefix, passage_prefix).await?;
+                let stream = connect_or_spawn(timeout, model, query_prefix, passage_prefix).await?;
                 let mut client = Self { stream };
                 client.handshake().await?;
                 Ok(client)

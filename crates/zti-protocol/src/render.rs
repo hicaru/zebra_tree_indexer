@@ -5,10 +5,15 @@ use crate::response::{SearchHit, SearchResults};
 const DEFAULT_CHAR_BUDGET: usize = 80_000;
 
 fn count_digits(n: usize) -> usize {
-    if n == 0 { return 1; }
+    if n == 0 {
+        return 1;
+    }
     let mut d = 0;
     let mut v = n;
-    while v > 0 { d += 1; v /= 10; }
+    while v > 0 {
+        d += 1;
+        v /= 10;
+    }
     d
 }
 
@@ -42,7 +47,11 @@ pub fn format_search_results_budgeted(results: &SearchResults, budget: usize) ->
 
     for (i, hit) in results.hits.iter().enumerate() {
         let rank_len = 1 + count_digits(i + 1) + 1 + 6 + 1;
-        let hdr_len = hit.file_path.len() + 1 + count_digits(hit.start_line as usize) + 1 + count_digits(hit.end_line as usize);
+        let hdr_len = hit.file_path.len()
+            + 1
+            + count_digits(hit.start_line as usize)
+            + 1
+            + count_digits(hit.end_line as usize);
         let min_cost = rank_len + hdr_len + 1 + 64;
         if out.len() + min_cost > budget {
             omitted = results.hits.len() - i;
@@ -55,7 +64,11 @@ pub fn format_search_results_budgeted(results: &SearchResults, budget: usize) ->
     if !results.appendix.is_empty() && out.len() < budget {
         out.push_str("--- DEPENDENCIES (source code referenced by results above) ---\n");
         for hit in &results.appendix {
-            let hdr_len = hit.file_path.len() + 1 + count_digits(hit.start_line as usize) + 1 + count_digits(hit.end_line as usize);
+            let hdr_len = hit.file_path.len()
+                + 1
+                + count_digits(hit.start_line as usize)
+                + 1
+                + count_digits(hit.end_line as usize);
             let min_cost = hdr_len + 1 + 64;
             if out.len() + min_cost > budget {
                 omitted += 1;
@@ -66,7 +79,8 @@ pub fn format_search_results_budgeted(results: &SearchResults, budget: usize) ->
     }
 
     if omitted > 0 {
-        let notice = format!("\n... ({omitted} results omitted — reduce `limit` or narrow query)\n");
+        let notice =
+            format!("\n... ({omitted} results omitted — reduce `limit` or narrow query)\n");
         if out.len() + notice.len() <= budget {
             out.push_str(&notice);
         }

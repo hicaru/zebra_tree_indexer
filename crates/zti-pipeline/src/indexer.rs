@@ -289,7 +289,7 @@ pub async fn index_project(
                 let mut content_builder = StringBuilder::with_capacity(n, n * 64);
                 let mut turbo_code_builder = BinaryBuilder::new();
                 let mut indexed_at_builder = UInt64Array::builder(n);
-                let mut embeddings: Vec<f32> = Vec::with_capacity(n * dim);
+                let mut skipped = 0u32;
 
                 for (i, &idx) in idxs.iter().enumerate() {
                     let (chunk, lang) = &all_pending[idx];
@@ -302,7 +302,7 @@ pub async fn index_project(
                             chunk.start_line,
                             chunk.end_line
                         );
-                        reporter.inc(1);
+                        skipped += 1;
                         continue;
                     }
 
@@ -363,22 +363,34 @@ pub async fn index_project(
                         None => turbo_code_builder.append_null(),
                     }
                     indexed_at_builder.append_value(now_ns);
-                    embeddings.extend_from_slice(emb);
 
                     total_embedded += 1;
                 }
 
-                if !embeddings.is_empty() {
-                    let embedding_arr = arrow::array::FixedSizeListArray::new(
-                        std::sync::Arc::new(arrow::datatypes::Field::new(
-                            "item",
-                            arrow::datatypes::DataType::Float32,
-                            false,
-                        )),
-                        dim as i32,
-                        std::sync::Arc::new(Float32Array::from(embeddings)),
-                        None,
-                    );
+                let n_valid = n - skipped as usize;
+                if n_valid > 0 {
+                    let embedding_arr: arrow::array::FixedSizeListArray = if skipped == 0 {
+                        embs.into_fixed_size_list()
+                    } else {
+                        let mut filtered = Vec::with_capacity(n_valid * dim);
+                        for (i, &_idx) in idxs.iter().enumerate() {
+                            let emb = embs.row(i);
+                            if emb.iter().any(|v| v.is_nan()) {
+                                continue;
+                            }
+                            filtered.extend_from_slice(emb);
+                        }
+                        arrow::array::FixedSizeListArray::new(
+                            std::sync::Arc::new(arrow::datatypes::Field::new(
+                                "item",
+                                arrow::datatypes::DataType::Float32,
+                                false,
+                            )),
+                            dim as i32,
+                            std::sync::Arc::new(Float32Array::from(filtered)),
+                            None,
+                        )
+                    };
 
                     let record = RecordBatch::try_new(
                         std::sync::Arc::new(zti_store::schema::chunks_schema(dim)),

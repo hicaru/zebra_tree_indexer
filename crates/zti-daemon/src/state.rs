@@ -33,7 +33,12 @@ pub struct DaemonState {
 }
 
 impl DaemonState {
-    pub fn new(engine: EmbedEngine, model_id: Arc<str>, hardware: Arc<zti_hw::Hardware>, pid_lock: File) -> Self {
+    pub fn new(
+        engine: EmbedEngine,
+        model_id: Arc<str>,
+        hardware: Arc<zti_hw::Hardware>,
+        pid_lock: File,
+    ) -> Self {
         let started_at_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -73,7 +78,9 @@ impl DaemonState {
             }
         }
 
-        { *self.loading_model.write().await = Some(Arc::from(model_id)); }
+        {
+            *self.loading_model.write().await = Some(Arc::from(model_id));
+        }
 
         let hw = Arc::clone(&self.hardware);
         let owned = model_id.to_owned();
@@ -82,7 +89,9 @@ impl DaemonState {
         })
         .await?;
 
-        { *self.loading_model.write().await = None; }
+        {
+            *self.loading_model.write().await = None;
+        }
 
         let engine = result?;
         let arc = Arc::new(engine);

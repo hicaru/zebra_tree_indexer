@@ -124,9 +124,7 @@ fn map_modal_key(key: &event::KeyEvent, app: &App) -> Action {
             KeyCode::Backspace => Action::Backspace,
             _ => Action::None,
         },
-        Some(Modal::ChangeIndexMethod {
-            canonical_path, ..
-        }) => {
+        Some(Modal::ChangeIndexMethod { canonical_path, .. }) => {
             let is_add = canonical_path.is_some();
             match key.code {
                 KeyCode::Char('j') | KeyCode::Down => Action::SetupNext,

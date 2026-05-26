@@ -52,11 +52,7 @@ pub async fn handle(req: &DoctorReq, state: &DaemonState) -> Response {
                 )),
                 Some(emb) => checks.push(error_check(
                     "model_load",
-                    format!(
-                        "dim mismatch: profile={} probe={}",
-                        engine.dim(),
-                        emb.len()
-                    ),
+                    format!("dim mismatch: profile={} probe={}", engine.dim(), emb.len()),
                 )),
                 None => checks.push(error_check("model_load", "probe returned no embedding")),
             },
@@ -142,10 +138,7 @@ pub async fn handle(req: &DoctorReq, state: &DaemonState) -> Response {
 
 fn finalize(engine: &zti_embed::EmbedEngine, checks: Vec<DoctorCheck>) -> Response {
     let device = engine.hardware().device.as_str().to_owned();
-    Response::Doctor(Ok(DoctorReport {
-        device,
-        checks,
-    }))
+    Response::Doctor(Ok(DoctorReport { device, checks }))
 }
 
 fn ok_check(name: &str, message: impl Into<String>) -> DoctorCheck {

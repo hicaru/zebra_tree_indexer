@@ -14,7 +14,9 @@ pub async fn kill_daemon() -> Result<()> {
     if let Ok(pid_str) = std::fs::read_to_string(&pid_path)
         && let Ok(pid) = pid_str.trim().parse::<u32>()
     {
-        let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status();
         time::sleep(Duration::from_millis(200)).await;
     }
 
@@ -55,10 +57,7 @@ fn spawn_daemon(
         .parent()
         .ok_or_else(|| anyhow::anyhow!("no parent dir for current exe"))?;
 
-    let exe_stem = exe
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let exe_stem = exe.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
     let (daemon_bin, needs_subcommand) = if exe_stem == "zebraindex" {
         (exe, true)
@@ -89,9 +88,7 @@ fn spawn_daemon(
 
     if needs_subcommand {
         cmd.arg("daemon");
-        let m = model.ok_or_else(|| {
-            anyhow::anyhow!("--model is required to spawn the daemon")
-        })?;
+        let m = model.ok_or_else(|| anyhow::anyhow!("--model is required to spawn the daemon"))?;
         cmd.args(["--model", m]);
     } else if let Some(m) = model {
         cmd.args(["--model", m]);

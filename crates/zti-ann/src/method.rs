@@ -55,14 +55,24 @@ impl SearchMethod {
     #[inline]
     pub fn description(self) -> &'static str {
         match self {
-            Self::IvfHnswSq => "IVF + HNSW graph + scalar quantization. Best balance of speed, recall, and memory.",
-            Self::IvfHnswPq => "IVF + HNSW graph + product quantization. Lower memory than SQ, slightly lower recall.",
+            Self::IvfHnswSq => {
+                "IVF + HNSW graph + scalar quantization. Best balance of speed, recall, and memory."
+            }
+            Self::IvfHnswPq => {
+                "IVF + HNSW graph + product quantization. Lower memory than SQ, slightly lower recall."
+            }
             Self::IvfPq => "IVF + product quantization. No graph. Fast build, moderate recall.",
-            Self::IvfSq => "IVF + scalar quantization. No graph. Compact, good for mid-size projects.",
+            Self::IvfSq => {
+                "IVF + scalar quantization. No graph. Compact, good for mid-size projects."
+            }
             Self::IvfRq => "IVF + RabitQ quantization. High compression ratio.",
-            Self::Usearch => "In-memory HNSW graph. Full F32 precision. Highest recall, requires RAM.",
+            Self::Usearch => {
+                "In-memory HNSW graph. Full F32 precision. Highest recall, requires RAM."
+            }
             Self::Flat => "Brute-force cosine scan. Perfect recall. Only for small projects.",
-            Self::TurboQuant => "Bitpolar rerank-only scan. No vector index. Ultra-fast, lowest memory.",
+            Self::TurboQuant => {
+                "Bitpolar rerank-only scan. No vector index. Ultra-fast, lowest memory."
+            }
         }
     }
 
@@ -194,10 +204,7 @@ impl SearchMethod {
                 best_for: "Small projects (<1K chunks)",
                 storage_note: "Full vectors on disk",
                 ram_note: "Scanned on query",
-                params: &[
-                    ("quantization", "None (F32)"),
-                    ("storage", "LanceDB scan"),
-                ],
+                params: &[("quantization", "None (F32)"), ("storage", "LanceDB scan")],
             },
             Self::TurboQuant => MethodStats {
                 accuracy: 40,

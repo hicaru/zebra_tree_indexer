@@ -25,13 +25,7 @@ pub struct ChunksTable {
 impl ChunksTable {
     pub async fn open(db: &lancedb::Connection, dim: usize) -> Result<Self> {
         let name = "chunks";
-        let table = if db
-            .table_names()
-            .execute()
-            .await?
-            .iter()
-            .any(|n| n == name)
-        {
+        let table = if db.table_names().execute().await?.iter().any(|n| n == name) {
             let existing = db.open_table(name).execute().await?;
             let existing_dim = existing
                 .schema()

@@ -26,10 +26,16 @@ pub fn draw(f: &mut Frame, phase: &SetupPhase, tick: u16) {
         SetupPhase::DownloadingModel { model_id } => draw_download(f, model_id, tick),
         SetupPhase::IndexMethodSelection {
             methods, selected, ..
-        } => draw_method_selection(f, methods, *selected, None, false, false, IndexMethodButton::default()),
-        SetupPhase::Launching {
-            model_id, ..
-        } => draw_launching(f, model_id, tick),
+        } => draw_method_selection(
+            f,
+            methods,
+            *selected,
+            None,
+            false,
+            false,
+            IndexMethodButton::default(),
+        ),
+        SetupPhase::Launching { model_id, .. } => draw_launching(f, model_id, tick),
         SetupPhase::Error {
             message, can_retry, ..
         } => draw_error(f, message, *can_retry),
@@ -193,7 +199,15 @@ pub fn draw_method_selection_modal(
     is_add: bool,
     selected_button: IndexMethodButton,
 ) {
-    draw_method_selection(f, methods, selected, canonical_path, already_indexed, is_add, selected_button);
+    draw_method_selection(
+        f,
+        methods,
+        selected,
+        canonical_path,
+        already_indexed,
+        is_add,
+        selected_button,
+    );
 }
 
 fn draw_method_selection(
@@ -226,10 +240,7 @@ fn draw_method_selection(
             } else {
                 8
             };
-            vec![
-                Constraint::Length(header_h),
-                Constraint::Min(5),
-            ]
+            vec![Constraint::Length(header_h), Constraint::Min(5)]
         } else {
             vec![Constraint::Min(5)]
         })
@@ -291,7 +302,10 @@ fn draw_method_selection(
             Style::default()
         };
 
-        let mut spans = vec![Span::styled(prefix, style), Span::styled(method.label(), style)];
+        let mut spans = vec![
+            Span::styled(prefix, style),
+            Span::styled(method.label(), style),
+        ];
         if recommended {
             spans.push(Span::styled(" *", Style::default().fg(Color::Green)));
         }
@@ -379,18 +393,13 @@ fn draw_method_selection(
             ("Confirm", selected_button == IndexMethodButton::Confirm),
             ("Cancel", selected_button == IndexMethodButton::Cancel),
         ]);
-        let help_text = "  j/k: navigate   Tab: switch   Enter: confirm   a: auto-recommend   Esc: back";
+        let help_text =
+            "  j/k: navigate   Tab: switch   Enter: confirm   a: auto-recommend   Esc: back";
         let help_area = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(2),
-                Constraint::Length(1),
-            ])
+            .constraints([Constraint::Length(2), Constraint::Length(1)])
             .split(outer[1]);
-        f.render_widget(
-            Paragraph::new(vec![Line::from(""), buttons]),
-            help_area[0],
-        );
+        f.render_widget(Paragraph::new(vec![Line::from(""), buttons]), help_area[0]);
         f.render_widget(
             Paragraph::new(help_text).block(Block::default().borders(Borders::ALL)),
             help_area[1],
@@ -460,8 +469,6 @@ fn draw_error(f: &mut Frame, message: &str, can_retry: bool) {
         Line::from(""),
     ];
 
-    let para = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let para = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }

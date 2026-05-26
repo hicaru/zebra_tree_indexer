@@ -154,24 +154,19 @@ async fn fetch_registry(tx: mpsc::Sender<AppMessage>) {
 
 async fn download_model(model_id: Arc<str>, tx: mpsc::Sender<AppMessage>) {
     let id = Arc::clone(&model_id);
-    let result = tokio::task::spawn_blocking(move || {
-        zti_embed::model_registry::resolve_model_files(&id)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || zti_embed::model_registry::resolve_model_files(&id))
+            .await;
 
     match result {
         Ok(Ok(_)) => {
             let _ = tx.send(AppMessage::ModelDownloaded(model_id)).await;
         }
         Ok(Err(e)) => {
-            let _ = tx
-                .send(AppMessage::ModelDownloadError(e.to_string()))
-                .await;
+            let _ = tx.send(AppMessage::ModelDownloadError(e.to_string())).await;
         }
         Err(e) => {
-            let _ = tx
-                .send(AppMessage::ModelDownloadError(e.to_string()))
-                .await;
+            let _ = tx.send(AppMessage::ModelDownloadError(e.to_string())).await;
         }
     }
 }
@@ -188,8 +183,9 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
             search_method,
         } => {
             app.model = Some(Arc::from(m.as_str()));
-            app.search_method =
-                search_method.as_deref().and_then(zti_ann::SearchMethod::parse);
+            app.search_method = search_method
+                .as_deref()
+                .and_then(zti_ann::SearchMethod::parse);
             app.should_run.store(true, Ordering::Relaxed);
             app.screen = app::Screen::Main;
             spawn_daemon_monitor(app, tx);
@@ -210,9 +206,7 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
             });
         }
         AppMessage::ModelDownloaded(model_id) => {
-            let _ = tx
-                .send(AppMessage::SetupComplete { model: model_id })
-                .await;
+            let _ = tx.send(AppMessage::SetupComplete { model: model_id }).await;
         }
         AppMessage::ModelDownloadError(msg) => {
             app.screen = app::Screen::Setup(app::SetupPhase::Error {
@@ -297,7 +291,9 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                     *selected += 1;
                 }
                 app::Screen::Setup(app::SetupPhase::IndexMethodSelection {
-                    methods, selected, ..
+                    methods,
+                    selected,
+                    ..
                 }) if *selected + 1 < methods.len() => {
                     *selected += 1;
                 }
@@ -328,7 +324,9 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
         }
         event::Action::SetupAutoRecommend => {
             if let app::Screen::Setup(app::SetupPhase::IndexMethodSelection {
-                methods, selected, ..
+                methods,
+                selected,
+                ..
             }) = &mut app.screen
                 && let Some(pos) = methods.iter().position(|(_, r)| *r)
             {
@@ -381,9 +379,7 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                 let launch_model = Arc::clone(model_id);
                 let complete_model = Arc::clone(model_id);
 
-                if let Err(e) =
-                    config::save(&save_model, Some(method.as_str()))
-                {
+                if let Err(e) = config::save(&save_model, Some(method.as_str())) {
                     app.screen = app::Screen::Setup(app::SetupPhase::Error {
                         message: format!("Failed to save config: {e}"),
                         can_retry: false,
@@ -532,122 +528,113 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                 });
             }
         }
-        event::Action::DetailButtonNext => {
-            match &mut app.modal {
-                Some(app::Modal::ProjectDetail { selected_button }) => {
-                    *selected_button = match selected_button {
-                        app::DetailButton::Remove => app::DetailButton::Reindex,
-                        app::DetailButton::Reindex => app::DetailButton::Back,
-                        app::DetailButton::Back => app::DetailButton::Remove,
-                    };
-                }
-                Some(app::Modal::ChangeIndexMethod {
-                    selected_button,
-                    canonical_path,
-                    ..
-                }) if canonical_path.is_some() => {
-                    *selected_button = match selected_button {
-                        app::IndexMethodButton::Confirm => app::IndexMethodButton::Cancel,
-                        app::IndexMethodButton::Cancel => app::IndexMethodButton::Confirm,
-                    };
-                }
-                _ => {}
+        event::Action::DetailButtonNext => match &mut app.modal {
+            Some(app::Modal::ProjectDetail { selected_button }) => {
+                *selected_button = match selected_button {
+                    app::DetailButton::Remove => app::DetailButton::Reindex,
+                    app::DetailButton::Reindex => app::DetailButton::Back,
+                    app::DetailButton::Back => app::DetailButton::Remove,
+                };
             }
-        }
-        event::Action::DetailButtonPrev => {
-            match &mut app.modal {
-                Some(app::Modal::ProjectDetail { selected_button }) => {
-                    *selected_button = match selected_button {
-                        app::DetailButton::Remove => app::DetailButton::Back,
-                        app::DetailButton::Reindex => app::DetailButton::Remove,
-                        app::DetailButton::Back => app::DetailButton::Reindex,
-                    };
-                }
-                Some(app::Modal::ChangeIndexMethod {
-                    selected_button,
-                    canonical_path,
-                    ..
-                }) if canonical_path.is_some() => {
-                    *selected_button = match selected_button {
-                        app::IndexMethodButton::Confirm => app::IndexMethodButton::Cancel,
-                        app::IndexMethodButton::Cancel => app::IndexMethodButton::Confirm,
-                    };
-                }
-                _ => {}
+            Some(app::Modal::ChangeIndexMethod {
+                selected_button,
+                canonical_path,
+                ..
+            }) if canonical_path.is_some() => {
+                *selected_button = match selected_button {
+                    app::IndexMethodButton::Confirm => app::IndexMethodButton::Cancel,
+                    app::IndexMethodButton::Cancel => app::IndexMethodButton::Confirm,
+                };
             }
-        }
-        event::Action::DetailConfirm => {
-            match app.modal.take() {
-                Some(app::Modal::ProjectDetail { selected_button }) => {
-                    match selected_button {
-                        app::DetailButton::Remove => {
-                            app.modal = Some(app::Modal::ConfirmRemove);
-                        }
-                        app::DetailButton::Reindex => {
-                            if let Some(root) = app.selected_project_root() {
-                                let root = root.to_string();
-                                let ctx = ClientCtx::from_app(app);
-                                let tx_c = tx.clone();
-                                tokio::spawn(async move {
-                                    do_index(root, true, ctx, tx_c).await;
-                                });
-                            }
-                        }
-                        app::DetailButton::Back => {}
-                    }
+            _ => {}
+        },
+        event::Action::DetailButtonPrev => match &mut app.modal {
+            Some(app::Modal::ProjectDetail { selected_button }) => {
+                *selected_button = match selected_button {
+                    app::DetailButton::Remove => app::DetailButton::Back,
+                    app::DetailButton::Reindex => app::DetailButton::Remove,
+                    app::DetailButton::Back => app::DetailButton::Reindex,
+                };
+            }
+            Some(app::Modal::ChangeIndexMethod {
+                selected_button,
+                canonical_path,
+                ..
+            }) if canonical_path.is_some() => {
+                *selected_button = match selected_button {
+                    app::IndexMethodButton::Confirm => app::IndexMethodButton::Cancel,
+                    app::IndexMethodButton::Cancel => app::IndexMethodButton::Confirm,
+                };
+            }
+            _ => {}
+        },
+        event::Action::DetailConfirm => match app.modal.take() {
+            Some(app::Modal::ProjectDetail { selected_button }) => match selected_button {
+                app::DetailButton::Remove => {
+                    app.modal = Some(app::Modal::ConfirmRemove);
                 }
-                Some(app::Modal::ChangeIndexMethod {
-                    project_root,
-                    canonical_path,
-                    is_reindex,
-                    methods,
-                    selected,
-                    selected_button,
-                    ..
-                }) => {
-                    if let Some(cp) = canonical_path {
-                        match selected_button {
-                            app::IndexMethodButton::Cancel => {
-                                app.modal = Some(app::Modal::AddProject {
-                                    path_input: cp,
-                                    error: None,
-                                });
-                                return;
-                            }
-                            app::IndexMethodButton::Confirm => {}
-                        }
-                    }
-                    let (method, _) = methods[selected];
-                    app.search_method = Some(method);
-                    if let Err(e) = config::save(
-                        app.model.as_deref().unwrap_or(""),
-                        Some(method.as_str()),
-                    ) {
-                        app.modal = Some(app::Modal::Error {
-                            message: format!("Failed to save config: {e}"),
-                        });
-                        return;
-                    }
-                    if let Some(root) = project_root {
-                        app.modal = Some(app::Modal::Indexing {
-                            current: 0,
-                            total: 0,
-                            message: String::with_capacity(64),
-                            is_reindex,
-                        });
+                app::DetailButton::Reindex => {
+                    if let Some(root) = app.selected_project_root() {
+                        let root = root.to_string();
                         let ctx = ClientCtx::from_app(app);
                         let tx_c = tx.clone();
-                        let refresh = is_reindex;
                         tokio::spawn(async move {
-                            do_index(root, refresh, ctx, tx_c).await;
+                            do_index(root, true, ctx, tx_c).await;
                         });
                     }
                 }
-                other => {
-                    app.modal = other;
+                app::DetailButton::Back => {}
+            },
+            Some(app::Modal::ChangeIndexMethod {
+                project_root,
+                canonical_path,
+                is_reindex,
+                methods,
+                selected,
+                selected_button,
+                ..
+            }) => {
+                if let Some(cp) = canonical_path {
+                    match selected_button {
+                        app::IndexMethodButton::Cancel => {
+                            app.modal = Some(app::Modal::AddProject {
+                                path_input: cp,
+                                error: None,
+                            });
+                            return;
+                        }
+                        app::IndexMethodButton::Confirm => {}
+                    }
+                }
+                let (method, _) = methods[selected];
+                app.search_method = Some(method);
+                if let Err(e) =
+                    config::save(app.model.as_deref().unwrap_or(""), Some(method.as_str()))
+                {
+                    app.modal = Some(app::Modal::Error {
+                        message: format!("Failed to save config: {e}"),
+                    });
+                    return;
+                }
+                if let Some(root) = project_root {
+                    app.modal = Some(app::Modal::Indexing {
+                        current: 0,
+                        total: 0,
+                        message: String::with_capacity(64),
+                        is_reindex,
+                    });
+                    let ctx = ClientCtx::from_app(app);
+                    let tx_c = tx.clone();
+                    let refresh = is_reindex;
+                    tokio::spawn(async move {
+                        do_index(root, refresh, ctx, tx_c).await;
+                    });
                 }
             }
-        }
+            other => {
+                app.modal = other;
+            }
+        },
         event::Action::DetailBack => {
             app.modal = None;
         }
@@ -674,33 +661,22 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
             }
         }
         event::Action::SubmitPath => {
-            if let Some(app::Modal::AddProject {
-                ref path_input, ..
-            }) = app.modal
-            {
+            if let Some(app::Modal::AddProject { ref path_input, .. }) = app.modal {
                 let trimmed = path_input.trim();
                 if trimmed.is_empty() {
-                    if let Some(app::Modal::AddProject {
-                        ref mut error, ..
-                    }) = app.modal
-                    {
+                    if let Some(app::Modal::AddProject { ref mut error, .. }) = app.modal {
                         *error = Some(String::from("Path cannot be empty"));
                     }
                 } else {
                     let path = std::path::Path::new(trimmed);
                     if !path.is_dir() {
-                        if let Some(app::Modal::AddProject {
-                            ref mut error, ..
-                        }) = app.modal
-                        {
+                        if let Some(app::Modal::AddProject { ref mut error, .. }) = app.modal {
                             *error = Some(String::from("Directory does not exist"));
                         }
                     } else if let Ok(canonical) = path.canonicalize() {
                         let canonical_str = canonical.to_string_lossy().into_owned();
-                        let already_indexed = app
-                            .projects
-                            .iter()
-                            .any(|p| p.root_path == canonical_str);
+                        let already_indexed =
+                            app.projects.iter().any(|p| p.root_path == canonical_str);
                         app.modal = Some(build_change_method_modal(
                             Some(canonical_str.clone()),
                             Some(canonical_str),
@@ -709,10 +685,7 @@ async fn handle_action(app: &mut App, action: event::Action, tx: &mpsc::Sender<A
                             app.search_method,
                             &app.projects,
                         ));
-                    } else if let Some(app::Modal::AddProject {
-                        ref mut error, ..
-                    }) = app.modal
-                    {
+                    } else if let Some(app::Modal::AddProject { ref mut error, .. }) = app.modal {
                         *error = Some(String::from("Cannot resolve path"));
                     }
                 }
@@ -817,10 +790,7 @@ fn read_daemon_log_tail(msg: &mut String) {
     }
 }
 
-async fn try_connect(
-    ctx: &ClientCtx,
-    tx: &mpsc::Sender<AppMessage>,
-) {
+async fn try_connect(ctx: &ClientCtx, tx: &mpsc::Sender<AppMessage>) {
     let (m, qp, pp) = ctx.deref_opts();
     if let Err(e) = ensure_client(&ctx.client, m, qp, pp).await {
         let mut msg = e.to_string();
@@ -833,11 +803,7 @@ async fn try_connect(
     }
 }
 
-async fn daemon_monitor(
-    tx: mpsc::Sender<AppMessage>,
-    ctx: ClientCtx,
-    should_run: Arc<AtomicBool>,
-) {
+async fn daemon_monitor(tx: mpsc::Sender<AppMessage>, ctx: ClientCtx, should_run: Arc<AtomicBool>) {
     loop {
         let socket_path = match zti_common::paths::daemon_socket() {
             Ok(p) => p,

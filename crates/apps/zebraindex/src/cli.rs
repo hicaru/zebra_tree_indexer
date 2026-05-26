@@ -72,13 +72,8 @@ async fn open_client(
     query_prefix: Option<&str>,
     passage_prefix: Option<&str>,
 ) -> Result<Client> {
-    let mut client = Client::connect(
-        Duration::from_secs(60),
-        model,
-        query_prefix,
-        passage_prefix,
-    )
-    .await?;
+    let mut client =
+        Client::connect(Duration::from_secs(60), model, query_prefix, passage_prefix).await?;
     client.handshake().await?;
     Ok(client)
 }

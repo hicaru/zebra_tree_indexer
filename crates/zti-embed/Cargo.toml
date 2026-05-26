@@ -17,6 +17,8 @@ zti-common.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 walkdir.workspace = true
+arrow.workspace = true
+arrow-array.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 candle-nn = { workspace = true, features = ["metal"] }

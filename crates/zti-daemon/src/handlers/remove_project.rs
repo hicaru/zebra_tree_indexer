@@ -9,7 +9,7 @@ pub async fn handle(req: &RemoveProjectReq, state: &DaemonState) -> Response {
         Err(e) => {
             return Response::RemoveProject(Err(ErrorBody {
                 message: e.to_string(),
-            }))
+            }));
         }
     };
 
@@ -23,7 +23,7 @@ pub async fn handle(req: &RemoveProjectReq, state: &DaemonState) -> Response {
         Err(_) => {
             return Response::RemoveProject(Err(ErrorBody {
                 message: "invalid project_id length".into(),
-            }))
+            }));
         }
     };
 

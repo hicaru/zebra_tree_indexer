@@ -10,7 +10,12 @@ pub async fn handle(state: &DaemonState) -> Response {
         let engines = state.engines.read().await;
         engines.keys().map(|k| k.to_string()).collect()
     };
-    let loading_model = state.loading_model.read().await.as_deref().map(str::to_string);
+    let loading_model = state
+        .loading_model
+        .read()
+        .await
+        .as_deref()
+        .map(str::to_string);
 
     let engine = state.primary_engine();
     let device = engine.hardware().device.as_str().to_owned();

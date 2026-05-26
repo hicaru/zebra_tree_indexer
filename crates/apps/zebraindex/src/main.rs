@@ -53,8 +53,7 @@ enum TopCommand {
 fn init_tracing(default_level: &str) {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(default_level)),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
         .with_writer(std::io::stderr)
         .with_ansi(false)

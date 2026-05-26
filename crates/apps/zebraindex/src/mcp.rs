@@ -7,7 +7,7 @@ use anyhow::Result;
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
-use rmcp::{tool, ErrorData, ServiceExt};
+use rmcp::{ErrorData, ServiceExt, tool};
 use tokio::sync::Mutex;
 use zti_common::format::format_elapsed;
 use zti_ipc_client::Client;
@@ -18,17 +18,25 @@ use zti_protocol::response::{CheckStatus, Response, SearchResults};
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileTreeParams {
-    #[schemars(description = "Absolute path to the project root. Obtain valid paths from `projectList`.")]
+    #[schemars(
+        description = "Absolute path to the project root. Obtain valid paths from `projectList`."
+    )]
     pub project_root: String,
-    #[schemars(description = "Optional glob pattern to filter files, e.g. \"**/*.rs\" or \"src/**/*.ts\".")]
+    #[schemars(
+        description = "Optional glob pattern to filter files, e.g. \"**/*.rs\" or \"src/**/*.ts\"."
+    )]
     pub path_glob: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
 pub struct SearchQueryParams {
-    #[schemars(description = "What you're looking for, in natural language. Use descriptive phrases: \"polynomial inversion\" not \"invert\".")]
+    #[schemars(
+        description = "What you're looking for, in natural language. Use descriptive phrases: \"polynomial inversion\" not \"invert\"."
+    )]
     pub text: String,
-    #[schemars(description = "Project root path. Auto-resolved when omitted if only one project is indexed.")]
+    #[schemars(
+        description = "Project root path. Auto-resolved when omitted if only one project is indexed."
+    )]
     pub root: Option<String>,
     #[schemars(description = "Maximum results to return (default: 5).")]
     pub limit: Option<usize>,
@@ -36,9 +44,13 @@ pub struct SearchQueryParams {
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
 pub struct SearchPassageParams {
-    #[schemars(description = "A code snippet, error message, or descriptive paragraph to find similar implementations.")]
+    #[schemars(
+        description = "A code snippet, error message, or descriptive paragraph to find similar implementations."
+    )]
     pub text: String,
-    #[schemars(description = "Project root path. Auto-resolved when omitted if only one project is indexed.")]
+    #[schemars(
+        description = "Project root path. Auto-resolved when omitted if only one project is indexed."
+    )]
     pub root: Option<String>,
     #[schemars(description = "Maximum results to return (default: 5).")]
     pub limit: Option<usize>,
@@ -47,7 +59,9 @@ pub struct SearchPassageParams {
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DoctorParams {
-    #[schemars(description = "Optional project root to diagnose. If omitted, runs general diagnostics.")]
+    #[schemars(
+        description = "Optional project root to diagnose. If omitted, runs general diagnostics."
+    )]
     pub project_root: Option<String>,
 }
 
@@ -199,11 +213,7 @@ impl ZebraMcpServer {
     }
 }
 
-fn match_file(
-    file_path: &str,
-    root: &str,
-    matcher: Option<&globset::GlobMatcher>,
-) -> bool {
+fn match_file(file_path: &str, root: &str, matcher: Option<&globset::GlobMatcher>) -> bool {
     let Some(m) = matcher else { return true };
     let rel = file_path
         .strip_prefix(root)
@@ -220,8 +230,7 @@ fn internal_err(msg: String) -> ErrorData {
     ErrorData::internal_error(msg, None)
 }
 
-const HINT_CODE_IN_CONTEXT: &str =
-    "\n\n[SYSTEM HINT: The source code above is already in your context. \
+const HINT_CODE_IN_CONTEXT: &str = "\n\n[SYSTEM HINT: The source code above is already in your context. \
      Do NOT re-read these files — use the code directly. \
      For other files, use `searchQuery` or `fileTree`.]";
 
@@ -300,8 +309,13 @@ impl ZebraMcpServer {
         &self,
         Parameters(params): Parameters<SearchQueryParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.do_search(params.text, params.root.as_deref(), params.limit, SearchMode::Query)
-            .await
+        self.do_search(
+            params.text,
+            params.root.as_deref(),
+            params.limit,
+            SearchMode::Query,
+        )
+        .await
     }
 
     #[tool(
@@ -312,8 +326,13 @@ impl ZebraMcpServer {
         &self,
         Parameters(params): Parameters<SearchPassageParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.do_search(params.text, params.root.as_deref(), params.limit, SearchMode::Passage)
-            .await
+        self.do_search(
+            params.text,
+            params.root.as_deref(),
+            params.limit,
+            SearchMode::Passage,
+        )
+        .await
     }
 
     #[tool(

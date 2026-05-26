@@ -1,8 +1,10 @@
-use std::sync::Arc;
 use std::borrow::Cow;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use anyhow::Result;
+use arrow::array::{FixedSizeListArray, Float32Array};
+use arrow::datatypes::{DataType, Field};
 use candle_core::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
@@ -12,7 +14,7 @@ use crate::model_registry::{ModelProfile, read_json, resolve_profile};
 use crate::normalize::normalize_l2;
 use crate::pooling::{PoolingStrategy, pool_row_into};
 use crate::tokenizer::{Tokenized, Tokenizer};
-use zti_hw::{Hardware, probe, candle_device};
+use zti_hw::{Hardware, candle_device, probe};
 
 #[derive(Debug, Clone)]
 pub struct Pooled {
@@ -36,6 +38,19 @@ impl Pooled {
 
     pub fn rows(&self) -> impl Iterator<Item = &[f32]> {
         self.data.chunks(self.dim)
+    }
+
+    pub fn into_float32_array(self) -> Float32Array {
+        Float32Array::from(self.data)
+    }
+
+    pub fn into_fixed_size_list(self) -> FixedSizeListArray {
+        FixedSizeListArray::new(
+            Arc::new(Field::new("item", DataType::Float32, false)),
+            self.dim as i32,
+            Arc::new(Float32Array::from(self.data)),
+            None,
+        )
     }
 }
 
@@ -105,21 +120,13 @@ impl EmbedEngine {
     }
 
     pub fn load_with(model_id: &str, hw: Arc<Hardware>, opts: &LoadOverrides<'_>) -> Result<Self> {
-        let mut profile = resolve_profile(
-            model_id,
-            opts.query_prefix,
-            opts.passage_prefix,
-        )?;
+        let mut profile = resolve_profile(model_id, opts.query_prefix, opts.passage_prefix)?;
 
         tracing::info!(path = %profile.weights_path.display(), "loading safetensors model");
 
         let device = candle_device(&hw);
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[&profile.weights_path],
-                DType::F32,
-                &device,
-            )?
+            VarBuilder::from_mmaped_safetensors(&[&profile.weights_path], DType::F32, &device)?
         };
 
         let config: BertConfig = read_json(&profile.config_path)?;
@@ -155,7 +162,11 @@ impl EmbedEngine {
         let scratch = Scratch::with_capacity(BATCH_CEILING, profile.max_length, profile.dim);
 
         Ok(Self {
-            state: Arc::new(Mutex::new(State { model, device, scratch })),
+            state: Arc::new(Mutex::new(State {
+                model,
+                device,
+                scratch,
+            })),
             tokenizer,
             profile,
             hardware: hw,
@@ -189,7 +200,7 @@ impl EmbedEngine {
         let encs = self.tokenizer.encode_batch(texts)?;
         let refs: Vec<&Tokenized> = encs.iter().collect();
         let pooled = self.embed_batch_tokenized_sync(&refs)?;
-        Ok(pooled_to_vec_of_vecs(pooled))
+        Ok(pooled.rows().map(|r| r.to_vec()).collect())
     }
 
     pub async fn embed_batch_async(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
@@ -199,39 +210,51 @@ impl EmbedEngine {
         let encs = self.tokenizer.encode_batch(texts)?;
         let refs: Vec<&Tokenized> = encs.iter().collect();
         let pooled = tokio::task::block_in_place(|| self.embed_batch_tokenized_sync(&refs))?;
-        Ok(pooled_to_vec_of_vecs(pooled))
+        Ok(pooled.rows().map(|r| r.to_vec()).collect())
     }
 
     pub fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
         let input = apply_prefix(text, &self.profile.query_prefix);
-        let mut batch = self.embed_batch(&[&input])?;
-        batch
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("no embedding produced"))
+        let encs = self.tokenizer.encode_batch(&[&*input])?;
+        let refs: Vec<&Tokenized> = encs.iter().collect();
+        let pooled = self.embed_batch_tokenized_sync(&refs)?;
+        if pooled.data.is_empty() {
+            anyhow::bail!("no embedding produced");
+        }
+        Ok(pooled.data)
     }
 
     pub async fn embed_query_async(&self, text: &str) -> Result<Vec<f32>> {
         let input = apply_prefix(text, &self.profile.query_prefix);
-        let mut batch = self.embed_batch_async(&[&input]).await?;
-        batch
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("no embedding produced"))
+        let encs = self.tokenizer.encode_batch(&[&*input])?;
+        let refs: Vec<&Tokenized> = encs.iter().collect();
+        let pooled = tokio::task::block_in_place(|| self.embed_batch_tokenized_sync(&refs))?;
+        if pooled.data.is_empty() {
+            anyhow::bail!("no embedding produced");
+        }
+        Ok(pooled.data)
     }
 
     pub fn embed_passage(&self, text: &str) -> Result<Vec<f32>> {
         let input = apply_prefix(text, &self.profile.passage_prefix);
-        let mut batch = self.embed_batch(&[&input])?;
-        batch
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("no embedding produced"))
+        let encs = self.tokenizer.encode_batch(&[&*input])?;
+        let refs: Vec<&Tokenized> = encs.iter().collect();
+        let pooled = self.embed_batch_tokenized_sync(&refs)?;
+        if pooled.data.is_empty() {
+            anyhow::bail!("no embedding produced");
+        }
+        Ok(pooled.data)
     }
 
     pub async fn embed_passage_async(&self, text: &str) -> Result<Vec<f32>> {
         let input = apply_prefix(text, &self.profile.passage_prefix);
-        let mut batch = self.embed_batch_async(&[&input]).await?;
-        batch
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("no embedding produced"))
+        let encs = self.tokenizer.encode_batch(&[&*input])?;
+        let refs: Vec<&Tokenized> = encs.iter().collect();
+        let pooled = tokio::task::block_in_place(|| self.embed_batch_tokenized_sync(&refs))?;
+        if pooled.data.is_empty() {
+            anyhow::bail!("no embedding produced");
+        }
+        Ok(pooled.data)
     }
 
     pub async fn embed_batch_tokenized_async(&self, encs: &[&Tokenized]) -> Result<Pooled> {
@@ -262,7 +285,11 @@ impl EmbedEngine {
         let batch = next_bucket(BATCH_BUCKETS, real_batch, BATCH_CEILING);
 
         let mut state = self.state.lock().expect("embed state poisoned");
-        let State { model, device, scratch } = &mut *state;
+        let State {
+            model,
+            device,
+            scratch,
+        } = &mut *state;
         scratch.prepare(batch, seq);
         fill_scratch(scratch, encs, seq);
 
@@ -285,17 +312,6 @@ impl EmbedEngine {
             batch: real_batch,
         })
     }
-}
-
-fn pooled_to_vec_of_vecs(p: Pooled) -> Vec<Vec<f32>> {
-    if p.dim == 0 {
-        return Vec::new();
-    }
-    let mut out: Vec<Vec<f32>> = Vec::with_capacity(p.batch);
-    for chunk in p.data.chunks(p.dim) {
-        out.push(chunk.to_vec());
-    }
-    out
 }
 
 fn fill_scratch(scratch: &mut Scratch, encs: &[&Tokenized], seq: usize) {
@@ -330,20 +346,14 @@ fn run_and_pool(
         dim,
     } = shape;
 
-    let ids = Tensor::from_slice(
-        &scratch.input_ids[..batch * seq],
-        (batch, seq),
-        device,
-    )?;
+    let ids = Tensor::from_slice(&scratch.input_ids[..batch * seq], (batch, seq), device)?;
     let token_type_ids = Tensor::zeros_like(&ids)?;
-    let mask = Tensor::from_slice(
-        &scratch.attention_mask[..batch * seq],
-        (batch, seq),
-        device,
-    )?;
+    let mask = Tensor::from_slice(&scratch.attention_mask[..batch * seq], (batch, seq), device)?;
 
     let output = model.forward(&ids, &token_type_ids, Some(&mask))?;
-    let output = output.to_device(&candle_core::Device::Cpu)?.to_dtype(DType::F32)?;
+    let output = output
+        .to_device(&candle_core::Device::Cpu)?
+        .to_dtype(DType::F32)?;
     let data_flat = output.flatten_all()?.to_vec1::<f32>()?;
 
     scratch.pooled_flat.clear();
