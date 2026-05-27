@@ -381,9 +381,9 @@ mod tq_tests {
         assert_eq!(batch.len(), 1);
         assert_eq!(batch.chunk_ids[0], id);
         assert_eq!(batch.norms.len(), 1);
-        assert!(batch.radii.len() > 0);
-        assert!(batch.angle_indices.len() > 0);
-        assert!(batch.signs.len() > 0);
+        assert!(!batch.radii.is_empty());
+        assert!(!batch.angle_indices.is_empty());
+        assert!(!batch.signs.is_empty());
         Ok(())
     }
 

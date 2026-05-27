@@ -18,9 +18,9 @@ use zti_protocol::response::{CheckStatus, Response, SearchResults};
 #[serde(rename_all = "camelCase")]
 pub struct FileTreeParams {
     #[schemars(
-        description = "Absolute path to the project root. Obtain valid paths from `projectList`."
+        description = "Project name, index number, or root path. Use `projectList` to see available projects."
     )]
-    pub project_root: String,
+    pub project: String,
     #[schemars(
         description = "Optional glob pattern to filter files, e.g. \"**/*.rs\" or \"src/**/*.ts\"."
     )]
@@ -34,9 +34,9 @@ pub struct SearchQueryParams {
     )]
     pub text: String,
     #[schemars(
-        description = "Project root path. Auto-resolved when omitted if only one project is indexed."
+        description = "Project name, index number, or root path. Auto-resolved when omitted."
     )]
-    pub root: Option<String>,
+    pub project: Option<String>,
     #[schemars(description = "Maximum results to return (default: 5).")]
     pub limit: Option<usize>,
 }
@@ -48,9 +48,9 @@ pub struct SearchPassageParams {
     )]
     pub text: String,
     #[schemars(
-        description = "Project root path. Auto-resolved when omitted if only one project is indexed."
+        description = "Project name, index number, or root path. Auto-resolved when omitted."
     )]
-    pub root: Option<String>,
+    pub project: Option<String>,
     #[schemars(description = "Maximum results to return (default: 5).")]
     pub limit: Option<usize>,
 }
@@ -59,9 +59,9 @@ pub struct SearchPassageParams {
 #[serde(rename_all = "camelCase")]
 pub struct DoctorParams {
     #[schemars(
-        description = "Optional project root to diagnose. If omitted, runs general diagnostics."
+        description = "Project name, index number, or root path. If omitted, runs general diagnostics."
     )]
-    pub project_root: Option<String>,
+    pub project: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -102,56 +102,6 @@ impl ZebraMcpServer {
         Ok(guard)
     }
 
-    async fn resolve_project_root(root: Option<&str>) -> Result<String, ErrorData> {
-        match root {
-            Some(r) => {
-                let canonical = std::path::Path::new(r)
-                    .canonicalize()
-                    .map_err(|e| internal_err(format!("invalid root path: {e}")))?;
-                Ok(canonical.to_string_lossy().into_owned())
-            }
-            None => {
-                let projects = zti_store::list_projects()
-                    .await
-                    .map_err(|e| internal_err(format!("list_projects: {e}")))?;
-
-                if let Ok(cwd) = std::env::current_dir() {
-                    if let Ok(canonical) = cwd.canonicalize() {
-                        let cwd_str = canonical.to_string_lossy();
-                        for p in &projects {
-                            if cwd_str.starts_with(&p.root_path) {
-                                return Ok(p.root_path.clone());
-                            }
-                        }
-                    }
-                }
-
-                match projects.len() {
-                    0 => Err(internal_err(
-                        "No indexed projects. Index a project first.".into(),
-                    )),
-                    1 => projects
-                        .into_iter()
-                        .next()
-                        .map(|p| p.root_path)
-                        .ok_or_else(|| internal_err("empty project list".into())),
-                    _ => {
-                        let mut msg = String::with_capacity(64 + projects.len() * 88);
-                        msg.push_str("Multiple projects indexed. Specify `root`:\n");
-                        for (i, p) in projects.iter().enumerate() {
-                            let name = std::path::Path::new(&p.root_path)
-                                .file_name()
-                                .map(|s| s.to_string_lossy())
-                                .unwrap_or(Cow::Borrowed(&p.root_path));
-                            let _ = writeln!(msg, "  {}. {} ({})", i + 1, name, p.root_path);
-                        }
-                        Err(internal_err(msg))
-                    }
-                }
-            }
-        }
-    }
-
     async fn send_search(&self, req: SearchReq) -> Result<SearchResults, ErrorData> {
         let mut guard = self.ensure_daemon().await?;
         let client = guard
@@ -172,11 +122,13 @@ impl ZebraMcpServer {
     async fn do_search(
         &self,
         text: String,
-        root: Option<&str>,
+        project: Option<&str>,
         limit: Option<usize>,
         mode: SearchMode,
     ) -> Result<CallToolResult, ErrorData> {
-        let project_root = Self::resolve_project_root(root).await?;
+        let project_root = zti_store::resolve_project(project)
+            .await
+            .map_err(|e| internal_err(format!("{e}")))?;
         let limit = limit.unwrap_or(5);
 
         let req = SearchReq {
@@ -257,10 +209,11 @@ impl ZebraMcpServer {
         &self,
         Parameters(params): Parameters<FileTreeParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let root = std::path::Path::new(&params.project_root)
-            .canonicalize()
-            .map_err(|e| internal_err(format!("invalid project_root: {e}")))?;
-        let pid = zti_common::ids::project_id(&root);
+        let root_path = zti_store::resolve_project(Some(&params.project))
+            .await
+            .map_err(|e| internal_err(format!("{e}")))?;
+        let root = std::path::Path::new(&root_path);
+        let pid = zti_common::ids::project_id(root);
         let db = zti_store::Db::open(&pid)
             .await
             .map_err(|e| internal_err(format!("store open: {e}")))?;
@@ -321,7 +274,7 @@ impl ZebraMcpServer {
     ) -> Result<CallToolResult, ErrorData> {
         self.do_search(
             params.text,
-            params.root.as_deref(),
+            params.project.as_deref(),
             params.limit,
             SearchMode::Query,
         )
@@ -338,7 +291,7 @@ impl ZebraMcpServer {
     ) -> Result<CallToolResult, ErrorData> {
         self.do_search(
             params.text,
-            params.root.as_deref(),
+            params.project.as_deref(),
             params.limit,
             SearchMode::Passage,
         )
@@ -353,9 +306,15 @@ impl ZebraMcpServer {
         &self,
         Parameters(params): Parameters<DoctorParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let req = DoctorReq {
-            project_root: params.project_root,
+        let project_root = match &params.project {
+            Some(p) => Some(
+                zti_store::resolve_project(Some(p))
+                    .await
+                    .map_err(|e| internal_err(format!("{e}")))?,
+            ),
+            None => None,
         };
+        let req = DoctorReq { project_root };
 
         let mut guard = self.ensure_daemon().await?;
         let client = guard
@@ -387,7 +346,7 @@ impl ZebraMcpServer {
 
     #[tool(
         name = "projectList",
-        description = "Lists all indexed projects with root paths and stats. Call this when you need the `root` parameter for other tools and are unsure which project to target."
+        description = "Lists all indexed projects with root paths and stats. Call this when you need the `project` parameter for other tools and are unsure which project to target."
     )]
     async fn project_list(
         &self,
@@ -412,7 +371,7 @@ impl ZebraMcpServer {
             let _ = writeln!(out, "| {} | {} | {} |", i + 1, name, p.root_path);
         }
 
-        out.push_str("\n\n[SYSTEM HINT: To explore a project, use `searchQuery`, `searchPassage`, or `fileTree`. The `root` parameter is optional when only one project is indexed.]");
+        out.push_str("\n\n[SYSTEM HINT: To explore a project, use `searchQuery`, `searchPassage`, or `fileTree`. The `project` parameter accepts a name, index number, or root path.]");
         Ok(ok_text(out))
     }
 }
@@ -443,16 +402,17 @@ impl rmcp::ServerHandler for ZebraMcpServer {
              \n\
              3. **Use `fileTree`** to discover project structure — prefer it \
              over `find` or `ls`.\n\
-             \n\
-             ## Tips\n\
-             \n\
-             * Use descriptive phrases, not single keywords. \
-             \"user session validation\" finds more than \"auth\".\n\
-             * The `root` parameter auto-resolves when only one project is indexed.\n\
-             * Results contain complete source code — use it directly without \
-             re-reading files.\n\
-             * If the fast index misses results, exhaustive search runs \
-             automatically.",
+              \n\
+              ## Tips\n\
+              \n\
+              * Use descriptive phrases, not single keywords. \
+              \"user session validation\" finds more than \"auth\".\n\
+              * The `project` parameter accepts a project name, index number, \
+              or root path. It auto-resolves when omitted.\n\
+              * Results contain complete source code — use it directly without \
+              re-reading files.\n\
+              * If the fast index misses results, exhaustive search runs \
+              automatically.",
         );
         instructions.push_str(&self.indexed_projects_roots);
         info.instructions = Some(instructions);

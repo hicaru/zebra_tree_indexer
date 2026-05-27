@@ -15,14 +15,14 @@ use zti_protocol::response::*;
 pub enum CliCommand {
     #[command(about = "Index a project")]
     Index {
-        #[arg(short, long)]
+        #[arg(short, long, help = "Project name, index number, or root path")]
         root: PathBuf,
         #[arg(long)]
         refresh: bool,
     },
     #[command(about = "Search a project")]
     Search {
-        #[arg(short, long)]
+        #[arg(short, long, help = "Project name, index number, or root path")]
         root: PathBuf,
         query: String,
         #[arg(short, long, default_value = "5")]
@@ -38,19 +38,19 @@ pub enum CliCommand {
     },
     #[command(about = "Interactive chat (search loop)")]
     Chat {
-        #[arg(short, long)]
+        #[arg(short, long, help = "Project name, index number, or root path")]
         root: PathBuf,
         #[arg(short, long, default_value = "10")]
         limit: usize,
     },
     #[command(about = "Show project status")]
     Status {
-        #[arg(short, long)]
+        #[arg(short, long, help = "Project name, index number, or root path")]
         root: Option<PathBuf>,
     },
     #[command(about = "Run diagnostics")]
     Doctor {
-        #[arg(short, long)]
+        #[arg(short, long, help = "Project name, index number, or root path")]
         root: Option<PathBuf>,
     },
     #[command(about = "Show daemon environment")]
@@ -59,7 +59,7 @@ pub enum CliCommand {
     Stop,
     #[command(about = "Remove a project")]
     Remove {
-        #[arg(short, long)]
+        #[arg(short, long, help = "Project name, index number, or root path")]
         root: PathBuf,
     },
     #[command(about = "List all indexed projects")]
@@ -84,12 +84,8 @@ async fn open_client(
     Ok(client)
 }
 
-fn canon(p: &Path) -> Result<String> {
-    Ok(p.canonicalize()?.to_string_lossy().into_owned())
-}
-
-fn canon_opt(p: Option<PathBuf>) -> Result<Option<String>> {
-    p.map(|r| canon(&r)).transpose()
+async fn resolve_root(root: &Path) -> Result<String> {
+    zti_store::resolve_project(Some(&root.to_string_lossy())).await
 }
 
 pub async fn run(
@@ -104,7 +100,7 @@ pub async fn run(
     match cmd {
         CliCommand::Index { root, refresh } => {
             let mut client = open().await?;
-            let project_root = canon(&root)?;
+            let project_root = resolve_root(&root).await?;
             let bar = RefCell::new(None::<ProgressBar>);
 
             let resp = client
@@ -171,7 +167,7 @@ pub async fn run(
             mode,
         } => {
             let mut client = open().await?;
-            let project_root = canon(&root)?;
+            let project_root = resolve_root(&root).await?;
             let resp = client
                 .request(Request::Search(SearchReq {
                     project_root,
@@ -196,7 +192,7 @@ pub async fn run(
         }
         CliCommand::Chat { root, limit } => {
             let mut client = open().await?;
-            let project_root = canon(&root)?;
+            let project_root = resolve_root(&root).await?;
             let mut rl = rustyline::DefaultEditor::new()?;
             println!("zebraindex chat — type a query, :q or Ctrl-D to exit.");
 
@@ -234,7 +230,10 @@ pub async fn run(
         }
         CliCommand::Status { root } => {
             let mut client = open().await?;
-            let project_root = canon_opt(root)?;
+            let project_root = match root {
+                Some(r) => Some(resolve_root(&r).await?),
+                None => None,
+            };
             let resp = client
                 .request(Request::ProjectStatus(ProjectStatusReq { project_root }))
                 .await?;
@@ -251,7 +250,10 @@ pub async fn run(
         }
         CliCommand::Doctor { root } => {
             let mut client = open().await?;
-            let project_root = canon_opt(root)?;
+            let project_root = match root {
+                Some(r) => Some(resolve_root(&r).await?),
+                None => None,
+            };
             let resp = client
                 .request(Request::Doctor(DoctorReq { project_root }))
                 .await?;
@@ -305,7 +307,7 @@ pub async fn run(
         }
         CliCommand::Remove { root } => {
             let mut client = open().await?;
-            let project_root = canon(&root)?;
+            let project_root = resolve_root(&root).await?;
             let resp = client
                 .request(Request::RemoveProject(RemoveProjectReq { project_root }))
                 .await?;
