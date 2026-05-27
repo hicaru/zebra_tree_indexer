@@ -38,7 +38,7 @@ pub fn format_search_results_budgeted(results: &SearchResults, budget: usize) ->
 
     let _ = writeln!(
         out,
-        "SOURCE CODE ({} hits, {} related):\n",
+        "({} hits, {} related):\n",
         results.hits.len(),
         results.appendix.len()
     );
@@ -62,7 +62,7 @@ pub fn format_search_results_budgeted(results: &SearchResults, budget: usize) ->
     }
 
     if !results.appendix.is_empty() && out.len() < budget {
-        out.push_str("--- DEPENDENCIES (source code referenced by results above) ---\n");
+        out.push_str("-- deps:\n");
         for hit in &results.appendix {
             let hdr_len = hit.file_path.len()
                 + 1
@@ -156,7 +156,7 @@ mod tests {
         };
         let out = format_search_results(&r);
         assert!(
-            out.contains("SOURCE CODE (1 hits, 1 related)"),
+            out.contains("(1 hits, 1 related)"),
             "header: {}",
             out
         );
@@ -168,7 +168,7 @@ mod tests {
         );
         assert!(out.contains("    pub fn recip"), "body indent: {}", out);
         assert!(
-            out.contains("--- DEPENDENCIES (source code referenced by results above) ---\n"),
+            out.contains("-- deps:\n"),
             "appendix marker: {}",
             out
         );
