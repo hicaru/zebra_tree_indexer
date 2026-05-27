@@ -369,6 +369,14 @@ pub async fn handle_action(
                             .search_method
                             .as_deref()
                             .and_then(zti_ann::SearchMethod::parse);
+                        app.modal = Some(app::Modal::Indexing {
+                            phase: String::with_capacity(16),
+                            current: 0,
+                            total: 0,
+                            message: String::with_capacity(64),
+                            is_reindex: true,
+                            started_at: std::time::Instant::now(),
+                        });
                         let tx_c = tx.clone();
                         tokio::spawn(async move {
                             do_index(root, true, ctx, tx_c).await;
