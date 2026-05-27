@@ -6,7 +6,6 @@ use anyhow::Result;
 use clap::Subcommand;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use zti_common::format::format_elapsed;
 use zti_ipc_client::Client;
 use zti_protocol::format_search_results;
 use zti_protocol::request::*;
@@ -322,17 +321,23 @@ pub async fn run(
                 println!("No indexed projects found.");
                 return Ok(());
             }
-            println!("| Project | Model | Chunks | Files | Last Indexed |");
-            println!("|---------|-------|--------|-------|-------------|");
-            for p in &projects {
+            println!("| # | Project | Root | Model | Chunks | Files | Last Indexed |");
+            println!("|---|---------|------|-------|--------|-------|-------------|");
+            for (i, p) in projects.iter().enumerate() {
                 let name = Path::new(&p.root_path)
                     .file_name()
                     .map(|s| s.to_string_lossy())
                     .unwrap_or_else(|| std::borrow::Cow::Borrowed(&p.root_path));
-                let ago = format_elapsed(p.last_indexed_ns);
+                let ago = zti_common::format::format_elapsed(p.last_indexed_ns);
                 println!(
-                    "| {} | {} | {} | {} | {} |",
-                    name, p.model_id, p.total_chunks, p.total_files, ago
+                    "| {} | {} | {} | {} | {} | {} | {} |",
+                    i + 1,
+                    name,
+                    p.root_path,
+                    p.model_id,
+                    p.total_chunks,
+                    p.total_files,
+                    ago
                 );
             }
             println!("\n{} project(s)", projects.len());

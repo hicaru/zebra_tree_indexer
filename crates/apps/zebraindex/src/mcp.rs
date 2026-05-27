@@ -9,7 +9,6 @@ use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
 use rmcp::{ErrorData, ServiceExt, tool};
 use tokio::sync::Mutex;
-use zti_common::format::format_elapsed;
 use zti_ipc_client::Client;
 use zti_protocol::format_search_results;
 use zti_protocol::request::{DoctorReq, Request, SearchMode, SearchReq};
@@ -137,14 +136,14 @@ impl ZebraMcpServer {
                         .map(|p| p.root_path)
                         .ok_or_else(|| internal_err("empty project list".into())),
                     _ => {
-                        let mut msg = String::with_capacity(64 + projects.len() * 80);
+                        let mut msg = String::with_capacity(64 + projects.len() * 88);
                         msg.push_str("Multiple projects indexed. Specify `root`:\n");
-                        for p in &projects {
+                        for (i, p) in projects.iter().enumerate() {
                             let name = std::path::Path::new(&p.root_path)
                                 .file_name()
                                 .map(|s| s.to_string_lossy())
                                 .unwrap_or(Cow::Borrowed(&p.root_path));
-                            let _ = writeln!(msg, "  - {} ({})", name, p.root_path);
+                            let _ = writeln!(msg, "  {}. {} ({})", i + 1, name, p.root_path);
                         }
                         Err(internal_err(msg))
                     }
@@ -402,20 +401,15 @@ impl ZebraMcpServer {
             return Ok(ok_text("No indexed projects found."));
         }
 
-        let mut out = String::with_capacity(projects.len() * 128);
-        out.push_str("| Project | Root | Model | Chunks | Files | Last Indexed |\n");
-        out.push_str("|---------|------|-------|--------|-------|-------------|\n");
-        for p in &projects {
+        let mut out = String::with_capacity(projects.len() * 80);
+        out.push_str("| # | Project | Root |\n");
+        out.push_str("|---|---------|------|\n");
+        for (i, p) in projects.iter().enumerate() {
             let name = std::path::Path::new(&p.root_path)
                 .file_name()
                 .map(|s| s.to_string_lossy())
                 .unwrap_or_else(|| Cow::Borrowed(&p.root_path));
-            let ago = format_elapsed(p.last_indexed_ns);
-            let _ = writeln!(
-                out,
-                "| {} | {} | {} | {} | {} | {} |",
-                name, p.root_path, p.model_id, p.total_chunks, p.total_files, ago
-            );
+            let _ = writeln!(out, "| {} | {} | {} |", i + 1, name, p.root_path);
         }
 
         out.push_str("\n\n[SYSTEM HINT: To explore a project, use `searchQuery`, `searchPassage`, or `fileTree`. The `root` parameter is optional when only one project is indexed.]");
@@ -472,10 +466,16 @@ pub fn run_mcp() -> Result<()> {
     rt.block_on(async {
         let indexed_projects_roots = match zti_store::list_projects().await {
             Ok(projects) if projects.len() > 1 => {
-                let mut s = String::with_capacity(32 + projects.len() * 64);
-                s.push_str("\n\n## Indexed Projects\n");
-                for p in &projects {
-                    let _ = writeln!(s, "- {}", p.root_path);
+                let mut s = String::with_capacity(32 + projects.len() * 80);
+                s.push_str("\n\n## Indexed Projects\n\n");
+                s.push_str("| # | Project | Root |\n");
+                s.push_str("|---|---------|------|\n");
+                for (i, p) in projects.iter().enumerate() {
+                    let name = std::path::Path::new(&p.root_path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy())
+                        .unwrap_or_else(|| Cow::Borrowed(&p.root_path));
+                    let _ = writeln!(s, "| {} | {} | {} |", i + 1, name, p.root_path);
                 }
                 s
             }
