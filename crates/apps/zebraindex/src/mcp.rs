@@ -116,6 +116,17 @@ impl ZebraMcpServer {
                     .await
                     .map_err(|e| internal_err(format!("list_projects: {e}")))?;
 
+                if let Ok(cwd) = std::env::current_dir() {
+                    if let Ok(canonical) = cwd.canonicalize() {
+                        let cwd_str = canonical.to_string_lossy();
+                        for p in &projects {
+                            if cwd_str.starts_with(&p.root_path) {
+                                return Ok(p.root_path.clone());
+                            }
+                        }
+                    }
+                }
+
                 match projects.len() {
                     0 => Err(internal_err(
                         "No indexed projects. Index a project first.".into(),
