@@ -8,6 +8,8 @@ pub struct TuiConfig {
     pub default_model: String,
     #[serde(default)]
     pub default_search_method: Option<String>,
+    #[serde(default)]
+    pub default_dtype: Option<String>,
 }
 
 pub fn config_path() -> Result<PathBuf> {
@@ -24,10 +26,11 @@ pub fn load() -> Result<Option<TuiConfig>> {
     Ok(Some(cfg))
 }
 
-pub fn save(model: &str, search_method: Option<&str>) -> Result<()> {
+pub fn save(model: &str, search_method: Option<&str>, dtype: Option<&str>) -> Result<()> {
     let cfg = TuiConfig {
         default_model: model.to_string(),
         default_search_method: search_method.map(str::to_string),
+        default_dtype: dtype.map(str::to_string),
     };
     let path = config_path()?;
     let json = serde_json::to_vec(&cfg)?;

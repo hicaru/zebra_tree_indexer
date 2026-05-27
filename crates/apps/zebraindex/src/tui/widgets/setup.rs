@@ -1,16 +1,44 @@
-use std::borrow::Cow;
-
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
-use super::app::IndexMethodButton;
-use super::ui::{centered_rect, render_button_row, spinner_ch};
+use super::common::{centered_rect, render_bar, render_button_row, spinner_ch};
+use super::super::app::{IndexMethodButton, SetupPhase};
+use super::super::registry::ModelEntry;
 
-use super::app::SetupPhase;
-use super::registry::ModelEntry;
+pub struct DTypeOption {
+    pub label: &'static str,
+    pub cli_value: &'static str,
+    pub description: &'static str,
+    pub detail: &'static str,
+    pub device_tag: &'static str,
+}
+
+pub const DTYPE_CHOICES: &[DTypeOption] = &[
+    DTypeOption {
+        label: "F32",
+        cli_value: "f32",
+        description: "Full precision (32-bit). Highest accuracy.",
+        detail: "Most RAM/VRAM usage. Best for CPU inference.",
+        device_tag: "[CPU]",
+    },
+    DTypeOption {
+        label: "F16",
+        cli_value: "f16",
+        description: "Half precision (16-bit). Fast on GPU.",
+        detail: "Good balance of speed and accuracy.",
+        device_tag: "[GPU]",
+    },
+    DTypeOption {
+        label: "BF16",
+        cli_value: "bf16",
+        description: "Brain float (16-bit). Better range.",
+        detail: "Same size as F16, wider dynamic range.",
+        device_tag: "[GPU]",
+    },
+];
 
 pub fn draw(f: &mut Frame, phase: &SetupPhase, tick: u16) {
     f.render_widget(
@@ -22,6 +50,9 @@ pub fn draw(f: &mut Frame, phase: &SetupPhase, tick: u16) {
         SetupPhase::FetchingRegistry => draw_spinner(f, "Downloading model catalog...", tick),
         SetupPhase::ModelSelection { entries, selected } => {
             draw_model_selection(f, entries, *selected);
+        }
+        SetupPhase::DTypeSelection { model_id, selected } => {
+            draw_dtype_selection(f, model_id, *selected);
         }
         SetupPhase::DownloadingModel { model_id } => draw_download(f, model_id, tick),
         SetupPhase::IndexMethodSelection {
@@ -190,6 +221,66 @@ fn draw_model_selection(f: &mut Frame, entries: &[ModelEntry], selected: usize) 
     f.render_widget(help, layout[1]);
 }
 
+fn draw_dtype_selection(f: &mut Frame, model_id: &str, selected: usize) {
+    let area = centered_rect(70, 70, f.area());
+    f.render_widget(Clear, area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(3)])
+        .split(area);
+
+    let mut items: Vec<ListItem> = Vec::with_capacity(DTYPE_CHOICES.len());
+    for (i, opt) in DTYPE_CHOICES.iter().enumerate() {
+        let is_sel = i == selected;
+        let prefix = if is_sel { "> " } else { "  " };
+        let style = if is_sel {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        let line1 = Line::from(vec![
+            Span::styled(prefix, style),
+            Span::styled(opt.label, style),
+            Span::raw("  "),
+            Span::styled(opt.description, Style::default().fg(Color::Gray)),
+            Span::raw("  "),
+            Span::styled(opt.device_tag, Style::default().fg(Color::DarkGray)),
+        ]);
+
+        let line2 = Line::from(vec![
+            Span::raw("    "),
+            Span::styled(opt.detail, Style::default().fg(Color::DarkGray)),
+        ]);
+
+        items.push(ListItem::new(vec![line1, line2]));
+    }
+
+    let block = Block::default()
+        .title(format!(" Select Data Type  |  Model: {} ", model_id))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let list_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(5)])
+        .split(layout[0]);
+
+    let info = Paragraph::new(vec![Line::from(Span::styled(
+        "  Select precision for model weights. [CPU] = best for CPU  [GPU] = best for Metal/CUDA",
+        Style::default().fg(Color::DarkGray),
+    ))]);
+    f.render_widget(info, list_area[0]);
+    f.render_widget(List::new(items).block(block), list_area[1]);
+
+    let help = Paragraph::new("  j/k: navigate   Enter: select   Esc: back")
+        .block(Block::default().borders(Borders::ALL));
+    f.render_widget(help, layout[1]);
+}
+
 pub fn draw_method_selection_modal(
     f: &mut Frame,
     methods: &[(zti_ann::SearchMethod, bool)],
@@ -252,7 +343,7 @@ fn draw_method_selection(
         let name = std::path::Path::new(path)
             .file_name()
             .map(|s| s.to_string_lossy())
-            .unwrap_or(Cow::Borrowed("?"));
+            .unwrap_or(std::borrow::Cow::Borrowed("?"));
 
         let status = if already_indexed {
             "Already indexed (will re-index)"
@@ -410,37 +501,6 @@ fn draw_method_selection(
                 .block(Block::default().borders(Borders::ALL));
         f.render_widget(help, outer[1]);
     }
-}
-
-const FILLED_20: &str = "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}";
-const EMPTY_20: &str = "\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}";
-
-fn bar_slice(full: &'static str, n: usize) -> &'static str {
-    let byte_len = full.len() / 20 * n;
-    &full[..byte_len]
-}
-
-fn render_bar(label: &'static str, pct: u8) -> Line<'static> {
-    let filled = (pct as usize).saturating_mul(20) / 100;
-    let empty = 20 - filled;
-    let color = match pct {
-        90..=100 => Color::Green,
-        60..=89 => Color::Cyan,
-        30..=59 => Color::Yellow,
-        _ => Color::Red,
-    };
-    Line::from(vec![
-        Span::styled(
-            format!("  {:<14}", label),
-            Style::default().fg(Color::White),
-        ),
-        Span::styled(bar_slice(FILLED_20, filled), Style::default().fg(color)),
-        Span::styled(
-            bar_slice(EMPTY_20, empty),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(format!("  {:>3}%", pct), Style::default().fg(Color::White)),
-    ])
 }
 
 fn draw_error(f: &mut Frame, message: &str, can_retry: bool) {

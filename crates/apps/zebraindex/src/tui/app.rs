@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -8,6 +9,9 @@ use zti_protocol::response::SearchResults;
 use zti_store::ProjectRow;
 
 use super::registry::ModelEntry;
+
+pub const DEFAULT_DIM: usize = 768;
+pub const PREVIEW_LINES: usize = 6;
 
 pub enum Screen {
     Setup(SetupPhase),
@@ -32,6 +36,10 @@ pub enum SetupPhase {
     DownloadingModel {
         model_id: Arc<str>,
     },
+    DTypeSelection {
+        model_id: Arc<str>,
+        selected: usize,
+    },
     IndexMethodSelection {
         model_id: Arc<str>,
         methods: Arc<[(zti_ann::SearchMethod, bool)]>,
@@ -52,11 +60,10 @@ pub enum DaemonStatus {
     Unknown,
     Starting,
     Running {
-        model_id: String,
         device: String,
         uptime_secs: u64,
-        loaded_models: Vec<String>,
-        loading_model: Option<String>,
+        cpus: u32,
+        mem_total_mb: u64,
     },
     Stopped,
     Error(String),
@@ -93,18 +100,20 @@ pub enum Modal {
         message: String,
     },
     Indexing {
+        phase: String,
         current: u64,
         total: u64,
         message: String,
         is_reindex: bool,
+        started_at: std::time::Instant,
     },
     AddProject {
         path_input: String,
         error: Option<String>,
     },
     ChangeIndexMethod {
-        project_root: Option<String>,
-        canonical_path: Option<String>,
+        project_root: Option<Arc<str>>,
+        canonical_path: Option<Arc<str>>,
         is_reindex: bool,
         already_indexed: Option<bool>,
         methods: Arc<[(zti_ann::SearchMethod, bool)]>,
@@ -115,6 +124,10 @@ pub enum Modal {
 
 pub enum AppMessage {
     DaemonStatusUpdate(DaemonStatus),
+    DaemonEnvLoaded {
+        cpus: u32,
+        mem_total_mb: u64,
+    },
     ProjectsLoaded(Vec<ProjectRow>),
     SearchDone(SearchResults),
     SearchError(String),
@@ -133,6 +146,7 @@ pub enum AppMessage {
     ProjectRemoveError(String),
     IndexComplete,
     IndexProgress {
+        phase: String,
         current: u64,
         total: u64,
         message: String,
@@ -154,12 +168,13 @@ pub struct App {
     pub selected_project: usize,
     pub active_panel: ActivePanel,
     pub modal: Option<Modal>,
-    pub search_inputs: [SearchInput; 2],
-    pub active_input: usize,
+    pub search_input: SearchInput,
     pub search_results: Option<SearchResults>,
     pub search_error: Option<String>,
     pub searching: bool,
-    pub results_scroll: u16,
+    pub results_scroll: usize,
+    pub results_total_lines: usize,
+    pub results_visible_height: Cell<usize>,
     pub should_quit: bool,
     pub client: Arc<Mutex<Option<Client>>>,
     pub model: Option<Arc<str>>,
@@ -167,6 +182,7 @@ pub struct App {
     pub passage_prefix: Option<Arc<str>>,
     pub model_dtype: Option<Arc<str>>,
     pub search_method: Option<zti_ann::SearchMethod>,
+    pub local_hardware: Option<zti_hw::Hardware>,
     pub should_run: Arc<AtomicBool>,
     pub monitor_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -181,21 +197,16 @@ impl Default for App {
             selected_project: 0,
             active_panel: ActivePanel::default(),
             modal: None,
-            search_inputs: [
-                SearchInput {
-                    text: String::with_capacity(256),
-                    mode: SearchMode::Query,
-                },
-                SearchInput {
-                    text: String::with_capacity(256),
-                    mode: SearchMode::Passage,
-                },
-            ],
-            active_input: 0,
+            search_input: SearchInput {
+                text: String::with_capacity(256),
+                mode: SearchMode::Query,
+            },
             search_results: None,
             search_error: None,
             searching: false,
             results_scroll: 0,
+            results_total_lines: 0,
+            results_visible_height: Cell::new(0),
             should_quit: false,
             client: Arc::new(Mutex::new(None)),
             model: None,
@@ -203,6 +214,7 @@ impl Default for App {
             passage_prefix: None,
             model_dtype: None,
             search_method: None,
+            local_hardware: None,
             should_run: Arc::new(AtomicBool::new(true)),
             monitor_handle: None,
         }
@@ -216,12 +228,23 @@ impl App {
             .map(|p| p.root_path.as_str())
     }
 
-    pub fn active_search(&self) -> &SearchInput {
-        &self.search_inputs[self.active_input]
-    }
-
-    pub fn active_search_mut(&mut self) -> &mut SearchInput {
-        &mut self.search_inputs[self.active_input]
+    pub fn effective_hardware(&self) -> (&str, u32, u64) {
+        match &self.daemon_status {
+            DaemonStatus::Running {
+                device,
+                cpus,
+                mem_total_mb,
+                ..
+            } => (device.as_str(), *cpus, *mem_total_mb),
+            _ => {
+                let hw = self.local_hardware.as_ref();
+                (
+                    hw.map(|h| h.device.as_str()).unwrap_or("--"),
+                    hw.map(|h| h.cpus as u32).unwrap_or(0),
+                    hw.map(|h| h.mem_total / (1024 * 1024)).unwrap_or(0),
+                )
+            }
+        }
     }
 
     pub fn apply_message(&mut self, msg: AppMessage) {
@@ -235,6 +258,11 @@ impl App {
                 }
             }
             AppMessage::SearchDone(results) => {
+                let total = 1 + results.hits.iter().map(|hit| {
+                    let n = hit.content.lines().count();
+                    1 + n.min(PREVIEW_LINES) + if n > PREVIEW_LINES { 1 } else { 0 }
+                }).sum::<usize>();
+                self.results_total_lines = total;
                 self.search_results = Some(results);
                 self.search_error = None;
                 self.searching = false;

@@ -6,10 +6,12 @@ pub enum Action {
     Quit,
     SwitchPanel,
     FocusSearch,
+    ToggleSearchMode,
     SubmitSearch,
-    ToggleSearchInput,
     ScrollUp,
     ScrollDown,
+    PageUp,
+    PageDown,
     SelectPrevProject,
     SelectNextProject,
     StopDaemon,
@@ -52,7 +54,8 @@ pub fn map_key(key: &event::KeyEvent, app: &App) -> Action {
 
 fn map_setup_key(key: &event::KeyEvent, phase: &SetupPhase) -> Action {
     match phase {
-        SetupPhase::ModelSelection { .. } => match key.code {
+        SetupPhase::ModelSelection { .. } | SetupPhase::DTypeSelection { .. } => match key.code
+        {
             KeyCode::Char('j') | KeyCode::Down => Action::SetupNext,
             KeyCode::Char('k') | KeyCode::Up => Action::SetupPrev,
             KeyCode::Enter => Action::SetupConfirm,
@@ -82,15 +85,25 @@ fn map_setup_key(key: &event::KeyEvent, phase: &SetupPhase) -> Action {
 fn map_main_key(key: &event::KeyEvent, app: &App) -> Action {
     match key.code {
         KeyCode::Char('q') if !in_search(app) => Action::Quit,
-        KeyCode::Tab if in_search(app) => Action::ToggleSearchInput,
         KeyCode::Tab => Action::SwitchPanel,
         KeyCode::Char('/') if !in_search(app) => Action::FocusSearch,
+        KeyCode::Char('/') if in_search(app) && app.search_input.text.is_empty() => {
+            Action::ToggleSearchMode
+        }
         KeyCode::Enter if in_projects(app) => Action::OpenProjectDetail,
         KeyCode::Enter => Action::SubmitSearch,
-        KeyCode::Char('j') | KeyCode::Down if in_projects(app) => Action::SelectNextProject,
-        KeyCode::Char('k') | KeyCode::Up if in_projects(app) => Action::SelectPrevProject,
-        KeyCode::Char('j') | KeyCode::Down if !in_search(app) => Action::ScrollDown,
-        KeyCode::Char('k') | KeyCode::Up if !in_search(app) => Action::ScrollUp,
+        KeyCode::Down if !in_search(app) => Action::SelectNextProject,
+        KeyCode::Up if !in_search(app) => Action::SelectPrevProject,
+        KeyCode::Char('j') if in_search(app) && app.search_input.text.is_empty() => {
+            Action::ScrollDown
+        }
+        KeyCode::Char('k') if in_search(app) && app.search_input.text.is_empty() => {
+            Action::ScrollUp
+        }
+        KeyCode::Char('j') if in_projects(app) => Action::SelectNextProject,
+        KeyCode::Char('k') if in_projects(app) => Action::SelectPrevProject,
+        KeyCode::PageDown => Action::PageDown,
+        KeyCode::PageUp => Action::PageUp,
         KeyCode::Char('s') if !in_search(app) => Action::StopDaemon,
         KeyCode::Char('r')
             if !in_search(app) && matches!(app.daemon_status, DaemonStatus::Stopped) =>
