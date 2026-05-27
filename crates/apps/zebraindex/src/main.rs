@@ -105,7 +105,11 @@ fn main() -> Result<()> {
             init_tracing("warn");
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(cli::run(
-                cmd, model, query_prefix, passage_prefix, model_dtype,
+                cmd,
+                model,
+                query_prefix,
+                passage_prefix,
+                model_dtype,
             ))
         }
     }

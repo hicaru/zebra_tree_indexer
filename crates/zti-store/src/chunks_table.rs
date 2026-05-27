@@ -1,3 +1,8 @@
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
+use std::fmt::Write as _;
+use std::sync::Arc;
+
 use anyhow::{Result, anyhow};
 use arrow::array::{
     Array, BinaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, ListArray,
@@ -12,8 +17,6 @@ use lancedb::index::vector::{
 };
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::Table;
-use std::fmt::Write as _;
-use std::sync::Arc;
 
 use crate::schema;
 
@@ -408,6 +411,104 @@ impl ChunksTable {
         Ok(hits)
     }
 
+    pub async fn knn_turbo<F>(
+        &self,
+        k: usize,
+        languages: Option<&[String]>,
+        path_glob: Option<&str>,
+        mut score_fn: F,
+    ) -> Result<Vec<ChunkHit>>
+    where
+        F: FnMut(&[u8]) -> Option<f32>,
+    {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut filter = String::from("turbo_code IS NOT NULL");
+        if let Some(lp) = build_lang_path_filter(languages, path_glob) {
+            filter.push_str(" AND ");
+            filter.push_str(&lp);
+        }
+
+        let results = self
+            .table
+            .query()
+            .select(lancedb::query::Select::columns(&["chunk_id", "turbo_code"]))
+            .only_if(filter)
+            .execute()
+            .await?;
+
+        let mut heap: BinaryHeap<Reverse<ScoredEntry>> = BinaryHeap::with_capacity(k + 1);
+        let mut stream = std::pin::pin!(results);
+        while let Some(batch) = stream.next().await {
+            let b = batch?;
+            let ids = b
+                .column_by_name("chunk_id")
+                .ok_or_else(|| anyhow!("missing column 'chunk_id'"))?
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .ok_or_else(|| anyhow!("chunk_id is not FixedSizeBinary"))?;
+            let codes = b
+                .column_by_name("turbo_code")
+                .ok_or_else(|| anyhow!("missing column 'turbo_code'"))?
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or_else(|| anyhow!("turbo_code is not Binary"))?;
+
+            for i in 0..b.num_rows() {
+                if codes.is_null(i) {
+                    continue;
+                }
+                let code_bytes = codes.value(i);
+                let Some(score) = score_fn(code_bytes) else {
+                    continue;
+                };
+                let raw = ids.value(i);
+                let chunk_id: &[u8; 16] = match raw.try_into() {
+                    Ok(id) => id,
+                    Err(_) => continue,
+                };
+                heap.push(Reverse(ScoredEntry {
+                    score,
+                    chunk_id: *chunk_id,
+                }));
+                if heap.len() > k {
+                    heap.pop();
+                }
+            }
+        }
+
+        if heap.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut scores: Vec<(f32, [u8; 16])> = Vec::with_capacity(heap.len());
+        while let Some(Reverse(entry)) = heap.pop() {
+            scores.push((entry.score, entry.chunk_id));
+        }
+        scores.reverse();
+
+        let top_ids: Vec<[u8; 16]> = scores.iter().map(|(_, id)| *id).collect();
+        let score_by_id: HashMap<[u8; 16], f32> = scores.iter().map(|(s, id)| (*id, *s)).collect();
+
+        let mut hits = self
+            .fetch_by_chunk_ids(&top_ids, languages, path_glob)
+            .await?;
+        for hit in &mut hits {
+            if let Some(s) = score_by_id.get(&hit.chunk_id) {
+                hit.score = *s;
+            }
+        }
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(hits)
+    }
+
     pub async fn len(&self) -> Result<usize> {
         Ok(self.table.count_rows(None).await?)
     }
@@ -605,4 +706,30 @@ pub struct ChunkHit {
     pub content: String,
     pub turbo_code: Vec<u8>,
     pub score: f32,
+}
+
+#[derive(Copy, Clone)]
+struct ScoredEntry {
+    score: f32,
+    chunk_id: [u8; 16],
+}
+
+impl PartialEq for ScoredEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.score == other.score
+    }
+}
+
+impl Eq for ScoredEntry {}
+
+impl PartialOrd for ScoredEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ScoredEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+    }
 }

@@ -50,6 +50,11 @@ impl TurboReranker {
         Ok(code.to_compact_bytes())
     }
 
+    pub fn score(&self, code_bytes: &[u8], query: &[f32]) -> Option<f32> {
+        let code = TurboCode::from_compact_bytes(code_bytes).ok()?;
+        self.quantizer.inner_product_estimate(&code, query).ok()
+    }
+
     pub fn rerank(&self, candidates: &[(&[u8], f32)], query: &[f32]) -> Vec<(usize, f32)> {
         if candidates.is_empty() {
             return Vec::new();

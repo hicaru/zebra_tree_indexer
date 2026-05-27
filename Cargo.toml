@@ -59,7 +59,7 @@ candle-transformers = { version = "0.10.2", default-features = false }
 tokenizers  = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 hf-hub      = { version = "1.0.0-rc.1", default-features = false, features = ["blocking","rustls-tls"] }
 
-bitpolar = { version = "0.3", features = ["parallel","serde-support"] }
+bitpolar = { version = "0.3", features = ["parallel", "simd", "serde-support"] }
 
 usearch = "2"
 

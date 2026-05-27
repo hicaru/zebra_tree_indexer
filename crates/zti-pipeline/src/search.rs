@@ -149,7 +149,9 @@ pub async fn search(
     let mut candidates: Vec<ChunkHit> = match params.method {
         SearchMethod::TurboQuant => {
             chunks_table
-                .knn_exhaustive(query_emb, raw_k, opts.languages, opts.path_glob)
+                .knn_turbo(raw_k, opts.languages, opts.path_glob, |code| {
+                    reranker.score(code, query_emb)
+                })
                 .await?
         }
         SearchMethod::Usearch => {
