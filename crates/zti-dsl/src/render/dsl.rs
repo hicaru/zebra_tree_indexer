@@ -64,6 +64,9 @@ pub(crate) fn lang_label(lang: Language) -> &'static str {
         Language::Tsx => "TypeScript",
         Language::Dart => "Dart",
         Language::Solidity => "Solidity",
+        Language::Python => "Python",
+        Language::JavaScript => "JavaScript",
+        Language::Go => "Go",
     }
 }
 
@@ -173,6 +176,17 @@ static TS_PREFIXES: &[&str] = &[
     "var ",
 ];
 
+static GO_PREFIXES: &[&str] = &[
+    "func ",
+    "type ",
+];
+
+static PYTHON_PREFIXES: &[&str] = &[
+    "async ",
+    "def ",
+    "class ",
+];
+
 // Deliberately omits return types ("void ", "String ", "Future<…> ", …):
 // stripping them destroys reader-useful info, and enumerating every generic
 // container is hopeless.
@@ -238,6 +252,9 @@ fn format_signature(sig: &str, lang: Language) -> &str {
         Language::Ts | Language::Tsx => TS_PREFIXES,
         Language::Dart => DART_PREFIXES,
         Language::Solidity => SOLIDITY_PREFIXES,
+        Language::Python => PYTHON_PREFIXES,
+        Language::JavaScript => TS_PREFIXES,
+        Language::Go => GO_PREFIXES,
     };
     strip_prefixes_loop(trimmed, prefixes).trim_end_matches(SIG_TAIL_TRIM)
 }

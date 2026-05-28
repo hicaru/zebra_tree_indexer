@@ -16,7 +16,7 @@ pub(crate) static DEFAULT_LANG_CONFIG: LazyLock<SynLangConfig> = LazyLock::new(|
         r"\s+",
     ]
     .into_iter()
-    .map(|s| Regex::new(s).unwrap())
+    .filter_map(|s| Regex::new(s).ok())
     .collect(),
 });
 

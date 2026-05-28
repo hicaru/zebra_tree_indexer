@@ -1,7 +1,7 @@
 use std::collections::BinaryHeap;
 
 use crate::atom::{AtomChunk, AtomCollector, DEFAULT_LANG_CONFIG, SynLangConfig, LineBreakLevel};
-use crate::positions::{BytePos, compute_positions};
+use crate::positions::{BytePos, OutputPos, compute_positions};
 use crate::SubChunk;
 
 const SYNTAX_GAP: usize = 512;
@@ -180,7 +180,10 @@ fn merge_atoms(atoms: Vec<AtomChunk>, chunk_size: usize, chunk_overlap: usize, m
                     heap.pop();
                 }
                 heap.push((std::cmp::Reverse(plans[si].cost + plans[si].overlap_base), si));
-                heap.peek().unwrap().1
+                match heap.peek() {
+                    Some(&(_, idx)) => idx,
+                    None => si,
+                }
             } else {
                 si
             };
@@ -240,6 +243,33 @@ fn overlap_cost_base(text_len: usize, offset: usize, overlap: usize) -> usize {
     text_len.saturating_sub(offset).saturating_mul(MISSING_OVERLAP).checked_div(overlap).unwrap_or(0)
 }
 
+fn finish_chunks(
+    source: &str,
+    collector: AtomCollector,
+    chunk_size: usize,
+    chunk_overlap: usize,
+    min_chunk: usize,
+) -> Vec<SubChunk> {
+    let atoms = collector.seal();
+    let mut raw = merge_atoms(atoms, chunk_size, chunk_overlap, min_chunk, source);
+
+    let all_pos: Vec<&mut BytePos> = raw.iter_mut().flat_map(|(s, e)| {
+        [s as &mut BytePos, e as &mut BytePos]
+    }).collect();
+    compute_positions(source, all_pos);
+
+    raw.into_iter().map(|(sp, ep)| {
+        let s = match sp.output { Some(o) => o, None => OutputPos { line: 1 } };
+        let e = match ep.output { Some(o) => o, None => OutputPos { line: 1 } };
+        SubChunk {
+            byte_start: sp.byte_offset,
+            byte_end: ep.byte_offset,
+            start_line: s.line,
+            end_line: e.line,
+        }
+    }).collect()
+}
+
 pub(crate) fn chunk_text_with_ts(
     source: &str,
     chunk_size: usize,
@@ -258,24 +288,7 @@ pub(crate) fn chunk_text_with_ts(
     };
 
     collect_atoms_ts(source, root, min_atom, 0, &mut collector, terminal_kinds);
-    let atoms = collector.seal();
-    let mut raw = merge_atoms(atoms, chunk_size, chunk_overlap, min_chunk, source);
-
-    let all_pos: Vec<&mut BytePos> = raw.iter_mut().flat_map(|(s, e)| {
-        std::iter::once(&mut *s).chain(std::iter::once(&mut *e))
-    }).collect();
-    compute_positions(source, all_pos);
-
-    raw.into_iter().map(|(sp, ep)| {
-        let s = sp.output.unwrap();
-        let e = ep.output.unwrap();
-        SubChunk {
-            byte_start: sp.byte_offset,
-            byte_end: ep.byte_offset,
-            start_line: s.line,
-            end_line: e.line,
-        }
-    }).collect()
+    finish_chunks(source, collector, chunk_size, chunk_overlap, min_chunk)
 }
 
 pub(crate) fn chunk_text(
@@ -294,24 +307,7 @@ pub(crate) fn chunk_text(
     };
 
     collect_atoms(source, 0, source.len(), 0, min_atom, &mut collector);
-    let atoms = collector.seal();
-    let mut raw = merge_atoms(atoms, chunk_size, chunk_overlap, min_chunk, source);
-
-    let all_pos: Vec<&mut BytePos> = raw.iter_mut().flat_map(|(s, e)| {
-        std::iter::once(&mut *s).chain(std::iter::once(&mut *e))
-    }).collect();
-    compute_positions(source, all_pos);
-
-    raw.into_iter().map(|(sp, ep)| {
-        let s = sp.output.unwrap();
-        let e = ep.output.unwrap();
-        SubChunk {
-            byte_start: sp.byte_offset,
-            byte_end: ep.byte_offset,
-            start_line: s.line,
-            end_line: e.line,
-        }
-    }).collect()
+    finish_chunks(source, collector, chunk_size, chunk_overlap, min_chunk)
 }
 
 #[cfg(test)]

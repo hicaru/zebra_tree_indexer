@@ -1,8 +1,5 @@
-#[allow(dead_code)]
 pub(crate) struct OutputPos {
-    pub char_offset: usize,
     pub line: u32,
-    pub column: u32,
 }
 
 pub(crate) struct BytePos {
@@ -27,29 +24,23 @@ pub(crate) fn compute_positions(
         return;
     };
 
-    let mut char_off = 0usize;
     let mut line = 1u32;
-    let mut col = 1u32;
 
-    for (byte_off, ch) in text.char_indices() {
+    for (byte_off, _) in text.char_indices() {
         while next.byte_offset == byte_off {
-            next.output = Some(OutputPos { char_offset: char_off, line, column: col });
+            next.output = Some(OutputPos { line });
             match iter.next() {
                 Some(p) => next = p,
                 None => return,
             }
         }
-        char_off += 1;
-        if ch == '\n' {
+        if text.as_bytes()[byte_off] == b'\n' {
             line += 1;
-            col = 1;
-        } else {
-            col += 1;
         }
     }
 
     loop {
-        next.output = Some(OutputPos { char_offset: char_off, line, column: col });
+        next.output = Some(OutputPos { line });
         match iter.next() {
             Some(p) => next = p,
             None => return,

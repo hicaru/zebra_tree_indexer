@@ -9,6 +9,9 @@ members = [
   "crates/zti-ts-typescript",
   "crates/zti-ts-dart",
   "crates/zti-ts-solidity",
+  "crates/zti-ts-python",
+  "crates/zti-ts-javascript",
+  "crates/zti-ts-go",
   "crates/zti-tree-sitter",
   "crates/zti-dsl",
   "crates/zti-embed",
@@ -91,6 +94,9 @@ zti-ts-rust      = { path = "crates/zti-ts-rust" }
 zti-ts-typescript = { path = "crates/zti-ts-typescript" }
 zti-ts-dart      = { path = "crates/zti-ts-dart" }
 zti-ts-solidity  = { path = "crates/zti-ts-solidity" }
+zti-ts-python    = { path = "crates/zti-ts-python" }
+zti-ts-javascript = { path = "crates/zti-ts-javascript" }
+zti-ts-go        = { path = "crates/zti-ts-go" }
 zti-tree-sitter  = { path = "crates/zti-tree-sitter" }
 zti-dsl          = { path = "crates/zti-dsl" }
 zti-embed        = { path = "crates/zti-embed" }

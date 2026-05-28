@@ -9,6 +9,9 @@ pub fn parse_language(s: &str) -> Option<Language> {
         "tsx" => Some(Language::Tsx),
         "dart" => Some(Language::Dart),
         "sol" | "solidity" => Some(Language::Solidity),
+        "py" | "python" => Some(Language::Python),
+        "js" | "javascript" => Some(Language::JavaScript),
+        "go" => Some(Language::Go),
         _ => None,
     }
 }
@@ -37,13 +40,16 @@ mod tests {
         assert_eq!(parse_language("dart").unwrap(), Language::Dart);
         assert_eq!(parse_language("sol").unwrap(), Language::Solidity);
         assert_eq!(parse_language("solidity").unwrap(), Language::Solidity);
+        assert_eq!(parse_language("py").unwrap(), Language::Python);
+        assert_eq!(parse_language("python").unwrap(), Language::Python);
+        assert_eq!(parse_language("js").unwrap(), Language::JavaScript);
+        assert_eq!(parse_language("javascript").unwrap(), Language::JavaScript);
+        assert_eq!(parse_language("go").unwrap(), Language::Go);
     }
 
     #[test]
     fn parse_language_rejects_unknown() {
-        assert!(parse_language("js").is_none());
-        assert!(parse_language("go").is_none());
-        assert!(parse_language("py").is_none());
+
     }
 
     #[test]

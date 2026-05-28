@@ -5,6 +5,9 @@ use zti_ts_core::config::LangConfig;
 use zti_ts_core::types::ParseResult;
 use zti_ts_core::walker::LanguageFrontend;
 use zti_ts_dart::DartFrontend;
+use zti_ts_go::GoFrontend;
+use zti_ts_javascript::JavaScriptFrontend;
+use zti_ts_python::PythonFrontend;
 use zti_ts_rust::RustFrontend;
 use zti_ts_solidity::SolidityFrontend;
 use zti_ts_typescript::TypeScriptFrontend;
@@ -16,6 +19,9 @@ pub enum Language {
     Tsx,
     Dart,
     Solidity,
+    Python,
+    JavaScript,
+    Go,
 }
 
 impl Language {
@@ -26,6 +32,9 @@ impl Language {
             Language::Tsx => "tsx",
             Language::Dart => "dart",
             Language::Solidity => "solidity",
+            Language::Python => "python",
+            Language::JavaScript => "javascript",
+            Language::Go => "go",
         }
     }
 }
@@ -35,6 +44,9 @@ pub enum Frontend {
     Ts(TypeScriptFrontend),
     Dart(DartFrontend),
     Solidity(SolidityFrontend),
+    Python(PythonFrontend),
+    JavaScript(JavaScriptFrontend),
+    Go(GoFrontend),
 }
 
 impl LanguageFrontend for Frontend {
@@ -44,6 +56,9 @@ impl LanguageFrontend for Frontend {
             Frontend::Ts(f) => f.language(),
             Frontend::Dart(f) => f.language(),
             Frontend::Solidity(f) => f.language(),
+            Frontend::Python(f) => f.language(),
+            Frontend::JavaScript(f) => f.language(),
+            Frontend::Go(f) => f.language(),
         }
     }
 
@@ -53,6 +68,9 @@ impl LanguageFrontend for Frontend {
             Frontend::Ts(f) => f.config(),
             Frontend::Dart(f) => f.config(),
             Frontend::Solidity(f) => f.config(),
+            Frontend::Python(f) => f.config(),
+            Frontend::JavaScript(f) => f.config(),
+            Frontend::Go(f) => f.config(),
         }
     }
 
@@ -62,6 +80,9 @@ impl LanguageFrontend for Frontend {
             Frontend::Ts(f) => f.extract_imports(root, source),
             Frontend::Dart(f) => f.extract_imports(root, source),
             Frontend::Solidity(f) => f.extract_imports(root, source),
+            Frontend::Python(f) => f.extract_imports(root, source),
+            Frontend::JavaScript(f) => f.extract_imports(root, source),
+            Frontend::Go(f) => f.extract_imports(root, source),
         }
     }
 
@@ -71,6 +92,9 @@ impl LanguageFrontend for Frontend {
             Frontend::Ts(f) => f.parse(source, file_idx, id_start),
             Frontend::Dart(f) => f.parse(source, file_idx, id_start),
             Frontend::Solidity(f) => f.parse(source, file_idx, id_start),
+            Frontend::Python(f) => f.parse(source, file_idx, id_start),
+            Frontend::JavaScript(f) => f.parse(source, file_idx, id_start),
+            Frontend::Go(f) => f.parse(source, file_idx, id_start),
         }
     }
 }
@@ -81,5 +105,8 @@ pub fn frontend_for(lang: Language) -> Frontend {
         Language::Ts | Language::Tsx => Frontend::Ts(TypeScriptFrontend),
         Language::Dart => Frontend::Dart(DartFrontend),
         Language::Solidity => Frontend::Solidity(SolidityFrontend),
+        Language::Python => Frontend::Python(PythonFrontend),
+        Language::JavaScript => Frontend::JavaScript(JavaScriptFrontend),
+        Language::Go => Frontend::Go(GoFrontend),
     }
 }

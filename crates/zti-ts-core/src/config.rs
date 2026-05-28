@@ -487,6 +487,139 @@ pub static DART_CONFIG: LangConfig = LangConfig {
     ],
 };
 
+pub static GO_CONFIG: LangConfig = LangConfig {
+    scope_nodes: &[
+        "function_declaration",
+        "method_declaration",
+        "type_declaration",
+    ],
+    name_fields: &[
+        NameField {
+            node_kind: "function_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "method_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "type_spec",
+            field: "name",
+        },
+    ],
+    kind_map: &[
+        ("function_declaration", Kind::Function),
+        ("method_declaration", Kind::Method),
+        ("type_spec", Kind::TypeAlias),
+    ],
+    container_kinds: &[Kind::Struct, Kind::Interface],
+    call_nodes: &["call_expression"],
+    call_field: "function",
+    ref_node: "identifier",
+    ref_field: "",
+    import_node: "import_declaration",
+    extra_skip_dirs: &["vendor"],
+    transparent_scope_kinds: &[],
+    extract_docs: true,
+    instance_field_kinds: &[],
+    no_retag_kinds: &[],
+    impl_node: None,
+    symbol_name_skip: &[],
+    symbol_name_skip_prefix: &[],
+    terminal_node_kinds: &["comment", "interpreted_string_literal", "raw_string_literal"],
+};
+
+pub static JAVASCRIPT_CONFIG: LangConfig = LangConfig {
+    scope_nodes: &[
+        "function_declaration",
+        "class_declaration",
+        "method_definition",
+    ],
+    name_fields: &[
+        NameField {
+            node_kind: "function_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "class_declaration",
+            field: "name",
+        },
+        NameField {
+            node_kind: "method_definition",
+            field: "name",
+        },
+        NameField {
+            node_kind: "variable_declarator",
+            field: "name",
+        },
+    ],
+    kind_map: &[
+        ("function_declaration", Kind::Function),
+        ("class_declaration", Kind::Class),
+        ("method_definition", Kind::Method),
+        ("variable_declarator", Kind::Const),
+    ],
+    container_kinds: &[Kind::Class],
+    call_nodes: &["call_expression"],
+    call_field: "function",
+    ref_node: "identifier",
+    ref_field: "",
+    import_node: "import_statement",
+    extra_skip_dirs: &["node_modules"],
+    transparent_scope_kinds: &[],
+    extract_docs: true,
+    instance_field_kinds: &[],
+    no_retag_kinds: &[],
+    impl_node: None,
+    symbol_name_skip: &[],
+    symbol_name_skip_prefix: &[],
+    terminal_node_kinds: &["comment", "string", "template_string"],
+};
+
+pub static PYTHON_CONFIG: LangConfig = LangConfig {
+    scope_nodes: &["function_definition", "class_definition"],
+    name_fields: &[
+        NameField {
+            node_kind: "function_definition",
+            field: "name",
+        },
+        NameField {
+            node_kind: "class_definition",
+            field: "name",
+        },
+        NameField {
+            node_kind: "assignment",
+            field: "left",
+        },
+    ],
+    kind_map: &[
+        ("function_definition", Kind::Function),
+        ("class_definition", Kind::Class),
+        ("assignment", Kind::Const),
+    ],
+    container_kinds: &[Kind::Class],
+    call_nodes: &["call_expression"],
+    call_field: "function",
+    ref_node: "identifier",
+    ref_field: "",
+    import_node: "import_statement",
+    extra_skip_dirs: &[
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        "venv",
+        ".venv",
+    ],
+    transparent_scope_kinds: &[],
+    extract_docs: false,
+    instance_field_kinds: &[],
+    no_retag_kinds: &[],
+    impl_node: None,
+    symbol_name_skip: &[],
+    symbol_name_skip_prefix: &[],
+    terminal_node_kinds: &["comment", "string"],
+};
+
 pub static SOLIDITY_CONFIG: LangConfig = LangConfig {
     scope_nodes: &[
         "contract_declaration",

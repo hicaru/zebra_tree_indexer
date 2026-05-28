@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -165,6 +165,7 @@ pub async fn index_project(
     );
 
     let chunker = DslChunker::new(&dsl_index);
+    let mut terminal_cache: HashMap<Language, Vec<u16>> = HashMap::with_capacity(4);
 
     let mut all_pending: Vec<(zti_dsl::chunking::Chunk, &'static str)> =
         Vec::with_capacity(need_reindex.len());
@@ -182,15 +183,18 @@ pub async fn index_project(
                     if should_recursive_split(&c.body, engine) {
                         let frontend = frontend_for(lang);
                         let ts_lang = frontend.language();
-                        let terminal_names = frontend.config().terminal_node_kinds;
-                        let mut terminal_ids = Vec::with_capacity(terminal_names.len());
-                        for name in terminal_names {
-                            let id = ts_lang.id_for_node_kind(name, true);
-                            if id != 0 {
-                                terminal_ids.push(id);
+                        let terminal_ids = terminal_cache.entry(lang).or_insert_with(|| {
+                            let names = frontend.config().terminal_node_kinds;
+                            let mut ids = Vec::with_capacity(names.len());
+                            for name in names {
+                                let id = ts_lang.id_for_node_kind(name, true);
+                                if id != 0 {
+                                    ids.push(id);
+                                }
                             }
-                        }
-                        generate_sub_chunks(&c, engine, Some(ts_lang), lang.as_str(), &mut all_pending, &terminal_ids);
+                            ids
+                        });
+                        generate_sub_chunks(&c, engine, Some(ts_lang), lang.as_str(), &mut all_pending, terminal_ids);
                     } else {
                         all_pending.push((c, lang.as_str()));
                     }

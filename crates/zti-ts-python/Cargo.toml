@@ -1,5 +1,5 @@
 [package]
-name = "zti-tree-sitter"
+name = "zti-ts-python"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,15 +9,8 @@ license.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tree-sitter.workspace = true
+tree-sitter-python = "0.25"
 zti-ts-core.workspace = true
-zti-ts-rust.workspace = true
-zti-ts-typescript.workspace = true
-zti-ts-dart.workspace = true
-zti-ts-solidity.workspace = true
-zti-ts-python.workspace = true
-zti-ts-javascript.workspace = true
-zti-ts-go.workspace = true
-globset.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true

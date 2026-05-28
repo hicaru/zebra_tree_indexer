@@ -10,6 +10,9 @@ pub fn detect_from_path(path: &Path) -> Option<Language> {
         "tsx" => Some(Language::Tsx),
         "dart" => Some(Language::Dart),
         "sol" => Some(Language::Solidity),
+        "py" => Some(Language::Python),
+        "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
+        "go" => Some(Language::Go),
         _ => None,
     }
 }
