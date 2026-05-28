@@ -656,3 +656,78 @@ async fn upsert_project(
     projects_table.upsert(record).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests_indexing {
+    use zti_dsl::chunking::{Chunk, ChunkStrategy};
+    use zti_ts_core::types::Kind;
+
+    #[test]
+    fn test_generate_sub_chunks_metadata() {
+        let parent = Chunk {
+            file: "/src/main.rs".into(),
+            rel_file: "src/main.rs".into(),
+            start_line: 10,
+            end_line: 20,
+            sym_id: 42,
+            sub_chunk_idx: 0,
+            total_sub_chunks: 1,
+            chunk_strategy: ChunkStrategy::Symbol,
+            body: "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7".into(),
+            qualified: "foo::bar".into(),
+            kind: Kind::Function,
+        };
+
+        let mock_sub_chunks = [
+            zti_recursive_chunk::SubChunk {
+                byte_start: 0,
+                byte_end: 20,
+                start_line: 1,
+                end_line: 3,
+            },
+            zti_recursive_chunk::SubChunk {
+                byte_start: 20,
+                byte_end: 48,
+                start_line: 3,
+                end_line: 7,
+            },
+        ];
+
+        let mut out = Vec::new();
+        let total = mock_sub_chunks.len() as u32;
+        for (i, sub) in mock_sub_chunks.iter().enumerate() {
+            let sc = Chunk {
+                file: parent.file.clone(),
+                rel_file: parent.rel_file.clone(),
+                start_line: parent.start_line + sub.start_line - 1,
+                end_line: parent.start_line + sub.end_line - 1,
+                sym_id: parent.sym_id,
+                sub_chunk_idx: i as u32,
+                total_sub_chunks: total,
+                chunk_strategy: ChunkStrategy::Recursive,
+                body: parent.body[sub.byte_start..sub.byte_end].to_string(),
+                qualified: parent.qualified.clone(),
+                kind: parent.kind,
+            };
+            out.push((sc, "rust"));
+        }
+
+        assert_eq!(out.len(), 2);
+
+        let s0 = &out[0].0;
+        assert_eq!(s0.sub_chunk_idx, 0);
+        assert_eq!(s0.total_sub_chunks, 2);
+        assert_eq!(s0.chunk_strategy, ChunkStrategy::Recursive);
+        assert_eq!(s0.start_line, 10);
+        assert_eq!(s0.end_line, 12);
+        assert_eq!(s0.body, parent.body[..20]);
+
+        let s1 = &out[1].0;
+        assert_eq!(s1.sub_chunk_idx, 1);
+        assert_eq!(s1.total_sub_chunks, 2);
+        assert_eq!(s1.chunk_strategy, ChunkStrategy::Recursive);
+        assert_eq!(s1.start_line, 12);
+        assert_eq!(s1.end_line, 16);
+        assert_eq!(s1.body, parent.body[20..48]);
+    }
+}

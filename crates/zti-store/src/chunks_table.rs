@@ -642,6 +642,8 @@ fn word_is_sql_safe(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::UInt8Array;
+    use arrow::datatypes::{DataType, Field, Schema};
 
     #[test]
     fn glob_to_like_translates_wildcards() {
@@ -672,6 +674,46 @@ mod tests {
         assert!(!word_is_sql_safe("with_underscore"));
         assert!(!word_is_sql_safe("with%percent"));
         assert!(!word_is_sql_safe(""));
+    }
+
+    #[test]
+    fn test_decode_batch_recursive_fields() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sym_id", DataType::UInt32, false),
+            Field::new("sub_chunk_idx", DataType::UInt32, false),
+            Field::new("total_sub_chunks", DataType::UInt32, false),
+            Field::new("chunk_strategy", DataType::UInt8, false),
+        ]));
+
+        let sym_ids = Arc::new(UInt32Array::from(vec![100u32, 101, 102]));
+        let sub_chunk_idxs = Arc::new(UInt32Array::from(vec![0u32, 0, 1]));
+        let total_sub_chunks_arr = Arc::new(UInt32Array::from(vec![1u32, 2, 2]));
+        let chunk_strategies = Arc::new(UInt8Array::from(vec![0u8, 1, 255]));
+
+        let batch = RecordBatch::try_new(schema, vec![
+            sym_ids, sub_chunk_idxs, total_sub_chunks_arr, chunk_strategies,
+        ])
+        .unwrap();
+
+        let mut hits = Vec::new();
+        decode_batch(&batch, false, &mut hits);
+
+        assert_eq!(hits.len(), 3);
+
+        assert_eq!(hits[0].sym_id, 100);
+        assert_eq!(hits[0].sub_chunk_idx, 0);
+        assert_eq!(hits[0].total_sub_chunks, 1);
+        assert_eq!(hits[0].chunk_strategy, ChunkStrategy::Symbol);
+
+        assert_eq!(hits[1].sym_id, 101);
+        assert_eq!(hits[1].sub_chunk_idx, 0);
+        assert_eq!(hits[1].total_sub_chunks, 2);
+        assert_eq!(hits[1].chunk_strategy, ChunkStrategy::Recursive);
+
+        assert_eq!(hits[2].sym_id, 102);
+        assert_eq!(hits[2].sub_chunk_idx, 1);
+        assert_eq!(hits[2].total_sub_chunks, 2);
+        assert_eq!(hits[2].chunk_strategy, ChunkStrategy::Symbol);
     }
 }
 
