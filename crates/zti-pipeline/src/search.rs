@@ -11,6 +11,9 @@ use zti_rerank::TurboReranker;
 use zti_rerank::gpu::{BATCH_SIZE, GpuTurboScorer, TurboCodeBatch, parse_turbo_code_into};
 use zti_store::chunks_table::{ChunkHit, ChunksTable};
 
+#[cfg(test)]
+use zti_common::chunk_strategy::ChunkStrategy;
+
 const KNN_OVERFETCH_MULT: usize = 12;
 const DIVERSITY_PENALTY: f32 = 0.04;
 const KEYWORD_NAME_BOOST: f32 = 0.5;
@@ -379,6 +382,9 @@ mod tests {
             symbol_qualified: qualified.into(),
             symbol_kind: "method".into(),
             sym_id: 0,
+            sub_chunk_idx: 0,
+            total_sub_chunks: 1,
+            chunk_strategy: ChunkStrategy::Symbol,
             parent_sym_id: None,
             appendix_sym_ids: Vec::with_capacity(0),
             start_line: 1,
@@ -588,6 +594,9 @@ mod tq_tests {
             symbol_qualified: String::new(),
             symbol_kind: String::new(),
             sym_id: 0,
+            sub_chunk_idx: 0,
+            total_sub_chunks: 1,
+            chunk_strategy: ChunkStrategy::Symbol,
             parent_sym_id,
             appendix_sym_ids: Vec::with_capacity(0),
             start_line: 0,

@@ -1,3 +1,4 @@
+pub mod chunk_strategy;
 pub mod dsl;
 pub mod format;
 pub mod ids;

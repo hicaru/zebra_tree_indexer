@@ -9,6 +9,9 @@ pub fn chunks_schema(dim: usize) -> Schema {
         Field::new("symbol_qualified", DataType::Utf8, true),
         Field::new("symbol_kind", DataType::Utf8, true),
         Field::new("sym_id", DataType::UInt32, false),
+        Field::new("sub_chunk_idx", DataType::UInt32, false),
+        Field::new("total_sub_chunks", DataType::UInt32, false),
+        Field::new("chunk_strategy", DataType::UInt8, false),
         Field::new("parent_sym_id", DataType::UInt32, true),
         Field::new(
             "appendix_sym_ids",

@@ -6,22 +6,67 @@ use std::sync::Arc;
 use anyhow::Result;
 use arrow::array::{
     BinaryBuilder, FixedSizeBinaryBuilder, Float32Array, ListBuilder, RecordBatch, StringArray,
-    StringBuilder, UInt32Array, UInt32Builder, UInt64Array,
+    StringBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt8Array,
 };
 use tracing::info;
 
 use zti_common::ids::project_id;
+use zti_dsl::chunking::{Chunk, ChunkStrategy};
 use zti_dsl::{DslChunker, EdgeKind, SourceFile, Target, build_index_from_sources};
 use zti_embed::EmbedEngine;
+use zti_recursive_chunk;
 use zti_rerank::TurboReranker;
 use zti_store::Db;
-use zti_tree_sitter::Language;
+use zti_ts_core::walker::LanguageFrontend;
+use zti_tree_sitter::{Language, frontend_for};
 
 const APPENDIX_DEPTH: usize = 2;
 const APPENDIX_CAP_PER_CHUNK: usize = 32;
+const CHARS_PER_TOKEN: usize = 3;
 
 use crate::manifest::{FileSnapshot, SourceKind, detect_changes, walk_source_files};
 use crate::progress::ProgressReporter;
+
+fn should_recursive_split(body: &str, engine: &EmbedEngine) -> bool {
+    body.len() > engine.profile().max_length.saturating_mul(CHARS_PER_TOKEN)
+}
+
+#[inline]
+fn generate_sub_chunks(
+    chunk: &Chunk,
+    engine: &EmbedEngine,
+    lang: Option<tree_sitter::Language>,
+    kind_label: &'static str,
+    out: &mut Vec<(Chunk, &'static str)>,
+) {
+    let max_tokens = engine.profile().max_length;
+    let sub_chunks = zti_recursive_chunk::split_text(
+        &chunk.body,
+        &zti_recursive_chunk::ChunkConfig {
+            chunk_size: max_tokens * 4,
+            min_chunk_size: max_tokens * 2,
+            chunk_overlap: 0,
+        },
+        lang,
+    );
+    let total = sub_chunks.len() as u32;
+    for (i, sub) in sub_chunks.iter().enumerate() {
+        let sc = Chunk {
+            file: chunk.file.clone(),
+            rel_file: chunk.rel_file.clone(),
+            start_line: chunk.start_line + sub.start_line - 1,
+            end_line: chunk.start_line + sub.end_line - 1,
+            sym_id: chunk.sym_id,
+            sub_chunk_idx: i as u32,
+            total_sub_chunks: total,
+            chunk_strategy: ChunkStrategy::Recursive,
+            body: chunk.body[sub.byte_start..sub.byte_end].to_string(),
+            qualified: chunk.qualified.clone(),
+            kind: chunk.kind,
+        };
+        out.push((sc, kind_label));
+    }
+}
 
 pub struct IndexStats {
     pub total_chunks: usize,
@@ -129,7 +174,12 @@ pub async fn index_project(
                 let label = full_path.display().to_string();
                 let chunks = chunker.chunks_for_file(&label, &snap.contents);
                 for c in chunks {
-                    all_pending.push((c, lang.as_str()));
+                    if should_recursive_split(&c.body, engine) {
+                        let ts_lang = frontend_for(lang).language();
+                        generate_sub_chunks(&c, engine, Some(ts_lang), lang.as_str(), &mut all_pending);
+                    } else {
+                        all_pending.push((c, lang.as_str()));
+                    }
                 }
             }
             SourceKind::Text => {
@@ -139,7 +189,11 @@ pub async fn index_project(
                     full_path,
                     snap.contents.clone(),
                 );
-                all_pending.push((chunk, "text"));
+                if should_recursive_split(&chunk.body, engine) {
+                    generate_sub_chunks(&chunk, engine, None, "text", &mut all_pending);
+                } else {
+                    all_pending.push((chunk, "text"));
+                }
             }
         }
     }
@@ -282,6 +336,9 @@ pub async fn index_project(
                 let mut symbol_qualified_builder = StringBuilder::with_capacity(n, n * 64);
                 let mut symbol_kind_builder = StringBuilder::with_capacity(n, n * 16);
                 let mut sym_id_builder = UInt32Array::builder(n);
+                let mut sub_chunk_idx_builder = UInt32Array::builder(n);
+                let mut total_sub_chunks_builder = UInt32Array::builder(n);
+                let mut chunk_strategy_builder = UInt8Array::builder(n);
                 let mut parent_sym_id_builder = UInt32Array::builder(n);
                 let mut appendix_sym_ids_builder = ListBuilder::new(UInt32Builder::new());
                 let mut start_line_builder = UInt32Array::builder(n);
@@ -311,6 +368,7 @@ pub async fn index_project(
                     hasher.update(&chunk.start_line.to_le_bytes());
                     hasher.update(&chunk.end_line.to_le_bytes());
                     hasher.update(chunk.qualified.as_bytes());
+                    hasher.update(&chunk.sub_chunk_idx.to_le_bytes());
                     let hash = hasher.finalize();
                     let mut chunk_id = [0u8; 16];
                     chunk_id.copy_from_slice(&hash.as_bytes()[..16]);
@@ -343,6 +401,9 @@ pub async fn index_project(
                     symbol_qualified_builder.append_value(&chunk.qualified);
                     symbol_kind_builder.append_value(chunk.kind.as_str());
                     sym_id_builder.append_value(chunk.sym_id);
+                    sub_chunk_idx_builder.append_value(chunk.sub_chunk_idx);
+                    total_sub_chunks_builder.append_value(chunk.total_sub_chunks);
+                    chunk_strategy_builder.append_value(chunk.chunk_strategy as u8);
                     match parent_sym_id {
                         Some(p) => parent_sym_id_builder.append_value(p),
                         None => parent_sym_id_builder.append_null(),
@@ -401,6 +462,9 @@ pub async fn index_project(
                             std::sync::Arc::new(symbol_qualified_builder.finish()),
                             std::sync::Arc::new(symbol_kind_builder.finish()),
                             std::sync::Arc::new(sym_id_builder.finish()),
+                            std::sync::Arc::new(sub_chunk_idx_builder.finish()),
+                            std::sync::Arc::new(total_sub_chunks_builder.finish()),
+                            std::sync::Arc::new(chunk_strategy_builder.finish()),
                             std::sync::Arc::new(parent_sym_id_builder.finish()),
                             std::sync::Arc::new(appendix_sym_ids_builder.finish()),
                             std::sync::Arc::new(start_line_builder.finish()),

@@ -16,6 +16,8 @@ use lancedb::index::vector::{
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::Table;
 
+use zti_common::chunk_strategy::ChunkStrategy;
+
 use crate::schema;
 
 pub struct ChunksTable {
@@ -28,29 +30,31 @@ impl ChunksTable {
         let name = "chunks";
         let table = if db.table_names().execute().await?.iter().any(|n| n == name) {
             let existing = db.open_table(name).execute().await?;
-            let existing_dim = existing
-                .schema()
-                .await?
-                .field_with_name("embedding")
-                .ok()
-                .and_then(|f| match f.data_type() {
-                    DataType::FixedSizeList(_, n) => Some(*n as usize),
-                    _ => None,
-                })
-                .unwrap_or(0);
+        let existing_schema = existing.schema().await?;
+        let existing_dim = existing_schema
+            .field_with_name("embedding")
+            .ok()
+            .and_then(|f| match f.data_type() {
+                DataType::FixedSizeList(_, n) => Some(*n as usize),
+                _ => None,
+            })
+            .unwrap_or(0);
 
-            if existing_dim != dim {
-                tracing::warn!(
-                    "embedding dim changed ({} → {}), recreating chunks table",
-                    existing_dim,
-                    dim
-                );
-                db.drop_table(name, &[]).await?;
-                let schema = Arc::new(schema::chunks_schema(dim));
-                db.create_empty_table(name, schema).execute().await?
-            } else {
-                existing
-            }
+        let has_new_cols = existing_schema.field_with_name("sub_chunk_idx").is_ok();
+
+        if existing_dim != dim || !has_new_cols {
+            tracing::warn!(
+                "schema changed (dim={}, has_new_cols={}), recreating chunks table",
+                existing_dim,
+                has_new_cols,
+            );
+            db.drop_table("files", &[]).await.ok();
+            db.drop_table(name, &[]).await?;
+            let schema = Arc::new(schema::chunks_schema(dim));
+            db.create_empty_table(name, schema).execute().await?
+        } else {
+            existing
+        }
         } else {
             let schema = Arc::new(schema::chunks_schema(dim));
             db.create_empty_table(name, schema).execute().await?
@@ -526,6 +530,15 @@ fn decode_batch(batch: &RecordBatch, has_distance: bool, out: &mut Vec<ChunkHit>
     let sym_ids = batch
         .column_by_name("sym_id")
         .and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
+    let sub_chunk_idxs = batch
+        .column_by_name("sub_chunk_idx")
+        .and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
+    let total_sub_chunks_arr = batch
+        .column_by_name("total_sub_chunks")
+        .and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
+    let chunk_strategies = batch
+        .column_by_name("chunk_strategy")
+        .and_then(|c| c.as_any().downcast_ref::<arrow::array::UInt8Array>());
     let parent_sym_ids = batch
         .column_by_name("parent_sym_id")
         .and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
@@ -583,6 +596,11 @@ fn decode_batch(batch: &RecordBatch, has_distance: bool, out: &mut Vec<ChunkHit>
                 .map(|a| a.value(i).to_string())
                 .unwrap_or_default(),
             sym_id: sym_ids.map(|a| a.value(i)).unwrap_or(0),
+            sub_chunk_idx: sub_chunk_idxs.map(|a| a.value(i)).unwrap_or(0),
+            total_sub_chunks: total_sub_chunks_arr.map(|a| a.value(i)).unwrap_or(1),
+            chunk_strategy: chunk_strategies
+                .map(|a| ChunkStrategy::from(a.value(i)))
+                .unwrap_or(ChunkStrategy::Symbol),
             parent_sym_id,
             appendix_sym_ids: appendix,
             start_line: start_lines.map(|a| a.value(i)).unwrap_or(0),
@@ -664,6 +682,9 @@ pub struct ChunkHit {
     pub symbol_qualified: String,
     pub symbol_kind: String,
     pub sym_id: u32,
+    pub sub_chunk_idx: u32,
+    pub total_sub_chunks: u32,
+    pub chunk_strategy: ChunkStrategy,
     pub parent_sym_id: Option<u32>,
     pub appendix_sym_ids: Vec<u32>,
     pub start_line: u32,

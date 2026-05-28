@@ -3,6 +3,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+pub use zti_common::chunk_strategy::ChunkStrategy;
 use zti_common::line_byte_range;
 use zti_ts_core::types::Kind;
 
@@ -32,6 +33,9 @@ pub struct Chunk {
     pub start_line: u32,
     pub end_line: u32,
     pub sym_id: u32,
+    pub sub_chunk_idx: u32,
+    pub total_sub_chunks: u32,
+    pub chunk_strategy: ChunkStrategy,
     pub body: String,
     pub qualified: String,
     pub kind: Kind,
@@ -131,6 +135,9 @@ impl<'a> DslChunker<'a> {
             start_line: doc_start,
             end_line: sym.end_line,
             sym_id: sym.id,
+            sub_chunk_idx: 0,
+            total_sub_chunks: 1,
+            chunk_strategy: ChunkStrategy::Symbol,
             body,
             qualified: sym.qualified.clone(),
             kind: sym.kind,
@@ -182,6 +189,9 @@ pub fn chunk_text_file(rel_path: String, full_path: String, content: String) -> 
         start_line: 1,
         end_line,
         sym_id: u32::MAX,
+        sub_chunk_idx: 0,
+        total_sub_chunks: 1,
+        chunk_strategy: ChunkStrategy::Symbol,
         body: content,
         qualified: String::new(),
         kind: Kind::Document,
