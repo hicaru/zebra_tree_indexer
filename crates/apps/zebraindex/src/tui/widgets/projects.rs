@@ -32,7 +32,16 @@ pub fn draw_projects(f: &mut Frame, app: &App, area: Rect) {
         } else {
             Style::default()
         };
-        let line = Line::from(vec![Span::styled(prefix, style), Span::styled(name, style)]);
+        let index_label = format!("#{} ", i + 1);
+        let mut spans = Vec::with_capacity(5);
+        spans.push(Span::styled(index_label, style));
+        spans.push(Span::styled(prefix, style));
+        spans.push(Span::styled(name, style));
+        if !p.languages.is_empty() {
+            let langs = format!("  ({})", p.languages.join(", "));
+            spans.push(Span::styled(langs, Style::default().fg(Color::Gray)));
+        }
+        let line = Line::from(spans);
         items.push(ListItem::new(line));
     }
 
