@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
+use fs2::FileExt;
 use tokio::net::UnixStream;
 use tokio::time;
 
@@ -40,11 +41,29 @@ pub async fn connect_or_spawn(
         return Ok(stream);
     }
 
-    match model {
-        Some(m) => tracing::info!("daemon not running, spawning with model {m}..."),
-        None => tracing::info!("daemon not running, spawning (no model specified)..."),
+    let pid_path = paths::daemon_pid()?;
+    let pid_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&pid_path)
+        .ok();
+    let should_spawn = pid_file
+        .as_ref()
+        .and_then(|f| f.try_lock_exclusive().ok())
+        .is_some();
+
+    if should_spawn {
+        match model {
+            Some(m) => tracing::info!("daemon not running, spawning with model {m}..."),
+            None => tracing::info!("daemon not running, spawning (no model specified)..."),
+        }
+        spawn_daemon(model, query_prefix, passage_prefix, model_dtype)?;
+        drop(pid_file);
+    } else {
+        tracing::debug!("daemon already spawning, waiting for socket...");
     }
-    spawn_daemon(model, query_prefix, passage_prefix, model_dtype)?;
+
     wait_for_socket(&socket_path, timeout).await
 }
 
