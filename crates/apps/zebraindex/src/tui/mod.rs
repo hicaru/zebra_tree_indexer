@@ -94,14 +94,18 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
         AppMessage::ConfigResolved {
             model: Some(m),
             search_method,
+            model_dtype,
         } => {
-            if let Some(dtype) = &app.model_dtype {
-                let _ = config::save(&m, search_method.as_deref(), Some(dtype));
+            if let Some(dt) = &model_dtype {
+                let _ = config::save(&m, search_method.as_deref(), Some(dt));
             }
             app.model = Some(Arc::from(m.as_str()));
-            app.search_method = search_method
-                .as_deref()
-                .and_then(zti_ann::SearchMethod::parse);
+            if let Some(s) = &search_method {
+                app.search_method = zti_ann::SearchMethod::parse(s);
+            }
+            if let Some(d) = model_dtype {
+                app.model_dtype = Some(Arc::from(d));
+            }
             app.should_run.store(true, Ordering::Relaxed);
             app.screen = Screen::Main;
             spawn_daemon_monitor(app, tx);
@@ -134,6 +138,13 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
         }
         AppMessage::SetupComplete { model } => {
             app.model = Some(Arc::clone(&model));
+            let client = app.client.clone();
+            tokio::spawn(async move {
+                let mut guard = client.lock().await;
+                if let Some(mut c) = guard.take() {
+                    let _ = c.request(zti_protocol::request::Request::Stop).await;
+                }
+            });
             app.should_run.store(true, Ordering::Relaxed);
             app.screen = Screen::Main;
             spawn_daemon_monitor(app, tx);

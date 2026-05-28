@@ -62,6 +62,9 @@ pub struct DaemonStatusInfo {
     pub projects_loaded: usize,
     pub model_id: String,
     pub device: String,
+    pub cpus: u32,
+    pub mem_total_mb: u64,
+    pub model_dtype: Option<String>,
     pub loaded_models: Vec<String>,
     pub loading_model: Option<String>,
 }

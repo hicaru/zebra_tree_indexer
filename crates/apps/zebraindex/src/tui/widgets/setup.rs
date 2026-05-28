@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
 use super::common::{centered_rect, render_bar, render_button_row, spinner_ch};
 use super::super::app::{IndexMethodButton, SetupPhase};
@@ -169,17 +169,7 @@ fn draw_model_selection(f: &mut Frame, entries: &[ModelEntry], selected: usize) 
         .split(area);
 
     let mut items: Vec<ListItem> = Vec::with_capacity(entries.len());
-    for (i, entry) in entries.iter().enumerate() {
-        let is_sel = i == selected;
-        let prefix = if is_sel { "> " } else { "  " };
-        let style = if is_sel {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-
+    for entry in entries.iter() {
         let tag = if entry.is_downloaded() {
             Span::styled(" [downloaded]", Style::default().fg(Color::Green))
         } else {
@@ -187,8 +177,7 @@ fn draw_model_selection(f: &mut Frame, entries: &[ModelEntry], selected: usize) 
         };
 
         let line1 = Line::from(vec![
-            Span::styled(prefix, style),
-            Span::styled(&entry.model_id, style),
+            Span::styled(&entry.model_id, Style::default()),
             Span::styled(
                 format!("  ({})", entry.parameters),
                 Style::default().fg(Color::DarkGray),
@@ -214,7 +203,20 @@ fn draw_model_selection(f: &mut Frame, entries: &[ModelEntry], selected: usize) 
         .title(" Select Embedding Model ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
-    f.render_widget(List::new(items).block(block), layout[0]);
+
+    let mut state = ListState::default().with_selected(Some(selected));
+    f.render_stateful_widget(
+        List::new(items)
+            .block(block)
+            .highlight_symbol("> ")
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        layout[0],
+        &mut state,
+    );
 
     let help = Paragraph::new("  j/k: navigate   Enter: select   q: quit")
         .block(Block::default().borders(Borders::ALL));

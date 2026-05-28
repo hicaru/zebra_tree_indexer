@@ -84,6 +84,7 @@ pub async fn resolve_startup(tx: mpsc::Sender<app::AppMessage>) {
             .send(app::AppMessage::ConfigResolved {
                 model: Some(cfg.default_model),
                 search_method: cfg.default_search_method,
+                model_dtype: cfg.default_dtype,
             })
             .await;
         return;
@@ -101,6 +102,7 @@ pub async fn resolve_startup(tx: mpsc::Sender<app::AppMessage>) {
             .send(app::AppMessage::ConfigResolved {
                 model: Some(p.model_id),
                 search_method: None,
+                model_dtype: None,
             })
             .await;
         return;
@@ -110,6 +112,7 @@ pub async fn resolve_startup(tx: mpsc::Sender<app::AppMessage>) {
         .send(app::AppMessage::ConfigResolved {
             model: None,
             search_method: None,
+            model_dtype: None,
         })
         .await;
 }
@@ -304,8 +307,8 @@ async fn fetch_daemon_status(
             Ok(Response::DaemonStatus(info)) => Some(app::DaemonStatus::Running {
                 device: info.device,
                 uptime_secs: info.uptime_secs,
-                cpus: 0,
-                mem_total_mb: 0,
+                cpus: info.cpus,
+                mem_total_mb: info.mem_total_mb,
             }),
             Ok(_) => None,
             Err(e) => {

@@ -26,6 +26,9 @@ pub async fn handle(state: &DaemonState) -> Response {
         projects_loaded,
         model_id: state.primary_model.to_string(),
         device,
+        cpus: state.hardware.cpus as u32,
+        mem_total_mb: state.hardware.mem_total / (1024 * 1024),
+        model_dtype: state.model_dtype.clone(),
         loaded_models,
         loading_model,
     })

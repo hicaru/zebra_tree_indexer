@@ -268,6 +268,9 @@ fn draw_modal_indexing(
     let model = app.model.as_deref().unwrap_or("--");
     let dtype = app.model_dtype.as_deref().unwrap_or("--");
 
+    let is_gpu = matches!(device.to_ascii_lowercase().as_str(), "metal" | "cuda");
+    let mem_label = if is_gpu { "VRAM:" } else { "RAM:" };
+
     let ram_str = if mem_mb > 0 {
         Cow::Owned(format!("{} MB", mem_mb))
     } else {
@@ -310,7 +313,7 @@ fn draw_modal_indexing(
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "  \u{2500}\u{2500} Hardware \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            "  \u{2500}\u{2500} Hardware \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(vec![
@@ -320,8 +323,8 @@ fn draw_modal_indexing(
             Span::raw(format!("{}", cpus)),
         ]),
         Line::from(vec![
-            Span::styled("  RAM:    ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{:<17}", ram_str)),
+            Span::styled(format!("  {}  ", mem_label), Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{:<16}", ram_str)),
             Span::styled("Model:  ", Style::default().fg(Color::DarkGray)),
             Span::raw(model),
         ]),

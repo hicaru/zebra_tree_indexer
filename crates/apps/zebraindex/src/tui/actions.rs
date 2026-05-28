@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use super::app::{self, DEFAULT_DIM};
 use super::config;
 use super::event;
-use super::tasks::{build_change_method_modal, ClientCtx, do_index, do_remove_project, do_search, download_model, fetch_registry};
+use super::tasks::{build_change_method_modal, spawn_daemon_monitor, ClientCtx, do_index, do_remove_project, do_search, download_model, fetch_registry};
 
 pub async fn handle_action(
     app: &mut app::App,
@@ -165,6 +165,7 @@ pub async fn handle_action(
                     if app.model.is_some() {
                         app.should_run.store(true, Ordering::Relaxed);
                         app.screen = app::Screen::Main;
+                        spawn_daemon_monitor(app, tx);
                     } else {
                         app.should_quit = true;
                     }
@@ -291,14 +292,9 @@ pub async fn handle_action(
             app.daemon_status = app::DaemonStatus::Starting;
         }
         event::Action::ChangeModel => {
-            app.should_run.store(false, Ordering::Relaxed);
-            let client = app.client.clone();
-            tokio::spawn(async move {
-                let mut guard = client.lock().await;
-                if let Some(mut c) = guard.take() {
-                    let _ = c.request(zti_protocol::request::Request::Stop).await;
-                }
-            });
+            if let Some(handle) = app.monitor_handle.take() {
+                handle.abort();
+            }
             app.screen = app::Screen::Setup(app::SetupPhase::FetchingRegistry);
             let tx_c = tx.clone();
             tokio::spawn(async move { fetch_registry(tx_c).await });

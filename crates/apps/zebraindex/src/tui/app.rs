@@ -134,6 +134,7 @@ pub enum AppMessage {
     ConfigResolved {
         model: Option<String>,
         search_method: Option<String>,
+        model_dtype: Option<String>,
     },
     RegistryLoaded(Vec<ModelEntry>),
     RegistryError(String),
@@ -183,6 +184,8 @@ pub struct App {
     pub model_dtype: Option<Arc<str>>,
     pub search_method: Option<zti_ann::SearchMethod>,
     pub local_hardware: Option<zti_hw::Hardware>,
+    pub env_cpus: u32,
+    pub env_mem_total_mb: u64,
     pub should_run: Arc<AtomicBool>,
     pub monitor_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -215,6 +218,8 @@ impl Default for App {
             model_dtype: None,
             search_method: None,
             local_hardware: None,
+            env_cpus: 0,
+            env_mem_total_mb: 0,
             should_run: Arc::new(AtomicBool::new(true)),
             monitor_handle: None,
         }
@@ -230,18 +235,17 @@ impl App {
 
     pub fn effective_hardware(&self) -> (&str, u32, u64) {
         match &self.daemon_status {
-            DaemonStatus::Running {
-                device,
-                cpus,
-                mem_total_mb,
-                ..
-            } => (device.as_str(), *cpus, *mem_total_mb),
+            DaemonStatus::Running { device, cpus, mem_total_mb, .. }
+                if *cpus > 0 => (device.as_str(), *cpus, *mem_total_mb),
+            DaemonStatus::Running { device, .. } => {
+                (device.as_str(), self.env_cpus, self.env_mem_total_mb)
+            }
             _ => {
                 let hw = self.local_hardware.as_ref();
                 (
                     hw.map(|h| h.device.as_str()).unwrap_or("--"),
-                    hw.map(|h| h.cpus as u32).unwrap_or(0),
-                    hw.map(|h| h.mem_total / (1024 * 1024)).unwrap_or(0),
+                    hw.map(|h| h.cpus as u32).unwrap_or(self.env_cpus),
+                    hw.map(|h| h.mem_total / (1024 * 1024)).unwrap_or(self.env_mem_total_mb),
                 )
             }
         }
@@ -250,6 +254,10 @@ impl App {
     pub fn apply_message(&mut self, msg: AppMessage) {
         match msg {
             AppMessage::DaemonStatusUpdate(status) => self.daemon_status = status,
+            AppMessage::DaemonEnvLoaded { cpus, mem_total_mb } => {
+                self.env_cpus = cpus;
+                self.env_mem_total_mb = mem_total_mb;
+            }
             AppMessage::ProjectsLoaded(projects) => {
                 self.projects = projects;
                 let max = self.projects.len();

@@ -23,6 +23,7 @@ pub struct DaemonState {
     pub engines: RwLock<HashMap<Arc<str>, Arc<EmbedEngine>>>,
     pub loading_model: RwLock<Option<Arc<str>>>,
     pub hardware: Arc<zti_hw::Hardware>,
+    pub model_dtype: Option<String>,
     pub registry: RwLock<HashMap<[u8; 32], Arc<LoadedProject>>>,
     pub ann: Arc<AnnCache>,
     pub started_at_ns: u64,
@@ -37,6 +38,7 @@ impl DaemonState {
         engine: EmbedEngine,
         model_id: Arc<str>,
         hardware: Arc<zti_hw::Hardware>,
+        model_dtype: Option<String>,
         pid_lock: File,
     ) -> Self {
         let started_at_ns = std::time::SystemTime::now()
@@ -56,6 +58,7 @@ impl DaemonState {
             engines: RwLock::new(engines),
             loading_model: RwLock::new(None),
             hardware,
+            model_dtype,
             registry: RwLock::new(HashMap::new()),
             ann: Arc::new(AnnCache::default()),
             started_at_ns,
