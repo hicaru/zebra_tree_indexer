@@ -21,6 +21,7 @@ pub fn split_text(
     source: &str,
     config: &ChunkConfig,
     lang: Option<tree_sitter::Language>,
+    terminal_kinds: &[u16],
 ) -> Vec<SubChunk> {
     let min_chunk = config.min_chunk_size;
     let overlap = config.chunk_overlap.min(min_chunk);
@@ -36,6 +37,7 @@ pub fn split_text(
                 overlap,
                 min_chunk,
                 tree.root_node(),
+                terminal_kinds,
             );
         }
     }

@@ -25,7 +25,7 @@ const APPENDIX_CAP_PER_CHUNK: usize = 32;
 const CHARS_PER_TOKEN: usize = 3;
 const CHUNK_SIZE_MULT: usize = 4;
 const CHUNK_MIN_MULT: usize = 2;
-const CHUNK_OVERLAP: usize = 200;
+const CHUNK_OVERLAP: usize = 1024;
 
 use crate::manifest::{FileSnapshot, SourceKind, detect_changes, walk_source_files};
 use crate::progress::ProgressReporter;
@@ -41,6 +41,7 @@ fn generate_sub_chunks(
     lang: Option<tree_sitter::Language>,
     kind_label: &'static str,
     out: &mut Vec<(Chunk, &'static str)>,
+    terminal_kinds: &[u16],
 ) {
     let max_tokens = engine.profile().max_length;
     let sub_chunks = zti_recursive_chunk::split_text(
@@ -51,6 +52,7 @@ fn generate_sub_chunks(
             chunk_overlap: CHUNK_OVERLAP,
         },
         lang,
+        terminal_kinds,
     );
     let total = sub_chunks.len() as u32;
     for (i, sub) in sub_chunks.iter().enumerate() {
@@ -178,8 +180,17 @@ pub async fn index_project(
                 let chunks = chunker.chunks_for_file(&label, &snap.contents);
                 for c in chunks {
                     if should_recursive_split(&c.body, engine) {
-                        let ts_lang = frontend_for(lang).language();
-                        generate_sub_chunks(&c, engine, Some(ts_lang), lang.as_str(), &mut all_pending);
+                        let frontend = frontend_for(lang);
+                        let ts_lang = frontend.language();
+                        let terminal_names = frontend.config().terminal_node_kinds;
+                        let mut terminal_ids = Vec::with_capacity(terminal_names.len());
+                        for name in terminal_names {
+                            let id = ts_lang.id_for_node_kind(name, true);
+                            if id != 0 {
+                                terminal_ids.push(id);
+                            }
+                        }
+                        generate_sub_chunks(&c, engine, Some(ts_lang), lang.as_str(), &mut all_pending, &terminal_ids);
                     } else {
                         all_pending.push((c, lang.as_str()));
                     }
@@ -193,7 +204,7 @@ pub async fn index_project(
                     snap.contents.clone(),
                 );
                 if should_recursive_split(&chunk.body, engine) {
-                    generate_sub_chunks(&chunk, engine, None, "text", &mut all_pending);
+                    generate_sub_chunks(&chunk, engine, None, "text", &mut all_pending, &[]);
                 } else {
                     all_pending.push((chunk, "text"));
                 }

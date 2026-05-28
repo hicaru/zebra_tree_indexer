@@ -33,6 +33,7 @@ pub struct LangConfig {
     pub impl_node: Option<&'static str>,
     pub symbol_name_skip: &'static [&'static str],
     pub symbol_name_skip_prefix: &'static [&'static str],
+    pub terminal_node_kinds: &'static [&'static str],
 }
 
 impl LangConfig {
@@ -270,6 +271,14 @@ pub static RUST_CONFIG: LangConfig = LangConfig {
     impl_node: Some("impl_item"),
     symbol_name_skip: &[],
     symbol_name_skip_prefix: &[],
+    terminal_node_kinds: &[
+        "line_comment",
+        "block_comment",
+        "doc_comment",
+        "string_literal",
+        "raw_string_literal",
+        "char_literal",
+    ],
 };
 
 pub static TYPESCRIPT_CONFIG: LangConfig = LangConfig {
@@ -350,6 +359,11 @@ pub static TYPESCRIPT_CONFIG: LangConfig = LangConfig {
     impl_node: None,
     symbol_name_skip: &[],
     symbol_name_skip_prefix: &[],
+    terminal_node_kinds: &[
+        "comment",
+        "string",
+        "template_string",
+    ],
 };
 
 pub static DART_CONFIG: LangConfig = LangConfig {
@@ -465,6 +479,12 @@ pub static DART_CONFIG: LangConfig = LangConfig {
     // root file; the prefix sweep below handles every per-locale subclass.
     symbol_name_skip: &[],
     symbol_name_skip_prefix: &["AppLocalizations"],
+    terminal_node_kinds: &[
+        "comment",
+        "block_comment",
+        "documentation_block_comment",
+        "string_literal",
+    ],
 };
 
 pub static SOLIDITY_CONFIG: LangConfig = LangConfig {
@@ -575,4 +595,11 @@ pub static SOLIDITY_CONFIG: LangConfig = LangConfig {
     impl_node: None,
     symbol_name_skip: &[],
     symbol_name_skip_prefix: &[],
+    terminal_node_kinds: &[
+        "comment",
+        "string",
+        "string_literal",
+        "hex_string_literal",
+        "unicode_string_literal",
+    ],
 };

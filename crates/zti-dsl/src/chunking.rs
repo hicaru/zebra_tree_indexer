@@ -192,6 +192,7 @@ pub fn chunk_text_file(rel_path: String, full_path: String, content: String) -> 
         sub_chunk_idx: 0,
         total_sub_chunks: 1,
         chunk_strategy: ChunkStrategy::Symbol,
+        // parent chunk before recursive split; sub-chunks override to Recursive
         body: content,
         qualified: String::new(),
         kind: Kind::Document,

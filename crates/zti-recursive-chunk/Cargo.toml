@@ -9,3 +9,6 @@ license.workspace = true
 anyhow.workspace = true
 tree-sitter.workspace = true
 regex.workspace = true
+
+[dev-dependencies]
+tree-sitter-rust.workspace = true

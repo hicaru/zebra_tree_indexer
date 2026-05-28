@@ -17,11 +17,18 @@ fn collect_atoms_ts(
     min_atom: usize,
     level: usize,
     collector: &mut AtomCollector,
+    terminal_kinds: &[u16],
 ) {
     let start = node.start_byte();
     let end = node.end_byte();
 
     if end - start <= min_atom {
+        collector.curr_level = level;
+        collector.add(start, end);
+        return;
+    }
+
+    if terminal_kinds.contains(&node.kind_id()) {
         collector.curr_level = level;
         collector.add(start, end);
         return;
@@ -44,7 +51,7 @@ fn collect_atoms_ts(
             collect_atoms(text, prev_end, cs, 0, min_atom, collector);
         }
 
-        collect_atoms_ts(text, child, min_atom, level + 1, collector);
+        collect_atoms_ts(text, child, min_atom, level + 1, collector, terminal_kinds);
 
         prev_end = child.end_byte();
 
@@ -239,6 +246,7 @@ pub(crate) fn chunk_text_with_ts(
     chunk_overlap: usize,
     min_chunk: usize,
     root: tree_sitter::Node,
+    terminal_kinds: &[u16],
 ) -> Vec<SubChunk> {
     let min_atom = if chunk_overlap > 0 { chunk_overlap } else { min_chunk };
 
@@ -249,7 +257,7 @@ pub(crate) fn chunk_text_with_ts(
         chunks: Vec::with_capacity(source.len() / 32 + 1),
     };
 
-    collect_atoms_ts(source, root, min_atom, 0, &mut collector);
+    collect_atoms_ts(source, root, min_atom, 0, &mut collector, terminal_kinds);
     let atoms = collector.seal();
     let mut raw = merge_atoms(atoms, chunk_size, chunk_overlap, min_chunk, source);
 
@@ -304,4 +312,84 @@ pub(crate) fn chunk_text(
             end_line: e.line,
         }
     }).collect()
+}
+
+#[cfg(test)]
+mod tests_merge {
+    use super::*;
+
+    #[test]
+    fn terminal_kinds_prevent_regex_inside_comment() {
+        let source = "/*\npara 1\n\npara 2\n\npara 3\n*/\nfn f() {}";
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let ts_lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+
+        let block_comment_id = ts_lang.id_for_node_kind("block_comment", true);
+
+        let mut collector_no_term = AtomCollector {
+            text: source,
+            curr_level: 0,
+            min_level: 0,
+            chunks: Vec::with_capacity(16),
+        };
+        collect_atoms_ts(source, tree.root_node(), 5, 0, &mut collector_no_term, &[]);
+        let atoms_no_term = collector_no_term.seal();
+
+        let mut collector_term = AtomCollector {
+            text: source,
+            curr_level: 0,
+            min_level: 0,
+            chunks: Vec::with_capacity(16),
+        };
+        collect_atoms_ts(
+            source,
+            tree.root_node(),
+            5,
+            0,
+            &mut collector_term,
+            &[block_comment_id],
+        );
+        let atoms_term = collector_term.seal();
+
+        assert!(
+            atoms_term.len() < atoms_no_term.len(),
+            "terminal kinds should produce fewer atoms ({} vs {})",
+            atoms_term.len(),
+            atoms_no_term.len(),
+        );
+    }
+
+    #[test]
+    fn terminal_kinds_empty_no_effect() {
+        let source = "fn f() { let x = 1; }";
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let mut collector1 = AtomCollector {
+            text: source,
+            curr_level: 0,
+            min_level: 0,
+            chunks: Vec::with_capacity(16),
+        };
+        collect_atoms_ts(source, tree.root_node(), 100, 0, &mut collector1, &[]);
+
+        let mut collector2 = AtomCollector {
+            text: source,
+            curr_level: 0,
+            min_level: 0,
+            chunks: Vec::with_capacity(16),
+        };
+        collect_atoms_ts(source, tree.root_node(), 100, 0, &mut collector2, &[9999]);
+
+        let atoms1 = collector1.seal();
+        let atoms2 = collector2.seal();
+        assert_eq!(atoms1.len(), atoms2.len(), "bogus terminal kind ID should not affect output");
+    }
 }
