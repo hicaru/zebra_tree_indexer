@@ -6,7 +6,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use super::common::{centered_rect, render_button_row, spinner_ch};
+use super::common::{bar_slice, centered_rect, render_button_row, spinner_ch, EMPTY_20, FILLED_20};
 use super::super::app::{
     App, DetailButton, Modal,
 };
@@ -211,19 +211,21 @@ fn draw_modal_indexing(
     m: &super::super::app::Modal,
     app: &App,
 ) {
-    let (phase, current, total, message, is_reindex, started_at) = match m {
+    let (phase, current, total, message, is_reindex, started_at, files, chunks) = match m {
         super::super::app::Modal::Indexing {
             phase,
             current,
             total,
             message,
             is_reindex,
-            started_at, ..
-        } => (phase, *current, *total, message.as_str(), *is_reindex, *started_at),
+            started_at,
+            files,
+            chunks, ..
+        } => (phase, *current, *total, message.as_str(), *is_reindex, *started_at, *files, *chunks),
         _ => return,
     };
 
-    let area = centered_rect(55, 40, f.area());
+    let area = centered_rect(55, 46, f.area());
     f.render_widget(Clear, area);
 
     let title = if is_reindex { " Reindexing " } else { " Indexing " };
@@ -233,115 +235,118 @@ fn draw_modal_indexing(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
-    let bar_width: usize = 30;
-    let pct = if total > 0 {
-        (current as f64 / total as f64 * 100.0) as u8
-    } else {
-        0
-    };
-    let filled = if total > 0 {
-        ((current as f64 / total as f64) * bar_width as f64) as usize
-    } else {
-        0
-    };
+    let elapsed = started_at.elapsed();
+    let elapsed_str = format!("elapsed {}:{:02}", elapsed.as_secs() / 60, elapsed.as_secs() % 60);
+    let label = if is_reindex { "Reindexing project..." } else { "Indexing project..." };
 
-    let label = if is_reindex {
-        "Reindexing project..."
-    } else {
-        "Indexing project..."
-    };
+    let active_order = phase.order();
 
-    let eta: Cow<'_, str> = if current > 0 && total > 0 {
-        let elapsed = started_at.elapsed().as_secs_f64();
-        let rate = current as f64 / elapsed;
-        let remaining = (total - current) as f64 / rate;
-        if remaining.is_finite() && remaining > 0.0 {
-            Cow::Owned(format!("  ETA: ~{:.0}s", remaining))
-        } else {
-            Cow::Borrowed("")
-        }
-    } else {
-        Cow::Borrowed("")
-    };
-
-    let (device, cpus, mem_mb) = app.effective_hardware();
+    let (device, _cpus, _mem_mb) = app.effective_hardware();
     let model = app.model.as_deref().unwrap_or("--");
-    let dtype = app.model_dtype.as_deref().unwrap_or("--");
 
-    let is_gpu = matches!(device.to_ascii_lowercase().as_str(), "metal" | "cuda");
-    let mem_label = if is_gpu { "VRAM:" } else { "RAM:" };
-
-    let ram_str = if mem_mb > 0 {
-        Cow::Owned(format!("{} MB", mem_mb))
-    } else {
-        Cow::Borrowed("--")
-    };
-
-    let text = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                format!("  {} ", spinner_ch(tick)),
-                Style::default().fg(Color::Yellow),
-            ),
-            Span::raw(label),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                format!(
-                    "[{}{}] {}/{}  {}%{}",
-                    "\u{2588}".repeat(filled),
-                    "\u{2591}".repeat(bar_width - filled),
-                    current,
-                    total,
-                    pct,
-                    eta,
-                ),
-                Style::default().fg(Color::Cyan),
-            ),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Phase:   ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{phase}")),
-        ]),
-        Line::from(vec![
-            Span::styled("  Message: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(message),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  \u{2500}\u{2500} Hardware \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(vec![
-            Span::styled("  Device: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{:15}", device)),
-            Span::styled("CPU cores: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{}", cpus)),
-        ]),
-        Line::from(vec![
-            Span::styled(format!("  {}  ", mem_label), Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{:<16}", ram_str)),
-            Span::styled("Model:  ", Style::default().fg(Color::DarkGray)),
-            Span::raw(model),
-        ]),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled("DType: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(dtype),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  Esc/c: cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(""),
+    let phase_labels: &[(zti_protocol::response::IndexPhase, &str)] = &[
+        (zti_protocol::response::IndexPhase::Gather, "Gather"),
+        (zti_protocol::response::IndexPhase::Tokenize, "Tokenize"),
+        (zti_protocol::response::IndexPhase::Embed, "Embed"),
+        (zti_protocol::response::IndexPhase::BuildIndex, "Index"),
+        (zti_protocol::response::IndexPhase::Finish, "Finish"),
     ];
 
-    let para = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
+    let mut lines = Vec::with_capacity(16);
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("  {} ", spinner_ch(tick)),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::raw(label),
+        Span::raw("  "),
+        Span::styled(elapsed_str, Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(""));
+
+    for (pdef, name) in phase_labels {
+        let ord = pdef.order();
+        let icon = if ord < active_order {
+            "\u{2713}" // ✓
+        } else if ord == active_order {
+            "\u{25b6}" // ▶
+        } else {
+            "\u{00b7}" // ·
+        };
+        let icon_color = if ord < active_order {
+            Color::Green
+        } else if ord == active_order {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
+
+        if ord < active_order {
+            let suffix = match pdef {
+                zti_protocol::response::IndexPhase::Gather => {
+                    format!("{} files parsed", files)
+                }
+                zti_protocol::response::IndexPhase::Tokenize => {
+                    format!("{} chunks", chunks)
+                }
+                _ => String::new(),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {} {}  ", icon, name), Style::default().fg(icon_color)),
+                Span::styled(suffix, Style::default().fg(Color::Gray)),
+            ]));
+        } else if ord == active_order {
+            let bar_width: usize = 20;
+            let filled = if total > 0 {
+                ((current as f64 / total as f64) * bar_width as f64) as usize
+            } else {
+                0
+            };
+            let bar = format!(
+                "[{}{}]",
+                bar_slice(FILLED_20, filled.min(bar_width)),
+                bar_slice(EMPTY_20, bar_width - filled.min(bar_width)),
+            );
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {} {}  ", icon, name), Style::default().fg(icon_color)),
+                Span::styled(bar, Style::default().fg(Color::Cyan)),
+                if total > 0 {
+                    Span::styled(
+                        format!(" {}/{}", current, total),
+                        Style::default().fg(Color::White),
+                    )
+                } else {
+                    Span::styled(message, Style::default().fg(Color::Gray))
+                },
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {} {}  ", icon, name), Style::default().fg(icon_color)),
+                Span::styled("pending", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  \u{2500}\u{2500} Hardware \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled("  Device: ", Style::default().fg(Color::DarkGray)),
+        Span::raw(format!("{:15}", device)),
+        Span::styled("Model: ", Style::default().fg(Color::DarkGray)),
+        Span::raw(model),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Esc/c: cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+
+    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 

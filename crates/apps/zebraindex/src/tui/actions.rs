@@ -373,6 +373,8 @@ pub async fn handle_action(
                             message: String::with_capacity(64),
                             is_reindex: true,
                             started_at: std::time::Instant::now(),
+                            files: 0,
+                            chunks: 0,
                         });
                         let tx_c = tx.clone();
                         tokio::spawn(async move {
@@ -425,6 +427,8 @@ pub async fn handle_action(
                         message: String::with_capacity(64),
                         is_reindex,
                         started_at: std::time::Instant::now(),
+                        files: 0,
+                        chunks: 0,
                     });
                     let ctx = ClientCtx::from_app(app);
                     let tx_c = tx.clone();

@@ -107,6 +107,8 @@ pub enum Modal {
         message: String,
         is_reindex: bool,
         started_at: std::time::Instant,
+        files: u64,
+        chunks: u64,
     },
     AddProject {
         path_input: String,

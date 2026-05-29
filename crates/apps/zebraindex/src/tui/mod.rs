@@ -173,9 +173,31 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
             message,
             is_reindex,
         } => {
-            let (started_at, project_root) = match &app.modal {
-                Some(Modal::Indexing { started_at, project_root, .. }) => (*started_at, project_root.clone()),
-                _ => (std::time::Instant::now(), String::new()),
+            let (started_at, project_root, files, chunks) = match &app.modal {
+                Some(Modal::Indexing { started_at, project_root, files, chunks, .. }) => {
+                    let mut f = *files;
+                    let mut c = *chunks;
+                    if phase == zti_protocol::response::IndexPhase::Gather {
+                        f = total;
+                    }
+                    if phase == zti_protocol::response::IndexPhase::Tokenize {
+                        c = total;
+                    }
+                    (*started_at, project_root.clone(), f, c)
+                }
+                _ => {
+                    let f = if phase == zti_protocol::response::IndexPhase::Gather {
+                        total
+                    } else {
+                        0
+                    };
+                    let c = if phase == zti_protocol::response::IndexPhase::Tokenize {
+                        total
+                    } else {
+                        0
+                    };
+                    (std::time::Instant::now(), String::new(), f, c)
+                }
             };
             app.modal = Some(Modal::Indexing {
                 project_root,
@@ -185,6 +207,8 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
                 message,
                 is_reindex,
                 started_at,
+                files,
+                chunks,
             });
         }
         AppMessage::IndexCancelled => {

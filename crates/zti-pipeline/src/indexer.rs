@@ -137,6 +137,7 @@ pub async fn index_project(
     reporter: &dyn ProgressReporter,
     override_method: Option<zti_ann::SearchMethod>,
     cancel: &AtomicBool,
+    refresh: bool,
 ) -> Result<IndexStats> {
     let start = std::time::Instant::now();
     let pid = project_id(root);
@@ -159,25 +160,45 @@ pub async fn index_project(
         changes.unchanged.len(),
     );
 
-    let need_reindex: Vec<String> = changes
-        .added
-        .iter()
-        .chain(changes.modified.iter())
-        .cloned()
-        .collect();
+    let mut need_reindex: Vec<String>;
+    let to_delete: Vec<&str>;
 
-    let to_delete: Vec<&str> = changes
-        .removed
-        .iter()
-        .chain(changes.modified.iter())
-        .map(|s| s.as_str())
-        .collect();
+    if refresh {
+        need_reindex = snapshots.keys().cloned().collect();
+        to_delete = previous.iter().map(|r| r.file_path.as_str()).collect();
+    } else {
+        need_reindex = changes
+            .added
+            .iter()
+            .chain(changes.modified.iter())
+            .cloned()
+            .collect();
+        to_delete = changes
+            .removed
+            .iter()
+            .chain(changes.modified.iter())
+            .map(|s| s.as_str())
+            .collect();
+    }
 
     if !to_delete.is_empty() {
         let chunks_table = db.chunks_table(engine.dim()).await?;
         chunks_table.delete_for_files(&to_delete).await?;
         files_table.delete_for_paths(&to_delete).await?;
         info!("deleted chunks for {} files", to_delete.len());
+    }
+
+    // Self-heal: if files table has entries but chunks table is empty, force
+    // a full rebuild to recover from the old silent-empty-index bug.
+    if !refresh && need_reindex.is_empty() && !previous.is_empty() {
+        let chunks_table = db.chunks_table(engine.dim()).await?;
+        if chunks_table.len().await? == 0 {
+            info!("self-heal: empty index, forcing full reindex");
+            let del: Vec<&str> = previous.iter().map(|r| r.file_path.as_str()).collect();
+            chunks_table.delete_for_files(&del).await?;
+            files_table.delete_for_paths(&del).await?;
+            need_reindex = snapshots.keys().cloned().collect();
+        }
     }
 
     if need_reindex.is_empty() {
@@ -354,15 +375,8 @@ pub async fn index_project(
     let mut chunks_table = db.chunks_table(engine.dim()).await?;
 
     let total_chunks = all_pending.len();
-    reporter.set_phase(
-        zti_protocol::response::IndexPhase::Tokenize,
-        0,
-        total_chunks as u64,
-        "tokenizing chunks",
-    );
-    // Tokenize all chunks once, then sort by token length so each batch's
-    // dynamic padding in `prepare_from_encs` stays tight (no long chunk
-    // forcing short batch-mates to pad up to its length).
+    // Tokenize in batches so the progress bar advances 0→N instead of
+    // freezing until all chunks are tokenized.
     let encs: Vec<zti_embed::Tokenized> = {
         let passage_prefix = &engine.profile().passage_prefix;
         let prefixed: Vec<Cow<'_, str>> = all_pending
@@ -370,7 +384,22 @@ pub async fn index_project(
             .map(|(c, _)| zti_embed::apply_prefix(&c.body, passage_prefix))
             .collect();
         let refs: Vec<&str> = prefixed.iter().map(|s| s.as_ref()).collect();
-        engine.tokenize(&refs)?
+
+        const TOK_BATCH: usize = 512;
+        let mut out: Vec<zti_embed::Tokenized> = Vec::with_capacity(refs.len());
+        for slice in refs.chunks(TOK_BATCH) {
+            if cancel.load(Ordering::Relaxed) {
+                anyhow::bail!("indexing cancelled");
+            }
+            out.extend(engine.tokenize(slice)?);
+            reporter.set_phase(
+                zti_protocol::response::IndexPhase::Tokenize,
+                out.len() as u64,
+                total_chunks as u64,
+                "tokenizing chunks",
+            );
+        }
+        out
     };
 
     // All length math below must use the same cap that `prepare_from_encs`
@@ -585,7 +614,7 @@ pub async fn index_project(
                 }
             }
             Err(e) => {
-                tracing::warn!("embed_batch failed: {}", e);
+                anyhow::bail!("embed batch failed: {e}");
             }
         }
         tracing::debug!(
@@ -596,6 +625,12 @@ pub async fn index_project(
         );
         reporter.inc(n_batch as u64);
         cursor = end;
+    }
+
+    if total_chunks > 0 && total_embedded == 0 {
+        anyhow::bail!(
+            "no embeddings produced from {total_chunks} chunks"
+        );
     }
 
     let hw = engine.hardware();
@@ -618,6 +653,12 @@ pub async fn index_project(
         hw.mem_avail >> 20
     );
 
+    reporter.set_phase(
+        zti_protocol::response::IndexPhase::BuildIndex,
+        0,
+        0,
+        "building search index",
+    );
     chunks_table.optimize().await?;
     chunks_table.build_index(&params).await?;
 

@@ -46,7 +46,7 @@ where
 
     let project = project.clone();
     let mut indexing = Box::pin(async move {
-        zti_pipeline::indexer::index_project(&root, &engine, &db, &reporter, override_method, &project.cancel).await
+        zti_pipeline::indexer::index_project(&root, &engine, &db, &reporter, override_method, &project.cancel, req.refresh).await
     });
 
     let final_result = loop {

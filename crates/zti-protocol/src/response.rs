@@ -23,6 +23,7 @@ pub enum IndexPhase {
     Gather,
     Tokenize,
     Embed,
+    BuildIndex,
     Finish,
 }
 
@@ -33,8 +34,22 @@ impl std::fmt::Display for IndexPhase {
             Self::Gather => "gather",
             Self::Tokenize => "tokenize",
             Self::Embed => "embed",
+            Self::BuildIndex => "index",
             Self::Finish => "finish",
         })
+    }
+}
+
+impl IndexPhase {
+    pub fn order(&self) -> u8 {
+        match self {
+            Self::Start => 0,
+            Self::Gather => 1,
+            Self::Tokenize => 2,
+            Self::Embed => 3,
+            Self::BuildIndex => 4,
+            Self::Finish => 5,
+        }
     }
 }
 
