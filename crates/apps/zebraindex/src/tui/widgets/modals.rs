@@ -128,6 +128,10 @@ fn draw_project_detail(f: &mut Frame, project: &zti_store::ProjectRow, selected:
         )),
         Line::from(""),
         draw_buttons(selected),
+        Line::from(Span::styled(
+            "  Enter: select • f: full reindex",
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
 
     let para = Paragraph::new(lines).block(block);

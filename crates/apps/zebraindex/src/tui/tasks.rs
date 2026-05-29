@@ -436,9 +436,16 @@ pub async fn do_remove_project(
     let _ = tx.send(app::AppMessage::ProjectRemoved).await;
 }
 
+#[derive(PartialEq, Eq, Debug)]
+pub enum IndexMode {
+    Initial,
+    Reindex,
+    ForceReindex,
+}
+
 pub async fn do_index(
     project_root: String,
-    refresh: bool,
+    mode: IndexMode,
     ctx: ClientCtx,
     tx: mpsc::Sender<app::AppMessage>,
 ) {
@@ -456,7 +463,7 @@ pub async fn do_index(
             .request_streaming(
                 Request::Index(zti_protocol::request::IndexReq {
                     project_root,
-                    refresh,
+                    refresh: matches!(mode, IndexMode::ForceReindex),
                     search_method: ctx.search_method.map(|m| m.as_str().to_string()),
                 }),
                 |frame| {
@@ -466,7 +473,7 @@ pub async fn do_index(
                             current: p.current,
                             total: p.total,
                             message: p.message,
-                            is_reindex: refresh,
+                            is_reindex: matches!(mode, IndexMode::Reindex | IndexMode::ForceReindex),
                         });
                     }
                 },

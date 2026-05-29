@@ -6,7 +6,32 @@ use tokio::sync::mpsc;
 use super::app::{self, DEFAULT_DIM};
 use super::config;
 use super::event;
-use super::tasks::{build_change_method_modal, cancel_index, spawn_daemon_monitor, ClientCtx, do_index, do_remove_project, do_search, download_model, fetch_registry};
+use super::tasks::{build_change_method_modal, cancel_index, spawn_daemon_monitor, ClientCtx, IndexMode, do_index, do_remove_project, do_search, download_model, fetch_registry};
+
+fn spawn_reindex(app: &mut app::App, tx: &mpsc::Sender<app::AppMessage>, mode: IndexMode) {
+    let Some(project) = app.projects.get(app.selected_project) else { return };
+    let root = project.root_path.clone();
+    let mut ctx = ClientCtx::from_app(app);
+    ctx.search_method = project
+        .search_method
+        .as_deref()
+        .and_then(zti_ann::SearchMethod::parse);
+    app.modal = Some(app::Modal::Indexing {
+        project_root: root.clone(),
+        phase: zti_protocol::response::IndexPhase::Start,
+        current: 0,
+        total: 0,
+        message: String::with_capacity(64),
+        is_reindex: true,
+        started_at: std::time::Instant::now(),
+        files: 0,
+        chunks: 0,
+    });
+    let tx_c = tx.clone();
+    tokio::spawn(async move {
+        do_index(root, mode, ctx, tx_c).await;
+    });
+}
 
 pub async fn handle_action(
     app: &mut app::App,
@@ -358,29 +383,7 @@ pub async fn handle_action(
                     app.modal = Some(app::Modal::ConfirmRemove);
                 }
                 app::DetailButton::Reindex => {
-                    if let Some(project) = app.projects.get(app.selected_project) {
-                        let root = project.root_path.clone();
-                        let mut ctx = ClientCtx::from_app(app);
-                        ctx.search_method = project
-                            .search_method
-                            .as_deref()
-                            .and_then(zti_ann::SearchMethod::parse);
-                        app.modal = Some(app::Modal::Indexing {
-                            project_root: root.clone(),
-                            phase: zti_protocol::response::IndexPhase::Start,
-                            current: 0,
-                            total: 0,
-                            message: String::with_capacity(64),
-                            is_reindex: true,
-                            started_at: std::time::Instant::now(),
-                            files: 0,
-                            chunks: 0,
-                        });
-                        let tx_c = tx.clone();
-                        tokio::spawn(async move {
-                            do_index(root, true, ctx, tx_c).await;
-                        });
-                    }
+                    spawn_reindex(app, tx, IndexMode::Reindex);
                 }
                 app::DetailButton::Back => {}
             },
@@ -432,9 +435,9 @@ pub async fn handle_action(
                     });
                     let ctx = ClientCtx::from_app(app);
                     let tx_c = tx.clone();
-                    let refresh = is_reindex;
+                    let mode = if is_reindex { IndexMode::ForceReindex } else { IndexMode::Initial };
                     tokio::spawn(async move {
-                        do_index(root_s, refresh, ctx, tx_c).await;
+                        do_index(root_s, mode, ctx, tx_c).await;
                     });
                 }
             }
@@ -444,6 +447,11 @@ pub async fn handle_action(
         },
         event::Action::DetailBack => {
             app.modal = None;
+        }
+        event::Action::DetailForceReindex => {
+            if matches!(app.modal, Some(app::Modal::ProjectDetail { .. })) {
+                spawn_reindex(app, tx, IndexMode::ForceReindex);
+            }
         }
         event::Action::ConfirmRemoveYes => {
             app.modal = None;

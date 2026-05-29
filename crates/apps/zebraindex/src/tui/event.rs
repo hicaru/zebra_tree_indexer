@@ -30,6 +30,7 @@ pub enum Action {
     DetailButtonPrev,
     DetailConfirm,
     DetailBack,
+    DetailForceReindex,
     ConfirmRemoveYes,
     ConfirmRemoveNo,
     SubmitPath,
@@ -158,13 +159,15 @@ fn map_modal_key(key: &event::KeyEvent, app: &App) -> Action {
                 _ => Action::None,
             }
         }
-        _ => match key.code {
+        Some(Modal::ProjectDetail { .. }) => match key.code {
             KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => Action::DetailButtonNext,
             KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => Action::DetailButtonPrev,
+            KeyCode::Char('f') => Action::DetailForceReindex,
             KeyCode::Enter => Action::DetailConfirm,
             KeyCode::Esc | KeyCode::Char('q') => Action::DetailBack,
             _ => Action::None,
         },
+        _ => Action::None,
     }
 }
 
