@@ -46,19 +46,10 @@ pub fn line_byte_range(src: &str, start_line_1based: u32, end_line_1based: u32) 
     start..end_byte
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LineIndex {
     line_starts: Vec<usize>,
     len: usize,
-}
-
-impl Default for LineIndex {
-    fn default() -> Self {
-        Self {
-            line_starts: vec![0],
-            len: 0,
-        }
-    }
 }
 
 impl LineIndex {

@@ -34,7 +34,7 @@ pub fn resolve_symbol_bodies(index: &ProjectIndex, symbol_ids: &[u32]) -> Vec<Sy
             }
         };
 
-        file_cache.entry(sym.file_idx).or_insert_with(|| {
+        let content = file_cache.entry(sym.file_idx).or_insert_with(|| {
             std::fs::read_to_string(&file.path)
                 .map(|s| {
                     let idx = LineIndex::new(&s);
@@ -43,7 +43,7 @@ pub fn resolve_symbol_bodies(index: &ProjectIndex, symbol_ids: &[u32]) -> Vec<Sy
                 .map_err(|err| format!("Failed to read {}: {}", file.path, err))
         });
 
-        match file_cache.get(&sym.file_idx).unwrap() {
+        match &*content {
             Ok((c, line_index)) => {
                 let doc_start = if sym.doc.is_some() {
                     find_doc_start_line(c, sym.line, line_index)

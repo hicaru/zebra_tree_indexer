@@ -21,7 +21,7 @@ use crate::merge::{chunk_text, chunk_text_with_ts};
 /// splitting. Tree-sitter becomes extremely expensive (100ms+) on large
 /// bodies and rarely adds value over regex for chunk-boundary detection
 /// when the text is already hundreds of kilobytes.
-const TS_SOURCE_SIZE_LIMIT: usize = 50_000;
+const TS_SOURCE_SIZE_LIMIT: usize = 90_000;
 
 pub fn split_text(
     source: &str,
