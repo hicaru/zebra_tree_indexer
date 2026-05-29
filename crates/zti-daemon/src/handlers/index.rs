@@ -44,9 +44,14 @@ where
     let (tx, mut rx) = mpsc::unbounded_channel();
     let reporter = IpcReporter::new(tx);
 
-    let project = project.clone();
-    let mut indexing = Box::pin(async move {
-        zti_pipeline::indexer::index_project(&root, &engine, &db, &reporter, override_method, &project.cancel, req.refresh).await
+    let proj = project.clone();
+    let refresh = req.refresh;
+
+    let mut handle = tokio::spawn(async move {
+        zti_pipeline::indexer::index_project(
+            &root, &engine, &db, &reporter, override_method, &proj.cancel, refresh,
+        )
+        .await
     });
 
     let final_result = loop {
@@ -55,11 +60,12 @@ where
             Some(p) = rx.recv() => {
                 if let Err(e) = write_frame(writer, &Response::IndexProgress(p)).await {
                     tracing::debug!("progress write error: {}", e);
+                    handle.abort();
                     return Err(e);
                 }
             }
-            r = &mut indexing => {
-                break r;
+            joined = &mut handle => {
+                break joined;
             }
         }
     };
@@ -68,6 +74,11 @@ where
     while let Ok(p) = rx.try_recv() {
         let _ = write_frame(writer, &Response::IndexProgress(p)).await;
     }
+
+    let final_result = match final_result {
+        Ok(r) => r,
+        Err(e) => Err(anyhow::anyhow!("indexing task failed: {e}")),
+    };
 
     let terminal = match final_result {
         Ok(stats) => Response::Index(Ok(IndexStats {
