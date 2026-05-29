@@ -179,8 +179,11 @@ pub fn build_index(root: &str) -> Result<ProjectIndex> {
         .hidden(false)
         .git_ignore(true)
         .filter_entry(move |entry| {
+            let name = entry.file_name().to_string_lossy();
+            if name.starts_with('.') {
+                return false;
+            }
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-                let name = entry.file_name().to_string_lossy();
                 if SKIP_DIRS.contains(&name.as_ref()) {
                     return false;
                 }

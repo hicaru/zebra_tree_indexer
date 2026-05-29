@@ -21,6 +21,7 @@ zti-hw.workspace           = true
 zti-dsl.workspace          = true
 zti-tree-sitter.workspace  = true
 zti-ts-core.workspace      = true
+zti-recursive-chunk.workspace = true
 
 tokio.workspace            = true
 anyhow.workspace           = true

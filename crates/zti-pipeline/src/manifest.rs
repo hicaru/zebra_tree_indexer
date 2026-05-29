@@ -79,11 +79,12 @@ pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
             continue;
         }
 
-        // Skip manifest + lock + license files by filename — manifests are
-        // already emitted as `@ <path>` PKG blocks, lockfiles are pure noise,
-        // licenses are boilerplate that dilutes search results.
+        // Skip dotfiles (hidden on Unix), manifests, lock files, licenses,
+        // and non-code assets. Dotfiles are typically generated artifacts,
+        // injected scripts, or config files that add noise to the index.
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if MANIFEST_NAMES.contains(&file_name)
+        if file_name.starts_with('.')
+            || MANIFEST_NAMES.contains(&file_name)
             || is_lock_file(file_name)
             || is_license_file(file_name)
             || is_non_code_asset(file_name)

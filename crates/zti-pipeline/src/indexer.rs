@@ -265,9 +265,8 @@ pub async fn index_project(
         "generating chunks",
     );
     let chunker = DslChunker::new(&dsl_index);
+    info!("dsl-chunker created, building terminal_cache for {} files", dsl_index.files.len());
 
-    // Pre-compute terminal node kinds for every language in the project
-    // (read-only access from parallel threads below).
     let mut terminal_cache: FxHashMap<Language, Vec<u16>> =
         FxHashMap::with_capacity_and_hasher(4, rustc_hash::FxBuildHasher);
     for lang in dsl_index.files.iter().map(|f| f.language) {
@@ -286,6 +285,7 @@ pub async fn index_project(
         }
         terminal_cache.insert(lang, ids);
     }
+    info!("terminal_cache built with {} languages, starting chunk generation for {} files", terminal_cache.len(), need_reindex.len());
 
     let all_pending: Vec<(Chunk<'_>, &'static str)> = need_reindex
         .par_iter()
@@ -344,11 +344,13 @@ pub async fn index_project(
         need_reindex.len()
     );
 
+    info!("building chunk_sym_set from {} chunks", all_pending.len());
     let chunk_sym_set: HashSet<u32> = all_pending
         .iter()
         .filter(|(c, _)| c.sym_id != u32::MAX)
         .map(|(c, _)| c.sym_id)
         .collect();
+    info!("chunk_sym_set built with {} symbols, building appendix BFS", chunk_sym_set.len());
 
     let appendix_for = |sym_id: u32| -> Vec<u32> {
         let mut visited: HashSet<u32> = HashSet::with_capacity(16);
