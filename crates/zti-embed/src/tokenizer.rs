@@ -42,6 +42,15 @@ impl Tokenizer {
     pub fn truncation_max_length(&self) -> Option<usize> {
         self.inner.get_truncation().map(|t| t.max_length)
     }
+
+    /// Token count only; the encoding is dropped without cloning its buffers.
+    pub fn count_tokens(&self, text: &str) -> Result<usize> {
+        let enc = self
+            .inner
+            .encode(text, false)
+            .map_err(|e| anyhow::anyhow!("encode: {e}"))?;
+        Ok(enc.get_ids().len())
+    }
 }
 
 pub struct Tokenized {

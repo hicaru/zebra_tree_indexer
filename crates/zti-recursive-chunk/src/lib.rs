@@ -20,7 +20,7 @@ use crate::merge::{chunk_text, chunk_text_with_ts};
 pub fn split_text(
     source: &str,
     config: &ChunkConfig,
-    lang: Option<tree_sitter::Language>,
+    lang: Option<&tree_sitter::Language>,
     terminal_kinds: &[u16],
 ) -> Vec<SubChunk> {
     let min_chunk = config.min_chunk_size;
@@ -28,7 +28,7 @@ pub fn split_text(
 
     if let Some(ts_lang) = lang {
         let mut parser = tree_sitter::Parser::new();
-        if parser.set_language(&ts_lang).is_err() {
+        if parser.set_language(ts_lang).is_err() {
             // fall through to regex
         } else if let Some(tree) = parser.parse(source, None) {
             return chunk_text_with_ts(

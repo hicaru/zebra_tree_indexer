@@ -212,6 +212,18 @@ impl EmbedEngine {
         self.tokenizer.encode_batch(texts)
     }
 
+    /// Count tokens in a single text without retaining ids/mask buffers.
+    #[inline]
+    pub fn count_tokens(&self, text: &str) -> Result<usize> {
+        self.tokenizer.count_tokens(text)
+    }
+
+    /// True when the tokenizer truncates (token counts would be capped → unreliable bpt).
+    #[inline]
+    pub fn truncates(&self) -> bool {
+        self.tokenizer.truncation_max_length().is_some()
+    }
+
     pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());

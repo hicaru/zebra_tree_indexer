@@ -23,32 +23,80 @@ use zti_tree_sitter::{Language, frontend_for};
 const APPENDIX_DEPTH: usize = 2;
 const APPENDIX_CAP_PER_CHUNK: usize = 32;
 const CHARS_PER_TOKEN: usize = 4;
-const CHUNK_SIZE_MULT: usize = 4;
-const CHUNK_MIN_MULT: usize = 2;
 const CHUNK_OVERLAP: usize = 200;
+const BPT_SAMPLE_BYTES: usize = 64 * 1024;
+const MIN_CHUNK_FLOOR: usize = 512;
 
 use crate::manifest::{FileSnapshot, SourceKind, detect_changes, walk_source_files};
 use crate::progress::ProgressReporter;
 
-fn should_recursive_split(body: &str, engine: &EmbedEngine) -> bool {
-    body.len() > engine.profile().max_length.saturating_mul(CHARS_PER_TOKEN)
+#[derive(Debug, Clone, Copy)]
+struct AdaptiveChunkSizing {
+    chunk_size: usize,
+    min_chunk_size: usize,
+}
+
+/// Largest byte index <= `max` that is a UTF-8 char boundary.
+#[inline]
+fn floor_boundary(s: &str, max: usize) -> usize {
+    if s.len() <= max {
+        return s.len();
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+/// Pure byte-sizing math: given a measured bytes-per-token ratio, decide whether
+/// `body_len` bytes exceed the model's token budget and, if so, the byte limits
+/// for recursive splitting. Split when the estimated token count
+/// (`body_len / bpt`) exceeds `max_len`, i.e. `body_len > max_len * bpt`.
+fn sizing_for(body_len: usize, max_len: usize, bpt: usize) -> Option<AdaptiveChunkSizing> {
+    let chunk_size = max_len.saturating_mul(bpt);
+    (body_len > chunk_size).then(|| AdaptiveChunkSizing {
+        chunk_size: chunk_size.max(MIN_CHUNK_FLOOR + 1),
+        min_chunk_size: (max_len / 2).saturating_mul(bpt).max(MIN_CHUNK_FLOOR),
+    })
+}
+
+/// `Some(sizing)` when the body should be recursively split; `None` keeps it whole.
+fn adaptive_split(body: &str, engine: &EmbedEngine) -> Option<AdaptiveChunkSizing> {
+    let max_len = engine.profile().max_length;
+
+    // Fast path: bytes ≤ max_len → tokens ≤ bytes ≤ max_len → always fits.
+    if body.len() <= max_len {
+        return None;
+    }
+
+    let bpt = if engine.truncates() {
+        CHARS_PER_TOKEN
+    } else {
+        let sample = &body[..floor_boundary(body, BPT_SAMPLE_BYTES)];
+        match engine.count_tokens(sample) {
+            Ok(n) if n > 0 => (sample.len() / n).max(1),
+            _ => CHARS_PER_TOKEN,
+        }
+    };
+
+    sizing_for(body.len(), max_len, bpt)
 }
 
 #[inline]
 fn generate_sub_chunks(
     chunk: &Chunk,
-    engine: &EmbedEngine,
-    lang: Option<tree_sitter::Language>,
+    sizing: &AdaptiveChunkSizing,
+    lang: Option<&tree_sitter::Language>,
     kind_label: &'static str,
     out: &mut Vec<(Chunk, &'static str)>,
     terminal_kinds: &[u16],
 ) {
-    let max_tokens = engine.profile().max_length;
     let sub_chunks = zti_recursive_chunk::split_text(
         &chunk.body,
         &zti_recursive_chunk::ChunkConfig {
-            chunk_size: max_tokens * CHUNK_SIZE_MULT,
-            min_chunk_size: max_tokens * CHUNK_MIN_MULT,
+            chunk_size: sizing.chunk_size,
+            min_chunk_size: sizing.min_chunk_size,
             chunk_overlap: CHUNK_OVERLAP,
         },
         lang,
@@ -179,24 +227,23 @@ pub async fn index_project(
                 let full_path = root.join(rel);
                 let label = full_path.display().to_string();
                 let chunks = chunker.chunks_for_file(&label, &snap.contents);
+                let frontend = frontend_for(lang);
+                let ts_lang = frontend.language();
+                let terminal_ids = terminal_cache.entry(lang).or_insert_with(|| {
+                    let names = frontend.config().terminal_node_kinds;
+                    let mut ids = Vec::with_capacity(names.len());
+                    for name in names {
+                        let id = ts_lang.id_for_node_kind(name, true);
+                        if id != 0 {
+                            ids.push(id);
+                        }
+                    }
+                    ids
+                });
                 for c in chunks {
-                    if should_recursive_split(&c.body, engine) {
-                        let frontend = frontend_for(lang);
-                        let ts_lang = frontend.language();
-                        let terminal_ids = terminal_cache.entry(lang).or_insert_with(|| {
-                            let names = frontend.config().terminal_node_kinds;
-                            let mut ids = Vec::with_capacity(names.len());
-                            for name in names {
-                                let id = ts_lang.id_for_node_kind(name, true);
-                                if id != 0 {
-                                    ids.push(id);
-                                }
-                            }
-                            ids
-                        });
-                        generate_sub_chunks(&c, engine, Some(ts_lang), lang.as_str(), &mut all_pending, terminal_ids);
-                    } else {
-                        all_pending.push((c, lang.as_str()));
+                    match adaptive_split(&c.body, engine) {
+                        Some(sizing) => generate_sub_chunks(&c, &sizing, Some(&ts_lang), lang.as_str(), &mut all_pending, terminal_ids),
+                        None => all_pending.push((c, lang.as_str())),
                     }
                 }
             }
@@ -207,10 +254,9 @@ pub async fn index_project(
                     full_path,
                     snap.contents.clone(),
                 );
-                if should_recursive_split(&chunk.body, engine) {
-                    generate_sub_chunks(&chunk, engine, None, "text", &mut all_pending, &[]);
-                } else {
-                    all_pending.push((chunk, "text"));
+                match adaptive_split(&chunk.body, engine) {
+                    Some(sizing) => generate_sub_chunks(&chunk, &sizing, None, "text", &mut all_pending, &[]),
+                    None => all_pending.push((chunk, "text")),
                 }
             }
         }
