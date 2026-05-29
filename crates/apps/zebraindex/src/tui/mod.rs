@@ -178,7 +178,7 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
                     (*started_at, project_root.clone(), *files, *chunks),
                 _ => (std::time::Instant::now(), String::new(), 0, 0),
             };
-            if phase == zti_protocol::response::IndexPhase::Gather {
+            if phase == zti_protocol::response::IndexPhase::Dsl {
                 files = total;
             }
             if phase == zti_protocol::response::IndexPhase::Tokenize {

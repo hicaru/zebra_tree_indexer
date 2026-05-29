@@ -134,7 +134,8 @@ pub async fn run(
                                     );
                                     *slot = Some(b);
                                 }
-                                zti_protocol::response::IndexPhase::Gather
+                                zti_protocol::response::IndexPhase::Dsl
+                                | zti_protocol::response::IndexPhase::Gather
                                 | zti_protocol::response::IndexPhase::Tokenize => {
                                     if let Some(b) = slot.as_ref() {
                                         b.set_position(p.current);

@@ -229,8 +229,11 @@ fn phase_row(
     );
     if ord < active_order {
         let suffix = match pdef {
-            zti_protocol::response::IndexPhase::Gather => {
+            zti_protocol::response::IndexPhase::Dsl => {
                 format!("{} files parsed", files)
+            }
+            zti_protocol::response::IndexPhase::Gather => {
+                format!("{} chunks", chunks)
             }
             zti_protocol::response::IndexPhase::Tokenize => {
                 format!("{} chunks", chunks)
@@ -309,6 +312,7 @@ fn draw_modal_indexing(
     let model = app.model.as_deref().unwrap_or("--");
 
     let phase_labels: &[(zti_protocol::response::IndexPhase, &str)] = &[
+        (zti_protocol::response::IndexPhase::Dsl, "Parse"),
         (zti_protocol::response::IndexPhase::Gather, "Gather"),
         (zti_protocol::response::IndexPhase::Tokenize, "Tokenize"),
         (zti_protocol::response::IndexPhase::Embed, "Embed"),

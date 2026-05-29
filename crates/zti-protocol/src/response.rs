@@ -20,6 +20,7 @@ pub struct IndexStats {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IndexPhase {
     Start,
+    Dsl,
     Gather,
     Tokenize,
     Embed,
@@ -31,6 +32,7 @@ impl std::fmt::Display for IndexPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Start => "start",
+            Self::Dsl => "dsl",
             Self::Gather => "gather",
             Self::Tokenize => "tokenize",
             Self::Embed => "embed",
@@ -45,11 +47,12 @@ impl IndexPhase {
     pub fn order(&self) -> u8 {
         match self {
             Self::Start => 0,
-            Self::Gather => 1,
-            Self::Tokenize => 2,
-            Self::Embed => 3,
-            Self::BuildIndex => 4,
-            Self::Finish => 5,
+            Self::Dsl => 1,
+            Self::Gather => 2,
+            Self::Tokenize => 3,
+            Self::Embed => 4,
+            Self::BuildIndex => 5,
+            Self::Finish => 6,
         }
     }
 }
