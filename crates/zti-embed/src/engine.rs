@@ -7,7 +7,9 @@ use arrow::array::{FixedSizeListArray, Float32Array};
 use arrow::datatypes::{DataType, Field};
 use candle_core::{DType, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::models::bert::{BertModel, Config as BertConfig};
+use candle_transformers::models::bert::Config as BertConfig;
+
+use crate::bert::BertModel;
 
 use crate::batch::{BATCH_BUCKETS, BATCH_CEILING, SEQ_BUCKETS, next_bucket};
 use crate::model_registry::{ModelProfile, read_json, resolve_profile};
@@ -149,7 +151,11 @@ impl EmbedEngine {
             profile.max_length = profile.max_length.min(tok_limit);
         }
 
-        if profile.dim == 0 {
+        // Warmup forward: validates the model is NaN-free for this dtype/device
+        // and probes the embedding dim when the config didn't provide it. A
+        // reduced-precision dtype that overflows (e.g. a candle mask bug) is
+        // rejected here instead of silently wasting an entire index.
+        {
             let enc = tokenizer.encode("a")?;
             if enc.ids.is_empty() {
                 anyhow::bail!("warmup produced no tokens");
@@ -158,8 +164,22 @@ impl EmbedEngine {
             let token_type_ids = Tensor::zeros_like(&ids)?;
             let mask = Tensor::ones_like(&ids)?;
             let out = model.forward(&ids, &token_type_ids, Some(&mask))?;
-            profile.dim = out.dims()[2];
-            tracing::info!(dim = profile.dim, "probed embedding dim");
+            if profile.dim == 0 {
+                profile.dim = out.dims()[2];
+                tracing::info!(dim = profile.dim, "probed embedding dim");
+            }
+            let flat = out
+                .to_device(&candle_core::Device::Cpu)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            if flat.iter().any(|v| v.is_nan()) {
+                anyhow::bail!(
+                    "model produced NaN at load (dtype {dtype:?}, device {:?}) — \
+                     this precision is unsupported for this model/device",
+                    hw.device
+                );
+            }
         }
 
         tracing::info!(

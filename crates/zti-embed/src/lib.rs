@@ -1,4 +1,5 @@
 pub mod batch;
+mod bert;
 pub mod engine;
 pub mod model_registry;
 pub mod normalize;
