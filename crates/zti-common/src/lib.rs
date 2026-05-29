@@ -46,6 +46,54 @@ pub fn line_byte_range(src: &str, start_line_1based: u32, end_line_1based: u32) 
     start..end_byte
 }
 
+#[derive(Debug, Clone)]
+pub struct LineIndex {
+    line_starts: Vec<usize>,
+    len: usize,
+}
+
+impl Default for LineIndex {
+    fn default() -> Self {
+        Self {
+            line_starts: vec![0],
+            len: 0,
+        }
+    }
+}
+
+impl LineIndex {
+    pub fn new(src: &str) -> Self {
+        let mut line_starts = Vec::with_capacity(src.len() / 24 + 1);
+        line_starts.push(0);
+        for (i, _) in src.match_indices('\n') {
+            line_starts.push(i + 1);
+        }
+        Self {
+            line_starts,
+            len: src.len(),
+        }
+    }
+
+    pub fn byte_range(&self, start_line_1based: u32, end_line_1based: u32) -> Range<usize> {
+        if start_line_1based == 0 || end_line_1based < start_line_1based {
+            return 0..0;
+        }
+        let start = self
+            .line_starts
+            .get((start_line_1based - 1) as usize)
+            .copied()
+            .unwrap_or(self.len);
+        let end = match self.line_starts.get(end_line_1based as usize) {
+            Some(&nl) => nl.saturating_sub(1),
+            None => self.len,
+        };
+        if start > end {
+            return start..start;
+        }
+        start..end
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,5 +119,33 @@ mod tests {
         assert_eq!(r, 0..0);
         let r = line_byte_range(s, 5, 7);
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn line_index_matches_line_byte_range() {
+        let cases: &[&str] = &[
+            "",
+            "hello",
+            "alpha\nbeta\ngamma\ndelta",
+            "one\n",
+            "\n\n\n",
+            "a\nb\nc\nd\ne\nf",
+            "trailing\nnewline\n",
+        ];
+
+        for &src in cases {
+            let idx = LineIndex::new(src);
+            for start in 0u32..8 {
+                for end in 0u32..8 {
+                    let expected = line_byte_range(src, start, end);
+                    let got = idx.byte_range(start, end);
+                    assert_eq!(
+                        got, expected,
+                        "src={:?} start={} end={}",
+                        src, start, end
+                    );
+                }
+            }
+        }
     }
 }

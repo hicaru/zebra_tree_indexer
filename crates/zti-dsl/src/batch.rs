@@ -1,15 +1,15 @@
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use rustc_hash::FxHashMap;
 
 use zti_common::dsl::SymbolBodyEntry;
+use zti_common::LineIndex;
 
 use crate::chunking::find_doc_start_line;
 use crate::model::ProjectIndex;
 
 pub fn resolve_symbol_bodies(index: &ProjectIndex, symbol_ids: &[u32]) -> Vec<SymbolBodyEntry> {
     let mut entries = Vec::with_capacity(symbol_ids.len());
-    let mut file_cache: HashMap<u16, Result<String, String>> =
-        HashMap::with_capacity(symbol_ids.len());
+    let mut file_cache: FxHashMap<u16, Result<(String, LineIndex), String>> =
+        FxHashMap::with_capacity_and_hasher(symbol_ids.len(), rustc_hash::FxBuildHasher);
 
     for &id in symbol_ids {
         let sym = match index.symbols.get(id as usize) {
@@ -34,24 +34,23 @@ pub fn resolve_symbol_bodies(index: &ProjectIndex, symbol_ids: &[u32]) -> Vec<Sy
             }
         };
 
-        let content = match file_cache.entry(sym.file_idx) {
-            Entry::Occupied(e) => e.get().clone(),
-            Entry::Vacant(e) => {
-                let result = std::fs::read_to_string(&file.path)
-                    .map_err(|err| format!("Failed to read {}: {}", file.path, err));
-                e.insert(result.clone());
-                result
-            }
-        };
+        file_cache.entry(sym.file_idx).or_insert_with(|| {
+            std::fs::read_to_string(&file.path)
+                .map(|s| {
+                    let idx = LineIndex::new(&s);
+                    (s, idx)
+                })
+                .map_err(|err| format!("Failed to read {}: {}", file.path, err))
+        });
 
-        match content {
-            Ok(ref c) => {
+        match file_cache.get(&sym.file_idx).unwrap() {
+            Ok((c, line_index)) => {
                 let doc_start = if sym.doc.is_some() {
-                    find_doc_start_line(c, sym.line)
+                    find_doc_start_line(c, sym.line, line_index)
                 } else {
                     sym.line
                 };
-                let range = zti_common::line_byte_range(c, doc_start, sym.end_line);
+                let range = line_index.byte_range(doc_start, sym.end_line);
                 entries.push(SymbolBodyEntry::Ok {
                     symbol_id: id,
                     kind_short: sym.kind.short().to_owned(),
@@ -63,7 +62,7 @@ pub fn resolve_symbol_bodies(index: &ProjectIndex, symbol_ids: &[u32]) -> Vec<Sy
             Err(msg) => {
                 entries.push(SymbolBodyEntry::Err {
                     symbol_id: id,
-                    message: msg,
+                    message: msg.clone(),
                 });
             }
         }

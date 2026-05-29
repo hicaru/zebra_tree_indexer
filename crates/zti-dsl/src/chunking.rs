@@ -5,7 +5,7 @@ use std::path::Path;
 use rustc_hash::FxHashMap;
 
 pub use zti_common::chunk_strategy::ChunkStrategy;
-use zti_common::line_byte_range;
+use zti_common::LineIndex;
 use zti_ts_core::types::Kind;
 
 use crate::model::ProjectIndex;
@@ -67,8 +67,9 @@ impl<'a> DslChunker<'a> {
         };
         let approx = symbols.iter().filter(|s| is_chunkable_kind(s.kind)).count();
         let mut out = Vec::with_capacity(approx);
+        let line_index = LineIndex::new(source);
         for sym in symbols.iter().filter(|s| is_chunkable_kind(s.kind)) {
-            if let Some(c) = self.make_chunk(sym, source) {
+            if let Some(c) = self.make_chunk(sym, source, &line_index) {
                 out.push(c);
             }
         }
@@ -94,17 +95,17 @@ impl<'a> DslChunker<'a> {
         fallback.map(|i| i as u16)
     }
 
-    fn make_chunk<'s>(&self, sym: &zti_ts_core::types::Symbol, source: &'s str) -> Option<Chunk<'s>> {
+    fn make_chunk<'s>(&self, sym: &zti_ts_core::types::Symbol, source: &'s str, line_index: &LineIndex) -> Option<Chunk<'s>> {
         if sym.line == 0 || sym.end_line < sym.line {
             return None;
         }
         let doc_start = if sym.doc.is_some() {
-            find_doc_start_line(source, sym.line)
+            find_doc_start_line(source, sym.line, line_index)
         } else {
             sym.line
         };
 
-        let range = line_byte_range(source, doc_start, sym.end_line);
+        let range = line_index.byte_range(doc_start, sym.end_line);
         if range.is_empty() {
             return None;
         }
@@ -139,11 +140,11 @@ impl<'a> DslChunker<'a> {
 /// starts. Regular `//` comments do NOT match, so a file-top license block
 /// is naturally excluded. Picks up Rust `///` / `//!` / `/** */` / `*` /
 /// `#[…]` and TS/Dart decorators starting with `@`.
-pub(crate) fn find_doc_start_line(source: &str, sym_line: u32) -> u32 {
+pub(crate) fn find_doc_start_line(source: &str, sym_line: u32, line_index: &LineIndex) -> u32 {
     if sym_line <= 1 {
         return sym_line;
     }
-    let range = line_byte_range(source, 1, sym_line - 1);
+    let range = line_index.byte_range(1, sym_line - 1);
     let prefix = &source[range];
     let mut back = 0u32;
     for line in prefix.rsplit('\n') {
@@ -220,22 +221,19 @@ mod tests {
 
     #[test]
     fn find_doc_start_extends_past_docs_and_attrs() {
-        // Signature line for `pub fn bytes_encrypt` is line 9.
         let src = rust_source_with_doc();
-        let start = find_doc_start_line(src, 9);
-        // Walks back over #[inline] (line 8), `///` (lines 6, 7) — three lines.
+        let idx = LineIndex::new(src);
+        let start = find_doc_start_line(src, 9, &idx);
         assert_eq!(start, 6);
     }
 
     #[test]
     fn find_doc_start_does_not_swallow_regular_line_comments() {
-        // Single-`//` lines at the top of the file (license) must NOT be
-        // included in the doc range.
         let src = "// Copyright X\n\
                    // Licensed Y\n\
                    pub fn foo() {}\n";
-        // Signature at line 3, no doc above — start should equal sym_line.
-        assert_eq!(find_doc_start_line(src, 3), 3);
+        let idx = LineIndex::new(src);
+        assert_eq!(find_doc_start_line(src, 3, &idx), 3);
     }
 
     #[test]
