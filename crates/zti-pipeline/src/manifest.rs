@@ -29,6 +29,59 @@ fn is_non_code_asset(name: &str) -> bool {
     NON_CODE_ASSET_EXTS.iter().any(|ext| name.ends_with(ext))
 }
 
+const PIPELINE_SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "vendor",
+    "third_party",
+    "Pods",
+    ".pub-cache",
+    ".dart_tool",
+    "target",
+    "DerivedData",
+    ".gradle",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "venv",
+    ".venv",
+    "env",
+    "virtualenv",
+    ".terraform",
+    "_build",
+    "deps",
+];
+
+fn is_generated_file(name: &str) -> bool {
+    if name.starts_with("frb_generated") {
+        return true;
+    }
+    if name.ends_with(".freezed.dart") || name.ends_with(".g.dart") {
+        return true;
+    }
+    if name.ends_with(".pb.dart")
+        || name.ends_with(".pbjson.dart")
+        || name.ends_with(".pbserver.dart")
+        || name.ends_with(".grpc.dart")
+    {
+        return true;
+    }
+    if name.ends_with(".gen.dart")
+        || name.ends_with(".gen.ts")
+        || name.ends_with(".generated.dart")
+        || name.ends_with(".generated.ts")
+    {
+        return true;
+    }
+    if name.ends_with(".min.js") || name.ends_with(".min.css") {
+        return true;
+    }
+    if name.ends_with(".arb") || name.ends_with(".mo") {
+        return true;
+    }
+    false
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Code(Language),
@@ -64,10 +117,43 @@ pub struct Changes {
     pub unchanged: Vec<String>,
 }
 
+fn is_platform_scaffolding(rel_path: &str, has_lib_or_src: bool) -> bool {
+    if !has_lib_or_src {
+        return false;
+    }
+    rel_path.starts_with("ios/")
+        || rel_path.starts_with("android/")
+        || rel_path.starts_with("macos/")
+        || rel_path.starts_with("linux/")
+        || rel_path.starts_with("windows/")
+        || rel_path.starts_with("web/")
+        || rel_path.starts_with("rust_builder/")
+        || rel_path.starts_with("fastlane/")
+        || rel_path.starts_with("test/")
+        || rel_path.starts_with("tests/")
+        || rel_path.starts_with("integration_test/")
+        || rel_path.starts_with("__tests__/")
+        || rel_path.starts_with("spec/")
+        || rel_path.starts_with("e2e/")
+}
+
 pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
     let mut map = HashMap::new();
 
-    let walker = WalkBuilder::new(root).hidden(true).git_ignore(true).build();
+    let walker = WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .filter_entry(|entry| {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                let name = entry.file_name().to_string_lossy();
+                !PIPELINE_SKIP_DIRS.contains(&name.as_ref())
+            } else {
+                true
+            }
+        })
+        .build();
+
+    let has_lib_or_src = root.join("lib").exists() || root.join("src").exists();
 
     for entry in walker {
         let entry = match entry {
@@ -79,15 +165,13 @@ pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
             continue;
         }
 
-        // Skip dotfiles (hidden on Unix), manifests, lock files, licenses,
-        // and non-code assets. Dotfiles are typically generated artifacts,
-        // injected scripts, or config files that add noise to the index.
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if file_name.starts_with('.')
             || MANIFEST_NAMES.contains(&file_name)
             || is_lock_file(file_name)
             || is_license_file(file_name)
             || is_non_code_asset(file_name)
+            || is_generated_file(file_name)
         {
             continue;
         }
@@ -105,6 +189,10 @@ pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
             .unwrap_or(path)
             .display()
             .to_string();
+
+        if is_platform_scaffolding(&rel, has_lib_or_src) {
+            continue;
+        }
 
         let contents = match std::fs::read_to_string(path) {
             Ok(s) => s,
