@@ -696,4 +696,99 @@ mod tests {
         let result = filter_files(&files, "/p", None, None).unwrap();
         assert_eq!(result, vec![0u16, 1u16]);
     }
+
+    #[test]
+    fn resolve_name_finds_unique_bare_name() {
+        let symbols = vec![
+            sym(0, "parse", "module_a::parse", 0),
+            sym(1, "unique_fn", "module_a::unique_fn", 0),
+        ];
+        let files = vec![file_entry(0, "/p/a.rs")];
+        let index = ProjectIndex {
+            symbols,
+            edges: Vec::new(),
+            files,
+            qualified_map: build_qualified_map(&[], &[]),
+            reverse_edges: std::collections::HashMap::new(),
+            forward_edges: std::collections::HashMap::new(),
+            root: "/p".into(),
+            manifest_paths: Vec::new(),
+        };
+        // unique_fn is absent from qualified_map (not in build_qualified_map),
+        // but resolve_name should scan and find it.
+        match crate::search_dep::resolve_name(&index, "unique_fn") {
+            crate::search_dep::NameMatch::Found(id) => assert_eq!(id, 1),
+            other => panic!("expected Found, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolve_name_returns_ambiguous_for_duplicated_bare_name() {
+        let symbols = vec![
+            sym(0, "parse", "parse", 0),
+            sym(1, "parse", "parse", 1),
+        ];
+        let files = vec![file_entry(0, "/p/a.rs"), file_entry(1, "/p/b.rs")];
+        let index = ProjectIndex {
+            symbols,
+            edges: Vec::new(),
+            files,
+            qualified_map: build_qualified_map(&[], &[]),
+            reverse_edges: std::collections::HashMap::new(),
+            forward_edges: std::collections::HashMap::new(),
+            root: "/p".into(),
+            manifest_paths: Vec::new(),
+        };
+        match crate::search_dep::resolve_name(&index, "parse") {
+            crate::search_dep::NameMatch::Ambiguous(ids) => assert_eq!(ids.len(), 2),
+            other => panic!("expected Ambiguous, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolve_name_returns_not_found_for_unknown() {
+        let symbols = vec![sym(0, "existing", "existing", 0)];
+        let files = vec![file_entry(0, "/p/a.rs")];
+        let index = ProjectIndex {
+            symbols,
+            edges: Vec::new(),
+            files,
+            qualified_map: build_qualified_map(&[], &[]),
+            reverse_edges: std::collections::HashMap::new(),
+            forward_edges: std::collections::HashMap::new(),
+            root: "/p".into(),
+            manifest_paths: Vec::new(),
+        };
+        match crate::search_dep::resolve_name(&index, "nonexistent") {
+            crate::search_dep::NameMatch::NotFound => {}
+            other => panic!("expected NotFound, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolve_name_hits_qualified_map_fast_path() {
+        let symbols = vec![sym(0, "Runtime", "tokio::runtime::Runtime", 0)];
+        let files = vec![file_entry(0, "/p/lib.rs")];
+        let mut qm = std::collections::HashMap::new();
+        qm.insert("tokio::runtime::Runtime".to_string(), 0);
+        qm.insert("Runtime".to_string(), 0);
+        let index = ProjectIndex {
+            symbols,
+            edges: Vec::new(),
+            files,
+            qualified_map: qm,
+            reverse_edges: std::collections::HashMap::new(),
+            forward_edges: std::collections::HashMap::new(),
+            root: "/p".into(),
+            manifest_paths: Vec::new(),
+        };
+        match crate::search_dep::resolve_name(&index, "tokio::runtime::Runtime") {
+            crate::search_dep::NameMatch::Found(id) => assert_eq!(id, 0),
+            other => panic!("expected Found, got {:?}", other),
+        }
+        match crate::search_dep::resolve_name(&index, "Runtime") {
+            crate::search_dep::NameMatch::Found(id) => assert_eq!(id, 0),
+            other => panic!("expected Found, got {:?}", other),
+        }
+    }
 }

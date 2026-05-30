@@ -3,6 +3,7 @@ pub mod chunking;
 pub mod index;
 pub mod model;
 pub mod render;
+pub mod search_dep;
 
 pub use batch::resolve_symbol_bodies;
 pub use chunking::{Chunk, DslChunker, ChunkStrategy};
@@ -12,5 +13,6 @@ pub use index::{
 };
 pub use model::{FileEntry, ProjectIndex};
 pub use render::tree::AsciiTreeRenderer;
+pub use search_dep::{render_symbol_overview, resolve_name, NameMatch};
 pub use zti_tree_sitter::{Language, detect_from_path};
 pub use zti_ts_core::types::{Edge, EdgeKind, Kind, Symbol, Target};

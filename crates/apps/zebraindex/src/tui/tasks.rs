@@ -467,16 +467,16 @@ pub async fn do_index(
                     search_method: ctx.search_method.map(|m| m.as_str().to_string()),
                 }),
                 |frame| {
-                    if let Response::IndexProgress(p) = frame {
-                        if tx_p.try_send(app::AppMessage::IndexProgress {
+                    if let Response::IndexProgress(p) = frame
+                        && tx_p.try_send(app::AppMessage::IndexProgress {
                             phase: p.phase,
                             current: p.current,
                             total: p.total,
                             message: p.message,
                             is_reindex: matches!(mode, IndexMode::Reindex | IndexMode::ForceReindex),
-                        }).is_err() {
-                            tracing::warn!("dropped index progress frame");
-                        }
+                        }).is_err()
+                    {
+                        tracing::warn!("dropped index progress frame");
                     }
                 },
             )

@@ -111,5 +111,6 @@ async fn handle_request(req: Request, state: &DaemonState) -> Response {
         Request::DslSymbolBodies(sb) => {
             crate::handlers::dsl_symbol_bodies::handle(&sb, state).await
         }
+        Request::DslSearchDep(sd) => crate::handlers::dsl_search_dep::handle(&sd, state).await,
     }
 }

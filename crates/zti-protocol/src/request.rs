@@ -114,6 +114,14 @@ pub struct SymbolBodiesReq {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchDepReq {
+    pub project_root: String,
+    pub name: String,
+    pub depth: Option<usize>,
+    pub max_tokens: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
     Handshake(HandshakeReq),
     Index(IndexReq),
@@ -130,4 +138,5 @@ pub enum Request {
     DslDepTree(DepTreeReq),
     DslSymbolBody(SymbolBodyReq),
     DslSymbolBodies(SymbolBodiesReq),
+    DslSearchDep(SearchDepReq),
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -62,11 +62,140 @@ pub enum DslCommands {
         #[arg(short, long, num_args(1..), help = "Symbol IDs")]
         ids: Vec<u32>,
     },
+    #[command(about = "Show interface + call graph + body for a named symbol")]
+    SearchDep {
+        #[arg(short, long, help = "Symbol/type/function name (bare or qualified)")]
+        name: String,
+        #[arg(short, long, help = "Dependency/crate name to search in (resolves path from cargo/pub/npm caches)")]
+        lib: Option<String>,
+        #[arg(long, default_value = "2", help = "Call-graph depth")]
+        depth: usize,
+    },
     #[command(about = "Sequential chunk trace to diagnose chunk-generation hangs")]
     ChunkTrace,
 }
 
+fn dep_version_from_lock(root: &Path, lib: &str) -> Option<String> {
+    let lock = root.join("Cargo.lock");
+    if lock.is_file() {
+        let content = std::fs::read_to_string(lock).ok()?;
+        if let Ok(toml) = content.parse::<toml::Value>()
+            && let Some(packages) = toml.get("package").and_then(|v| v.as_array())
+        {
+            for pkg in packages {
+                if pkg.get("name").and_then(|v| v.as_str()) == Some(lib) {
+                    return pkg.get("version").and_then(|v| v.as_str()).map(String::from);
+                }
+            }
+        }
+    }
+
+    let pkg = root.join("package.json");
+    if pkg.is_file()
+        && let Ok(content) = std::fs::read_to_string(&pkg)
+        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
+    {
+        if let Some(deps) = json.get("dependencies").and_then(|d| d.get(lib)) {
+            return deps.as_str().map(|s| s.trim_start_matches('^').to_string());
+        }
+        if let Some(deps) = json.get("devDependencies").and_then(|d| d.get(lib)) {
+            return deps.as_str().map(|s| s.trim_start_matches('^').to_string());
+        }
+    }
+
+    None
+}
+
+fn resolve_dep_path(root: &Path, lib: &str) -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok();
+    let want_version = dep_version_from_lock(root, lib);
+
+    // Project-local deps (JS/TS/Solidity npm, Foundry git submodules)
+    let locals = [
+        root.join("node_modules").join(lib),
+        root.join("lib").join(lib),
+    ];
+    for p in locals {
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+
+    // Cargo registry: ~/.cargo/registry/src/<hash>/<crate>-<version>/
+    if let Some(ref h) = home {
+        let cargo_dir = Path::new(h).join(".cargo/registry/src");
+        if let Ok(entries) = std::fs::read_dir(&cargo_dir) {
+            let prefix = format!("{lib}-");
+            let mut best: Option<PathBuf> = None;
+            for entry in entries.flatten() {
+                if let Ok(sub) = std::fs::read_dir(entry.path()) {
+                    for dep in sub.flatten() {
+                        let fname_os = dep.file_name();
+                        let fname = fname_os.to_string_lossy();
+                        if !fname.starts_with(&prefix) || !dep.path().is_dir() {
+                            continue;
+                        }
+                        if let Some(ref ver) = want_version {
+                            let expected = format!("{lib}-{ver}");
+                            if fname.as_ref() == expected {
+                                return Some(dep.path());
+                            }
+                        }
+                        if best.as_ref().is_none_or(|b| dep.path() > *b) {
+                            best = Some(dep.path());
+                        }
+                    }
+                }
+            }
+            if let Some(p) = best {
+                return Some(p);
+            }
+        }
+    }
+
+    // pub.dev: ~/.pub-cache/hosted/pub.dev/<name>-*/
+    if let Some(ref h) = home {
+        let pub_dir = Path::new(h).join(".pub-cache/hosted/pub.dev");
+        if let Ok(entries) = std::fs::read_dir(&pub_dir) {
+            for entry in entries.flatten() {
+                let name_os = entry.file_name();
+                let name = name_os.to_string_lossy();
+                if name.starts_with(lib) && entry.path().is_dir() {
+                    return Some(entry.path());
+                }
+            }
+        }
+    }
+
+    None
+}
+
 pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
+    // Handle SearchDep with --lib early: resolve dep path, build its index, search.
+    if let DslCommands::SearchDep {
+        name: ref name_lib,
+        lib: Some(ref lib_name),
+        depth,
+    } = command
+    {
+        let dep_root = resolve_dep_path(root, lib_name).ok_or_else(|| {
+            anyhow::anyhow!("dependency '{lib_name}' not found in cargo registry, npm, or pub cache")
+        })?;
+        let index = zti_dsl::build_index(dep_root.to_string_lossy().as_ref())?;
+        match zti_dsl::resolve_name(&index, name_lib) {
+            zti_dsl::NameMatch::Found(id) => {
+                print!("{}", zti_dsl::render_symbol_overview(&index, id, depth, 6000))
+            }
+            zti_dsl::NameMatch::Ambiguous(ref ids) => {
+                print!("{}", zti_dsl::search_dep::render_candidates(&index, ids))
+            }
+            zti_dsl::NameMatch::NotFound => {
+                return Err(anyhow::anyhow!("no symbol '{name_lib}' in '{lib_name}'"))
+            }
+        }
+        return Ok(());
+    }
+
     let canonical = root.canonicalize()?;
     let root_cow = canonical.to_string_lossy();
 
@@ -145,6 +274,19 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
             let entries = zti_dsl::resolve_symbol_bodies(&index, &ids);
             for entry in &entries {
                 println!("{}\n---", entry);
+            }
+        }
+        DslCommands::SearchDep { ref name, depth, .. } => {
+            match zti_dsl::resolve_name(&index, name) {
+                zti_dsl::NameMatch::Found(id) => {
+                    print!("{}", zti_dsl::render_symbol_overview(&index, id, depth, 6000))
+                }
+                zti_dsl::NameMatch::Ambiguous(ref ids) => {
+                    print!("{}", zti_dsl::search_dep::render_candidates(&index, ids))
+                }
+                zti_dsl::NameMatch::NotFound => {
+                    return Err(anyhow::anyhow!("no symbol named '{name}'"))
+                }
             }
         }
         DslCommands::ChunkTrace => {

@@ -11,7 +11,7 @@ use rmcp::{ErrorData, ServiceExt, tool};
 use tokio::sync::Mutex;
 use zti_ipc_client::Client;
 use zti_protocol::format_search_results;
-use zti_protocol::request::{DoctorReq, Request, SearchMode, SearchReq};
+use zti_protocol::request::{DoctorReq, Request, SearchDepReq, SearchMode, SearchReq};
 use zti_protocol::response::{CheckStatus, Response, SearchResults};
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -53,6 +53,19 @@ pub struct SearchPassageParams {
     pub project: Option<String>,
     #[schemars(description = "Maximum results to return (default: 5).")]
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchDepParams {
+    #[schemars(description = "Symbol, type, or function name. Bare (\"Runtime\"), file-scoped \
+        (\"runtime::Runtime\"), or fully-qualified (\"tokio::runtime::Runtime\").")]
+    pub name: String,
+    #[schemars(description = "Project name, index, or root path. Auto-resolved when omitted. To learn \
+        an external dependency, index its source as a project first, then target it here.")]
+    pub project: Option<String>,
+    #[schemars(description = "Call-graph depth for callers/callees (default 2).")]
+    pub depth: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -172,6 +185,22 @@ impl ZebraMcpServer {
             out.push_str(HINT_CODE_IN_CONTEXT);
         }
         Ok(ok_text(out))
+    }
+
+    async fn send_search_dep(&self, req: SearchDepReq) -> Result<String, ErrorData> {
+        let mut guard = self.ensure_daemon().await?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| internal_err("daemon not initialized".into()))?;
+        match client.request(Request::DslSearchDep(req)).await {
+            Ok(Response::DslSearchDep(Ok(body))) => Ok(body.text),
+            Ok(Response::DslSearchDep(Err(e))) => Err(internal_err(e.message)),
+            Ok(other) => Err(internal_err(format!("unexpected response: {other:?}"))),
+            Err(e) => {
+                *guard = None;
+                Err(internal_err(format!("IPC lost, retry: {e}")))
+            }
+        }
     }
 }
 
@@ -345,6 +374,31 @@ impl ZebraMcpServer {
     }
 
     #[tool(
+        name = "searchDep",
+        description = "Learn an unfamiliar symbol, type, or dependency interface in one call. \
+            Given a name, returns its signature + doc, its call graph (callees and callers), and its \
+            source body — token-budgeted, no file reads. To study an external library, index its \
+            source as a project first, then pass its name here. Best used when deep-diving an API."
+    )]
+    async fn search_dep(
+        &self,
+        Parameters(params): Parameters<SearchDepParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let project_root = zti_store::resolve_project(params.project.as_deref())
+            .await
+            .map_err(|e| internal_err(format!("{e}")))?;
+        let req = SearchDepReq {
+            project_root,
+            name: params.name,
+            depth: params.depth,
+            max_tokens: None,
+        };
+        let mut out = self.send_search_dep(req).await?;
+        out.push_str(HINT_CODE_IN_CONTEXT);
+        Ok(ok_text(out))
+    }
+
+    #[tool(
         name = "projectList",
         description = "Lists all indexed projects with root paths and stats. Call this when you need the `project` parameter for other tools and are unsure which project to target."
     )]
@@ -412,7 +466,15 @@ impl rmcp::ServerHandler for ZebraMcpServer {
               * Results contain complete source code — use it directly without \
               re-reading files.\n\
               * If the fast index misses results, exhaustive search runs \
-              automatically.",
+              automatically.\n\
+              \n\
+              ## Learning a Dependency\n\
+              \n\
+              To learn an unfamiliar library, first index its source as a project, \
+              then call `searchDep(\"symbol_name\")`. It returns the interface, call \
+              graph, and body of any symbol — no file reads needed. For example: \
+              `searchDep(name: \"tokio::runtime::Runtime\")` after indexing a tokio \
+              checkout.",
         );
         instructions.push_str(&self.indexed_projects_roots);
         info.instructions = Some(instructions);

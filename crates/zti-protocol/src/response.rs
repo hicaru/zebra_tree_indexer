@@ -172,6 +172,11 @@ pub struct SymbolBodiesBody {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchDepBody {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Response {
     Handshake(HandshakeResp),
     Index(Result<IndexStats, ErrorBody>),
@@ -189,4 +194,5 @@ pub enum Response {
     DslDepTree(Result<DepTreeBody, ErrorBody>),
     DslSymbolBody(Result<SymbolBodyBody, ErrorBody>),
     DslSymbolBodies(Result<SymbolBodiesBody, ErrorBody>),
+    DslSearchDep(Result<SearchDepBody, ErrorBody>),
 }
