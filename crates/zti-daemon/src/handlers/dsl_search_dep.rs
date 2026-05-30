@@ -9,7 +9,6 @@ pub async fn handle(req: &SearchDepReq, state: &DaemonState) -> Response {
     let project_root = req.project_root.clone();
     let name = req.name.clone();
     let max_tokens = req.max_tokens.unwrap_or(6000);
-
     let depth = req.depth.unwrap_or(2);
     let result = with_project(state, &req.project_root, |project| async move {
         let index = ensure_dsl_index(&project, &project_root).await?;

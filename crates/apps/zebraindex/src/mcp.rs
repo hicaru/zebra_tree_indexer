@@ -58,8 +58,9 @@ pub struct SearchPassageParams {
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchDepParams {
-    #[schemars(description = "Symbol, type, or function name. Bare (\"Runtime\"), file-scoped \
-        (\"runtime::Runtime\"), or fully-qualified (\"tokio::runtime::Runtime\").")]
+    #[schemars(description = "Symbol, type, or function name. Bare (\"connect\"), scoped \
+        (\"network::connect\"), or fully-qualified (\"myapp::network::connect\"). Use `::` \
+        separators in any language.")]
     pub name: String,
     #[schemars(description = "Project name, index, or root path. Auto-resolved when omitted. To learn \
         an external dependency, index its source as a project first, then target it here.")]
@@ -375,10 +376,14 @@ impl ZebraMcpServer {
 
     #[tool(
         name = "searchDep",
-        description = "Learn an unfamiliar symbol, type, or dependency interface in one call. \
-            Given a name, returns its signature + doc, its call graph (callees and callers), and its \
-            source body — token-budgeted, no file reads. To study an external library, index its \
-            source as a project first, then pass its name here. Best used when deep-diving an API."
+        description = "Look up a symbol by exact name and get its definition with call graph in one \
+            call: kind, location, doc summary, callers and callees (to `depth`), and full source \
+            body — token-budgeted, no file reads. Use when you already know the name (type, \
+            function, method, or a dependency's interface) and want its implementation and how it \
+            connects. For conceptual/fuzzy search use searchQuery; for find-by-example use \
+            searchPassage. Qualify with `::` in any language (e.g. \"runtime::Runtime\"). An \
+            ambiguous bare name returns a candidate list to retry with a qualified path. Only \
+            indexed projects are searchable."
     )]
     async fn search_dep(
         &self,
@@ -470,11 +475,8 @@ impl rmcp::ServerHandler for ZebraMcpServer {
               \n\
               ## Learning a Dependency\n\
               \n\
-              To learn an unfamiliar library, first index its source as a project, \
-              then call `searchDep(\"symbol_name\")`. It returns the interface, call \
-              graph, and body of any symbol — no file reads needed. For example: \
-              `searchDep(name: \"tokio::runtime::Runtime\")` after indexing a tokio \
-              checkout.",
+              To inspect an external library, index its source as a project, \
+              then use `searchDep` on any symbol.",
         );
         instructions.push_str(&self.indexed_projects_roots);
         info.instructions = Some(instructions);

@@ -62,7 +62,7 @@ pub enum DslCommands {
         #[arg(short, long, num_args(1..), help = "Symbol IDs")]
         ids: Vec<u32>,
     },
-    #[command(about = "Show interface + call graph + body for a named symbol")]
+    #[command(about = "Look up a symbol by name: kind, location, doc, callers/callees, body")]
     SearchDep {
         #[arg(short, long, help = "Symbol/type/function name (bare or qualified)")]
         name: String,
