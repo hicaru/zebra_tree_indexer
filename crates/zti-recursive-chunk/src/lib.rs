@@ -17,12 +17,6 @@ pub struct SubChunk {
 
 use crate::merge::{chunk_text, chunk_text_with_ts};
 
-/// Sources larger than this skip tree-sitter parsing and use regex-only
-/// splitting. Tree-sitter becomes extremely expensive (100ms+) on large
-/// bodies and rarely adds value over regex for chunk-boundary detection
-/// when the text is already hundreds of kilobytes.
-const TS_SOURCE_SIZE_LIMIT: usize = 90_000;
-
 pub fn split_text(
     source: &str,
     config: &ChunkConfig,
@@ -32,9 +26,7 @@ pub fn split_text(
     let min_chunk = config.min_chunk_size;
     let overlap = config.chunk_overlap.min(min_chunk);
 
-    if let Some(ts_lang) = lang
-        && source.len() <= TS_SOURCE_SIZE_LIMIT
-    {
+    if let Some(ts_lang) = lang {
         let mut parser = tree_sitter::Parser::new();
         if parser.set_language(ts_lang).is_err() {
             // fall through to regex

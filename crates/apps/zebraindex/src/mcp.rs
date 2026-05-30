@@ -28,6 +28,7 @@ pub struct FileTreeParams {
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchQueryParams {
     #[schemars(
         description = "What you're looking for, in natural language. Use descriptive phrases: \"polynomial inversion\" not \"invert\"."
@@ -39,9 +40,18 @@ pub struct SearchQueryParams {
     pub project: Option<String>,
     #[schemars(description = "Maximum results to return (default: 5).")]
     pub limit: Option<usize>,
+    #[schemars(
+        description = "Glob pattern to filter files, e.g. \"**/*.rs\" or \"src/**/*.ts\"."
+    )]
+    pub path_glob: Option<String>,
+    #[schemars(
+        description = "Language filter, e.g. [\"rust\", \"dart\"]."
+    )]
+    pub languages: Option<Vec<String>>,
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchPassageParams {
     #[schemars(
         description = "A code snippet, error message, or descriptive paragraph to find similar implementations."
@@ -53,6 +63,14 @@ pub struct SearchPassageParams {
     pub project: Option<String>,
     #[schemars(description = "Maximum results to return (default: 5).")]
     pub limit: Option<usize>,
+    #[schemars(
+        description = "Glob pattern to filter files, e.g. \"**/*.rs\" or \"src/**/*.ts\"."
+    )]
+    pub path_glob: Option<String>,
+    #[schemars(
+        description = "Language filter, e.g. [\"rust\", \"dart\"]."
+    )]
+    pub languages: Option<Vec<String>>,
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -138,6 +156,8 @@ impl ZebraMcpServer {
         text: String,
         project: Option<&str>,
         limit: Option<usize>,
+        path_glob: Option<String>,
+        languages: Option<Vec<String>>,
         mode: SearchMode,
     ) -> Result<CallToolResult, ErrorData> {
         let project_root = zti_store::resolve_project(project)
@@ -150,8 +170,8 @@ impl ZebraMcpServer {
             query: text.clone(),
             limit,
             offset: None,
-            languages: None,
-            path_glob: None,
+            languages: languages.clone(),
+            path_glob: path_glob.clone(),
             refresh_index: false,
             exhaustive: false,
             mode,
@@ -170,8 +190,8 @@ impl ZebraMcpServer {
             query: text,
             limit,
             offset: None,
-            languages: None,
-            path_glob: None,
+            languages,
+            path_glob,
             refresh_index: false,
             exhaustive: true,
             mode,
@@ -306,6 +326,8 @@ impl ZebraMcpServer {
             params.text,
             params.project.as_deref(),
             params.limit,
+            params.path_glob,
+            params.languages,
             SearchMode::Query,
         )
         .await
@@ -323,6 +345,8 @@ impl ZebraMcpServer {
             params.text,
             params.project.as_deref(),
             params.limit,
+            params.path_glob,
+            params.languages,
             SearchMode::Passage,
         )
         .await
