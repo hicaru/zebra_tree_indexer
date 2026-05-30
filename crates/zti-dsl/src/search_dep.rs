@@ -82,7 +82,7 @@ pub fn render_symbol_overview(
         let body = trim_tree_header(&callers);
         if !body.is_empty() {
             let _ = writeln!(out, "  -- callers:");
-            let _ = write!(out, "{body}");
+            let _ = writeln!(out, "{body}");
         }
     }
 
@@ -91,7 +91,7 @@ pub fn render_symbol_overview(
         let body = trim_tree_header(&callees);
         if !body.is_empty() {
             let _ = writeln!(out, "  -- callees:");
-            let _ = write!(out, "{body}");
+            let _ = writeln!(out, "{body}");
         }
     }
 

@@ -174,7 +174,6 @@ pub fn build_index(root: &str) -> Result<ProjectIndex> {
     // (full_path, content, language)
     let mut loaded: Vec<(String, String, Language)> = Vec::new();
 
-    let lang_skip_dirs = all_lang_skip_dirs();
     let walker = WalkBuilder::new(&root_path)
         .hidden(false)
         .git_ignore(true)
@@ -183,13 +182,10 @@ pub fn build_index(root: &str) -> Result<ProjectIndex> {
             if name.starts_with('.') {
                 return false;
             }
-            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-                if SKIP_DIRS.contains(&name.as_ref()) {
-                    return false;
-                }
-                if lang_skip_dirs.contains(&name.as_ref()) {
-                    return false;
-                }
+            if entry.file_type().is_some_and(|ft| ft.is_dir())
+                && SKIP_DIRS.contains(&name.as_ref())
+            {
+                return false;
             }
             true
         })
@@ -205,6 +201,14 @@ pub fn build_index(root: &str) -> Result<ProjectIndex> {
             Some(l) => l,
             None => continue,
         };
+        // Per-file: skip if its language's extra_skip_dirs match any path component
+        let skip_dirs = frontend_for(lang).config().extra_skip_dirs;
+        if !skip_dirs.is_empty()
+            && let Ok(rel) = path.strip_prefix(&root_path)
+            && rel.to_string_lossy().split('/').any(|c| skip_dirs.contains(&c))
+        {
+            continue;
+        }
         let path_str = path.to_string_lossy().to_string();
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
