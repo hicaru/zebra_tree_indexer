@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use arrow::array::{
-    FixedSizeBinaryArray, RecordBatch, RecordBatchIterator, StringArray, UInt32Array, UInt64Array,
+    FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array, UInt64Array,
 };
 use arrow_array::{Array, ListArray};
 use futures::StreamExt;
@@ -77,16 +77,7 @@ impl ProjectsTable {
     }
 
     pub async fn upsert(&self, batch: RecordBatch) -> Result<()> {
-        let schema = batch.schema();
-        let reader: Box<dyn arrow_array::RecordBatchReader + Send> =
-            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
-
-        let mut builder = self.table.merge_insert(&["project_id"]);
-        builder.when_matched_update_all(None);
-        builder.when_not_matched_insert_all();
-        builder.execute(reader).await?;
-
-        Ok(())
+        crate::upsert::upsert_batch(&self.table, "project_id", batch).await
     }
 
     pub async fn len(&self) -> Result<usize> {

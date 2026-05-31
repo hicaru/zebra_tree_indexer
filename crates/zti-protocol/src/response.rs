@@ -78,7 +78,7 @@ pub struct SearchHit {
     pub score: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchResults {
     pub hits: Vec<SearchHit>,
     pub appendix: Vec<SearchHit>,

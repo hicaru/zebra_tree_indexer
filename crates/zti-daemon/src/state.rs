@@ -61,7 +61,7 @@ impl DaemonState {
             loading_model: RwLock::new(None),
             hardware,
             model_dtype,
-            registry: RwLock::new(HashMap::new()),
+            registry: RwLock::new(HashMap::with_capacity(4)),
             ann: Arc::new(AnnCache::default()),
             started_at_ns,
             started_at: Instant::now(),
@@ -73,6 +73,10 @@ impl DaemonState {
 
     pub fn primary_engine(&self) -> Arc<EmbedEngine> {
         Arc::clone(&self.primary_engine)
+    }
+
+    pub fn device_str(&self) -> &str {
+        self.hardware.device.as_str()
     }
 
     pub async fn engine_for_model(&self, model_id: &str) -> anyhow::Result<Arc<EmbedEngine>> {

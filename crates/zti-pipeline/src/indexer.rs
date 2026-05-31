@@ -32,7 +32,7 @@ const BPT_SAMPLE_BYTES: usize = 64 * 1024;
 const MIN_CHUNK_FLOOR: usize = 512;
 
 use crate::manifest::{FileSnapshot, SourceKind, detect_changes, walk_source_files};
-use crate::progress::ProgressReporter;
+use crate::progress::{ProgressReporter, Reporter};
 
 #[derive(Debug, Clone, Copy)]
 struct AdaptiveChunkSizing {
@@ -137,7 +137,7 @@ pub async fn index_project(
     root: &Path,
     engine: &EmbedEngine,
     db: &Db,
-    reporter: &dyn ProgressReporter,
+    reporter: &Reporter,
     override_method: Option<zti_ann::SearchMethod>,
     cancel: &AtomicBool,
     refresh: bool,

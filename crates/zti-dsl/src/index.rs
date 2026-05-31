@@ -112,11 +112,13 @@ where
     I: IntoIterator<Item = SourceFile<'a>>,
     F: Fn(u32),
 {
-    let mut files: Vec<FileEntry> = Vec::new();
+    let src_iter = sources.into_iter();
+    let (lo, _) = src_iter.size_hint();
+    let mut files: Vec<FileEntry> = Vec::with_capacity(lo);
     let mut all_symbols: Vec<zti_ts_core::types::Symbol> = Vec::new();
     let mut all_edges: Vec<zti_ts_core::types::Edge> = Vec::new();
 
-    for (i, src) in sources.into_iter().enumerate() {
+    for (i, src) in src_iter.enumerate() {
         let SourceFile {
             full_path,
             content,
@@ -172,7 +174,7 @@ pub fn build_index(root: &str) -> Result<ProjectIndex> {
     let root_path = Path::new(root).canonicalize()?;
 
     // (full_path, content, language)
-    let mut loaded: Vec<(String, String, Language)> = Vec::new();
+    let mut loaded: Vec<(String, String, Language)> = Vec::with_capacity(64);
 
     let walker = WalkBuilder::new(&root_path)
         .hidden(false)
@@ -245,9 +247,9 @@ fn build_qualified_map(
     files: &[FileEntry],
     root: &str,
 ) -> HashMap<String, u32> {
-    let mut map = HashMap::new();
+    let mut map = HashMap::with_capacity(symbols.len());
 
-    let mut name_counts: HashMap<&str, usize> = HashMap::new();
+    let mut name_counts: HashMap<&str, usize> = HashMap::with_capacity(symbols.len());
     for sym in symbols {
         *name_counts.entry(sym.name.as_str()).or_insert(0) += 1;
     }
@@ -381,12 +383,15 @@ fn resolve_in_same_file(
 fn build_reverse_edges(
     edges: &[zti_ts_core::types::Edge],
 ) -> HashMap<u32, Vec<zti_ts_core::types::Edge>> {
-    let mut reverse: HashMap<u32, Vec<zti_ts_core::types::Edge>> = HashMap::new();
+    let mut reverse: HashMap<u32, Vec<zti_ts_core::types::Edge>> = HashMap::with_capacity(edges.len());
     for edge in edges {
         if let zti_ts_core::types::Target::Resolved(target_id) = edge.to {
-            let mut reverse_edge = edge.clone();
-            reverse_edge.from = target_id;
-            reverse_edge.to = zti_ts_core::types::Target::Resolved(edge.from);
+            let reverse_edge = zti_ts_core::types::Edge {
+                from: target_id,
+                to: zti_ts_core::types::Target::Resolved(edge.from),
+                kind: edge.kind,
+                line: edge.line,
+            };
             reverse.entry(target_id).or_default().push(reverse_edge);
         }
     }
@@ -396,7 +401,7 @@ fn build_reverse_edges(
 fn build_forward_edges(
     edges: &[zti_ts_core::types::Edge],
 ) -> HashMap<u32, Vec<zti_ts_core::types::Edge>> {
-    let mut forward: HashMap<u32, Vec<zti_ts_core::types::Edge>> = HashMap::new();
+    let mut forward: HashMap<u32, Vec<zti_ts_core::types::Edge>> = HashMap::with_capacity(edges.len());
     for edge in edges {
         forward.entry(edge.from).or_default().push(edge.clone());
     }

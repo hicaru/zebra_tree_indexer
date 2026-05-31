@@ -27,7 +27,7 @@ impl Default for IndicatifReporter {
 
 impl ProgressReporter for IndicatifReporter {
     fn start(&self, total: u64) {
-        let mut guard = self.bar.lock().unwrap();
+        let mut guard = self.bar.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(old) = guard.take() {
             old.finish_and_clear();
         }
@@ -42,21 +42,21 @@ impl ProgressReporter for IndicatifReporter {
     }
 
     fn set_phase(&self, _phase: zti_protocol::response::IndexPhase, _current: u64, _total: u64, message: &str) {
-        let guard = self.bar.lock().unwrap();
+        let guard = self.bar.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(bar) = guard.as_ref() {
             bar.set_message(message.to_string());
         }
     }
 
     fn inc(&self, n: u64) {
-        let guard = self.bar.lock().unwrap();
+        let guard = self.bar.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(bar) = guard.as_ref() {
             bar.inc(n);
         }
     }
 
     fn finish_with_message(&self, msg: &str) {
-        let mut guard = self.bar.lock().unwrap();
+        let mut guard = self.bar.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(bar) = guard.take() {
             bar.finish_with_message(msg.to_string());
         }
@@ -137,5 +137,46 @@ impl ProgressReporter for IpcReporter {
             total,
             message: msg.to_string(),
         });
+    }
+}
+
+/// Enum-dispatched reporter — avoids `dyn` vtable overhead.
+pub enum Reporter {
+    Indicatif(IndicatifReporter),
+    Silent(SilentReporter),
+    Ipc(IpcReporter),
+}
+
+impl ProgressReporter for Reporter {
+    fn start(&self, total: u64) {
+        match self {
+            Reporter::Indicatif(r) => r.start(total),
+            Reporter::Silent(r) => r.start(total),
+            Reporter::Ipc(r) => r.start(total),
+        }
+    }
+
+    fn set_phase(&self, phase: zti_protocol::response::IndexPhase, current: u64, total: u64, message: &str) {
+        match self {
+            Reporter::Indicatif(r) => r.set_phase(phase, current, total, message),
+            Reporter::Silent(r) => r.set_phase(phase, current, total, message),
+            Reporter::Ipc(r) => r.set_phase(phase, current, total, message),
+        }
+    }
+
+    fn inc(&self, n: u64) {
+        match self {
+            Reporter::Indicatif(r) => r.inc(n),
+            Reporter::Silent(r) => r.inc(n),
+            Reporter::Ipc(r) => r.inc(n),
+        }
+    }
+
+    fn finish_with_message(&self, msg: &str) {
+        match self {
+            Reporter::Indicatif(r) => r.finish_with_message(msg),
+            Reporter::Silent(r) => r.finish_with_message(msg),
+            Reporter::Ipc(r) => r.finish_with_message(msg),
+        }
     }
 }

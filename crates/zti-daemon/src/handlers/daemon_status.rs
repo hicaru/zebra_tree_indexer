@@ -17,8 +17,7 @@ pub async fn handle(state: &DaemonState) -> Response {
         .as_deref()
         .map(str::to_string);
 
-    let engine = state.primary_engine();
-    let device = engine.hardware().device.as_str().to_owned();
+    let device = state.device_str().to_owned();
 
     Response::DaemonStatus(DaemonStatusInfo {
         started_at_ns: state.started_at_ns,

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use arrow::array::{
-    FixedSizeBinaryArray, RecordBatch, RecordBatchIterator, StringArray, UInt64Array,
+    FixedSizeBinaryArray, RecordBatch, StringArray, UInt64Array,
 };
 use lancedb::query::ExecutableQuery;
 use lancedb::table::Table;
@@ -30,21 +30,13 @@ impl FilesTable {
     }
 
     pub async fn upsert(&self, batch: RecordBatch) -> Result<()> {
-        let schema = batch.schema();
-        let reader: Box<dyn arrow_array::RecordBatchReader + Send> =
-            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
-
-        let mut builder = self.table.merge_insert(&["file_path"]);
-        builder.when_matched_update_all(None);
-        builder.when_not_matched_insert_all();
-        builder.execute(reader).await?;
-
-        Ok(())
+        crate::upsert::upsert_batch(&self.table, "file_path", batch).await
     }
 
     pub async fn list(&self) -> Result<Vec<FileRow>> {
         let results = self.table.query().execute().await?;
-        let mut rows = Vec::new();
+        let total = self.table.count_rows(None).await?;
+        let mut rows = Vec::with_capacity(total);
         let mut stream = std::pin::pin!(results);
         use futures::StreamExt;
         while let Some(batch) = stream.next().await {
@@ -107,7 +99,7 @@ impl FilesTable {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FileRow {
     pub file_path: String,
     pub blake3: Vec<u8>,

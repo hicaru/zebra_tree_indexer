@@ -335,7 +335,7 @@ impl EmbedEngine {
         let seq = next_bucket(SEQ_BUCKETS, real_seq, max_len);
         let batch = next_bucket(BATCH_BUCKETS, real_batch, BATCH_CEILING);
 
-        let mut state = self.state.lock().expect("embed state poisoned");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let State {
             model,
             device,

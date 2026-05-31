@@ -235,9 +235,9 @@ pub fn detect_changes(current: &HashMap<String, FileSnapshot>, previous: &[FileR
         prev_map.insert(&row.file_path, &row.blake3);
     }
 
-    let mut added = Vec::new();
-    let mut modified = Vec::new();
-    let mut unchanged = Vec::new();
+    let mut added = Vec::with_capacity(current.len());
+    let mut modified = Vec::with_capacity(current.len());
+    let mut unchanged = Vec::with_capacity(current.len());
 
     for (rel, snap) in current {
         match prev_map.get(rel.as_str()) {

@@ -1,3 +1,5 @@
+pub mod upsert;
+
 pub mod chunks_table;
 pub mod db;
 pub mod files_table;

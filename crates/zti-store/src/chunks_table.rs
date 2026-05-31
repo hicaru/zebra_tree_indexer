@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use arrow::array::{
     Array, BinaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, ListArray,
-    RecordBatch, RecordBatchIterator, StringArray, UInt32Array,
+    RecordBatch, StringArray, UInt32Array,
 };
 use arrow::datatypes::DataType;
 use futures::StreamExt;
@@ -66,16 +66,7 @@ impl ChunksTable {
     }
 
     pub async fn upsert(&self, batch: RecordBatch) -> Result<()> {
-        let schema = batch.schema();
-        let reader: Box<dyn arrow_array::RecordBatchReader + Send> =
-            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
-
-        let mut builder = self.table.merge_insert(&["chunk_id"]);
-        builder.when_matched_update_all(None);
-        builder.when_not_matched_insert_all();
-        builder.execute(reader).await?;
-
-        Ok(())
+        crate::upsert::upsert_batch(&self.table, "chunk_id", batch).await
     }
 
     pub async fn build_index(&mut self, params: &zti_ann::SearchParams) -> Result<()> {

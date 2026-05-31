@@ -4,7 +4,7 @@ use anyhow::Result;
 use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
 
-use zti_pipeline::progress::IpcReporter;
+use zti_pipeline::progress::Reporter;
 use zti_protocol::codec::write_frame;
 use zti_protocol::request::IndexReq;
 use zti_protocol::response::{ErrorBody, IndexStats, Response};
@@ -42,7 +42,7 @@ where
         .and_then(zti_ann::SearchMethod::parse);
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let reporter = IpcReporter::new(tx);
+    let reporter = Reporter::Ipc(zti_pipeline::progress::IpcReporter::new(tx));
 
     let proj = project.clone();
     let refresh = req.refresh;
