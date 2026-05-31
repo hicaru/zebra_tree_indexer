@@ -222,13 +222,52 @@ impl<'a> AsciiTreeRenderer<'a> {
         self.render_callees_with_ids(id, max_depth, local_only, true)
     }
 
-    pub fn render_callees_clean(&self, id: u32, max_depth: usize) -> String {
-        let mut out = String::with_capacity(512);
+    /// Build a human-readable qualified display name for a symbol.
+    /// Uses the walker-qualified name if it has parent scope; otherwise falls
+    /// back to file-basename qualification (the same scheme used for
+    /// search-dep disambiguation).
+    fn sym_display(&self, id: u32) -> String {
         let sym = match self.index.symbols.get(id as usize) {
             Some(s) => s,
-            None => return format!("Symbol {} not found\n", id),
+            None => return format!("#{id}"),
         };
-        let _ = writeln!(out, "{} (callees)", sym.name);
+        // Already qualified (e.g. "StorageLayout::BookLevel") — use as-is.
+        if sym.qualified.contains("::") {
+            return sym.qualified.clone();
+        }
+        // Build file-basename qualification.
+        if let Some(file) = self.index.files.get(sym.file_idx as usize) {
+            let short = file
+                .path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&file.path)
+                .trim_end_matches(".rs")
+                .trim_end_matches(".ts")
+                .trim_end_matches(".tsx")
+                .trim_end_matches(".dart")
+                .trim_end_matches(".sol");
+            // Non-module basenames (mod.rs, lib.rs, main.rs, index.ts) — use
+            // the parent directory name instead.
+            let qual = if matches!(short, "mod" | "lib" | "main" | "index") {
+                file.path
+                    .rsplit('/')
+                    .nth(1)
+                    .unwrap_or(short)
+            } else {
+                short
+            };
+            if qual != sym.name {
+                return format!("{}::{}", qual, sym.qualified);
+            }
+        }
+        sym.qualified.clone()
+    }
+
+    pub fn render_callees_clean(&self, id: u32, max_depth: usize) -> String {
+        let mut out = String::with_capacity(512);
+        let display = self.sym_display(id);
+        let _ = writeln!(out, "{} (callees)", display);
         let mut prefix = String::with_capacity(max_depth * 4);
         let mut visited = HashSet::with_capacity(64);
         self.recurse_clean(
@@ -293,7 +332,9 @@ impl<'a> AsciiTreeRenderer<'a> {
             out.push_str(branch);
 
             if let Target::Resolved(to_id) = edge.to {
-                if let Some(sym) = self.index.symbols.get(to_id as usize) {
+                if self.index.symbols.get(to_id as usize).is_some() {
+                    let display = self.sym_display(to_id);
+                    let sym = &self.index.symbols[to_id as usize];
                     let file = self
                         .index
                         .files
@@ -305,7 +346,7 @@ impl<'a> AsciiTreeRenderer<'a> {
                                 .trim_start_matches('/')
                         })
                         .unwrap_or("?");
-                    let _ = writeln!(out, "{} ({}:{})", sym.name, file, sym.line);
+                    let _ = writeln!(out, "{} ({}:{})", display, file, sym.line);
                     let saved = prefix.len();
                     prefix.push_str(child_segment);
                     self.recurse_clean(
