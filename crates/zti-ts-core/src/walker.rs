@@ -59,10 +59,10 @@ struct WalkState<'a> {
 impl<'a> WalkState<'a> {
     fn push_scope(&mut self, id: u32, name: &str, is_container: bool, is_fn: bool, kind: Kind) {
         self.scope_stack.push(id);
+        let prev_len = self.qual_buf.len();
         if !self.qual_buf.is_empty() {
             self.qual_buf.push_str("::");
         }
-        let prev_len = self.qual_buf.len();
         self.qual_buf.push_str(name);
         self.qual_lens.push(prev_len);
         self.scope_kinds.push(kind);

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub enum SymbolBodyEntry {
     Ok {
         symbol_id: u32,
-        kind_short: String,
+        kind_short: Cow<'static, str>,
         start_line: u32,
         end_line: u32,
         body: String,

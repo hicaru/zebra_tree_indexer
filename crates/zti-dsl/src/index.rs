@@ -143,7 +143,7 @@ where
         on_progress(i as u32 + 1);
     }
 
-    let qualified_map = build_qualified_map(&all_symbols, &files);
+    let qualified_map = build_qualified_map(&all_symbols, &files, &root);
     resolve_edges(&mut all_edges, &files, &qualified_map, &all_symbols);
 
     let reverse_edges = build_reverse_edges(&all_edges);
@@ -230,9 +230,20 @@ pub fn build_index(root: &str) -> Result<ProjectIndex> {
     ))
 }
 
+/// Directory names that are source roots (not module names).
+fn is_src_root_dir(c: &str) -> bool {
+    matches!(c, "src" | "lib" | "app" | "source" | "Sources" | "include")
+}
+
+/// File basenames that represent the crate/module root, not a named module.
+fn is_non_module_basename(name: &str) -> bool {
+    matches!(name, "lib" | "main" | "mod" | "index")
+}
+
 fn build_qualified_map(
     symbols: &[zti_ts_core::types::Symbol],
     files: &[FileEntry],
+    root: &str,
 ) -> HashMap<String, u32> {
     let mut map = HashMap::new();
 
@@ -248,19 +259,54 @@ fn build_qualified_map(
         }
 
         if let Some(file) = files.get(sym.file_idx as usize) {
-            let short_path = file
-                .path
+            let file_path = &file.path;
+            let short_path = file_path
                 .rsplit('/')
                 .next()
-                .unwrap_or(&file.path)
+                .unwrap_or(file_path)
                 .trim_end_matches(".rs")
                 .trim_end_matches(".ts")
                 .trim_end_matches(".tsx")
                 .trim_end_matches(".dart")
+                .trim_end_matches(".sol")
                 .to_string();
+
+            // file-basename qualified: keychain::KeyChainErrors
             if short_path != sym.name {
                 let file_qualified = format!("{}::{}", short_path, sym.name);
                 map.entry(file_qualified).or_insert(sym.id);
+            }
+
+            // directory-prefixed qualified: errors::keychain::KeyChainErrors
+            // Strip the project root prefix (and trailing slash) to get a relative path.
+            let rel = file_path
+                .strip_prefix(root)
+                .unwrap_or(file_path)
+                .trim_start_matches('/');
+            if let Some(slash) = rel.rfind('/') {
+                let dir_part = &rel[..slash];
+                let dir_comps: Vec<&str> = dir_part
+                    .split('/')
+                    .filter(|c| !c.is_empty() && !is_src_root_dir(c))
+                    .collect();
+                if !dir_comps.is_empty() {
+                    let dir_prefix = dir_comps.join("::");
+                    // Always emit the form without the file basename — covers
+                    // Solidity contracts (where the contract scope is already in
+                    // sym.qualified) and crate-root files (lib.rs/main.rs).
+                    let without_file = format!("{}::{}", dir_prefix, sym.qualified);
+                    map.entry(without_file).or_insert(sym.id);
+
+                    // Also emit the form with the file basename as a module
+                    // segment, unless the basename is a non-module root
+                    // (lib/main/mod/index).  This covers Rust files where the
+                    // file module is not part of sym.qualified.
+                    if !is_non_module_basename(&short_path) {
+                        let with_file =
+                            format!("{}::{}::{}", dir_prefix, short_path, sym.qualified);
+                        map.entry(with_file).or_insert(sym.id);
+                    }
+                }
             }
         }
 
@@ -469,7 +515,7 @@ mod tests {
             file_entry(1, "/p/b.rs"),
             file_entry(2, "/p/c.rs"),
         ];
-        let map = build_qualified_map(&symbols, &files);
+        let map = build_qualified_map(&symbols, &files, "/p");
         assert!(
             !map.contains_key("parse"),
             "ambiguous bare name `parse` must not collapse to a single id"
@@ -483,7 +529,7 @@ mod tests {
     fn unique_bare_name_resolves() {
         let symbols = vec![sym(0, "only_one", "only_one", 0)];
         let files = vec![file_entry(0, "/p/a.rs")];
-        let map = build_qualified_map(&symbols, &files);
+        let map = build_qualified_map(&symbols, &files, "/p");
         assert_eq!(map.get("only_one"), Some(&0));
     }
 
@@ -517,7 +563,7 @@ mod tests {
             kind: EdgeKind::Call,
             line: 1,
         }];
-        let map = build_qualified_map(&symbols, &files);
+        let map = build_qualified_map(&symbols, &files, "/p");
         resolve_edges(&mut edges, &files, &map, &symbols);
         match &edges[0].to {
             Target::Resolved(id) => assert_eq!(*id, 1, "should land on same-file parse"),
@@ -543,7 +589,7 @@ mod tests {
             kind: EdgeKind::Call,
             line: 1,
         }];
-        let map = build_qualified_map(&symbols, &files);
+        let map = build_qualified_map(&symbols, &files, "/p");
         resolve_edges(&mut edges, &files, &map, &symbols);
         assert!(
             matches!(edges[0].to, Target::External(_)),
@@ -712,7 +758,7 @@ mod tests {
             symbols,
             edges: Vec::new(),
             files,
-            qualified_map: build_qualified_map(&[], &[]),
+            qualified_map: build_qualified_map(&[], &[], "/p"),
             reverse_edges: std::collections::HashMap::new(),
             forward_edges: std::collections::HashMap::new(),
             root: "/p".into(),
@@ -737,7 +783,7 @@ mod tests {
             symbols,
             edges: Vec::new(),
             files,
-            qualified_map: build_qualified_map(&[], &[]),
+            qualified_map: build_qualified_map(&[], &[], "/p"),
             reverse_edges: std::collections::HashMap::new(),
             forward_edges: std::collections::HashMap::new(),
             root: "/p".into(),
@@ -757,7 +803,7 @@ mod tests {
             symbols,
             edges: Vec::new(),
             files,
-            qualified_map: build_qualified_map(&[], &[]),
+            qualified_map: build_qualified_map(&[], &[], "/p"),
             reverse_edges: std::collections::HashMap::new(),
             forward_edges: std::collections::HashMap::new(),
             root: "/p".into(),

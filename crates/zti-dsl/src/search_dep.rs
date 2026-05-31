@@ -20,12 +20,12 @@ pub fn resolve_name(index: &ProjectIndex, name: &str) -> NameMatch {
     if let Some(&id) = index.qualified_map.get(name) {
         return NameMatch::Found(id);
     }
-    let ids: Vec<u32> = index
-        .symbols
-        .iter()
-        .filter(|s| s.name == name || s.qualified == name)
-        .map(|s| s.id)
-        .collect();
+    let mut ids = Vec::with_capacity(4);
+    for s in &index.symbols {
+        if s.name == name || s.qualified == name {
+            ids.push(s.id);
+        }
+    }
     match ids.len() {
         0 => NameMatch::NotFound,
         1 => NameMatch::Found(ids[0]),
@@ -34,7 +34,7 @@ pub fn resolve_name(index: &ProjectIndex, name: &str) -> NameMatch {
 }
 
 fn find_symbol(index: &ProjectIndex, id: u32) -> Option<&Symbol> {
-    index.symbols.iter().find(|s| s.id == id)
+    index.symbols.get(id as usize)
 }
 
 fn trim_tree_header(s: &str) -> &str {
@@ -59,8 +59,7 @@ pub fn render_symbol_overview(
         return out;
     };
 
-    let _ = writeln!(out, "{}#{} {}", sym.kind.short(), id, sym.qualified);
-
+    // Header: file path only
     let file = index
         .files
         .get(sym.file_idx as usize)
@@ -73,21 +72,22 @@ pub fn render_symbol_overview(
     {
         let trimmed = first.trim();
         if !trimmed.is_empty() {
+            out.push('\n');
             let _ = writeln!(out, "{trimmed}");
         }
     }
 
+    // Call chains: entry points → target
     if depth > 0 {
-        let callers = AsciiTreeRenderer::new(index).render_callers(id, depth);
-        let body = trim_tree_header(&callers);
-        if !body.is_empty() {
-            let _ = writeln!(out, "  -- callers:");
-            let _ = writeln!(out, "{body}");
+        let renderer = AsciiTreeRenderer::new(index);
+        let chains = renderer.render_call_chains(id, depth);
+        if !chains.is_empty() {
+            out.push('\n');
+            out.push_str(&chains);
         }
-    }
 
-    if depth > 0 {
-        let callees = AsciiTreeRenderer::new(index).render_callees(id, depth, false);
+        // Callees: project-internal only
+        let callees = renderer.render_callees_clean(id, depth);
         let body = trim_tree_header(&callees);
         if !body.is_empty() {
             let _ = writeln!(out, "  -- callees:");
@@ -97,6 +97,7 @@ pub fn render_symbol_overview(
 
     let bodies = resolve_symbol_bodies(index, &[id]);
     if let Some(SymbolBodyEntry::Ok { body, .. }) = bodies.into_iter().next() {
+        out.push('\n');
         let _ = write!(out, "{body}");
     }
 

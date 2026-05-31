@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use rustc_hash::FxHashMap;
 
 use zti_common::dsl::SymbolBodyEntry;
@@ -53,7 +55,7 @@ pub fn resolve_symbol_bodies(index: &ProjectIndex, symbol_ids: &[u32]) -> Vec<Sy
                 let range = line_index.byte_range(doc_start, sym.end_line);
                 entries.push(SymbolBodyEntry::Ok {
                     symbol_id: id,
-                    kind_short: sym.kind.short().to_owned(),
+                    kind_short: Cow::Borrowed(sym.kind.short()),
                     start_line: doc_start,
                     end_line: sym.end_line,
                     body: c[range].to_owned(),

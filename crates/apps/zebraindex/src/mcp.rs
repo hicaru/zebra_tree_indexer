@@ -422,8 +422,7 @@ impl ZebraMcpServer {
             depth: params.depth,
             max_tokens: None,
         };
-        let mut out = self.send_search_dep(req).await?;
-        out.push_str(HINT_CODE_IN_CONTEXT);
+        let out = self.send_search_dep(req).await?;
         Ok(ok_text(out))
     }
 
