@@ -96,10 +96,10 @@ impl<'a> AsciiTreeRenderer<'a> {
 
         let mut callers = Vec::with_capacity(edges.len());
         for e in edges {
-            if e.kind == EdgeKind::Call {
-                if let Target::Resolved(from_id) = e.to {
-                    callers.push(from_id);
-                }
+            if e.kind == EdgeKind::Call
+                && let Target::Resolved(from_id) = e.to
+            {
+                callers.push(from_id);
             }
         }
 
