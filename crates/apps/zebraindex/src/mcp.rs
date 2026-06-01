@@ -165,27 +165,7 @@ impl ZebraMcpServer {
             .map_err(|e| internal_err(format!("{e}")))?;
         let limit = limit.unwrap_or(5);
 
-        let req = SearchReq {
-            project_root: project_root.clone(),
-            query: text.clone(),
-            limit,
-            offset: None,
-            languages: languages.clone(),
-            path_glob: path_glob.clone(),
-            refresh_index: false,
-            exhaustive: false,
-            mode,
-        };
-
-        let results = self.send_search(req).await?;
-
-        if !results.hits.is_empty() {
-            let mut out = format_search_results(&results);
-            out.push_str(HINT_CODE_IN_CONTEXT);
-            return Ok(ok_text(out));
-        }
-
-        let retry_req = SearchReq {
+        let mut req = SearchReq {
             project_root,
             query: text,
             limit,
@@ -193,19 +173,20 @@ impl ZebraMcpServer {
             languages,
             path_glob,
             refresh_index: false,
-            exhaustive: true,
+            exhaustive: false,
             mode,
         };
 
-        let retry_results = self.send_search(retry_req).await?;
-        let mut out = format_search_results(&retry_results);
+        let results = self.send_search(req.clone()).await?;
 
-        if retry_results.hits.is_empty() {
-            out.push_str(HINT_NO_RESULTS);
-        } else {
-            out.push_str(HINT_CODE_IN_CONTEXT);
+        if !results.hits.is_empty() {
+            return Ok(ok_text(format_search_results(&results)));
         }
-        Ok(ok_text(out))
+
+        req.exhaustive = true;
+        let retry_results = self.send_search(req).await?;
+
+        Ok(ok_text(format_search_results(&retry_results)))
     }
 
     async fn send_search_dep(&self, req: SearchDepReq) -> Result<String, ErrorData> {
@@ -242,12 +223,19 @@ fn internal_err(msg: String) -> ErrorData {
     ErrorData::internal_error(msg, None)
 }
 
-const HINT_CODE_IN_CONTEXT: &str = "\n\n[SYSTEM HINT: The source code above is already in your context. \
-     Do NOT re-read these files — use the code directly. \
-     For other files, use `searchQuery` or `fileTree`.]";
-
-const HINT_NO_RESULTS: &str =
-    "\n\n[SYSTEM HINT: No results found. Try rephrasing with more descriptive terms.]";
+fn format_project_table(projects: &[zti_store::ProjectRow]) -> String {
+    let mut out = String::with_capacity(projects.len() * 80);
+    out.push_str("| # | Project | Root |\n");
+    out.push_str("|---|---------|------|\n");
+    for (i, p) in projects.iter().enumerate() {
+        let name = std::path::Path::new(&p.root_path)
+            .file_name()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_else(|| Cow::Borrowed(&p.root_path));
+        let _ = writeln!(out, "| {} | {} | {} |", i + 1, name, p.root_path);
+    }
+    out
+}
 
 #[rmcp::tool_router]
 impl ZebraMcpServer {
@@ -287,10 +275,12 @@ impl ZebraMcpServer {
             })
             .transpose()?;
 
-        let matched: Vec<&zti_store::FileRow> = files
-            .iter()
-            .filter(|f| match_file(&f.file_path, &root_str, matcher.as_ref()))
-            .collect();
+        let mut matched = Vec::with_capacity(files.len());
+        for f in &files {
+            if match_file(&f.file_path, &root_str, matcher.as_ref()) {
+                matched.push(f);
+            }
+        }
 
         let mut out = String::with_capacity(32 + matched.len() * 80);
         out.push_str("FILES\n");
@@ -307,10 +297,6 @@ impl ZebraMcpServer {
             out.push_str("  (no files indexed)\n");
         }
 
-        out.push_str(
-            "\n\n[SYSTEM HINT: Files discovered. Use `searchQuery` to find code concepts \
-             or `searchPassage` to find similar code.]",
-        );
         Ok(ok_text(out))
     }
 
@@ -442,19 +428,7 @@ impl ZebraMcpServer {
             return Ok(ok_text("No indexed projects found."));
         }
 
-        let mut out = String::with_capacity(projects.len() * 80);
-        out.push_str("| # | Project | Root |\n");
-        out.push_str("|---|---------|------|\n");
-        for (i, p) in projects.iter().enumerate() {
-            let name = std::path::Path::new(&p.root_path)
-                .file_name()
-                .map(|s| s.to_string_lossy())
-                .unwrap_or_else(|| Cow::Borrowed(&p.root_path));
-            let _ = writeln!(out, "| {} | {} | {} |", i + 1, name, p.root_path);
-        }
-
-        out.push_str("\n\n[SYSTEM HINT: To explore a project, use `searchQuery`, `searchPassage`, or `fileTree`. The `project` parameter accepts a name, index number, or root path.]");
-        Ok(ok_text(out))
+        Ok(ok_text(format_project_table(&projects)))
     }
 }
 
@@ -515,15 +489,7 @@ pub fn run_mcp() -> Result<()> {
             Ok(projects) if projects.len() > 1 => {
                 let mut s = String::with_capacity(32 + projects.len() * 80);
                 s.push_str("\n\n## Indexed Projects\n\n");
-                s.push_str("| # | Project | Root |\n");
-                s.push_str("|---|---------|------|\n");
-                for (i, p) in projects.iter().enumerate() {
-                    let name = std::path::Path::new(&p.root_path)
-                        .file_name()
-                        .map(|s| s.to_string_lossy())
-                        .unwrap_or_else(|| Cow::Borrowed(&p.root_path));
-                    let _ = writeln!(s, "| {} | {} | {} |", i + 1, name, p.root_path);
-                }
+                s.push_str(&format_project_table(&projects));
                 s
             }
             _ => String::new(),
