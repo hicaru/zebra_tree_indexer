@@ -13,6 +13,7 @@ path = "src/lib.rs"
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+log.workspace = true
 zti-protocol.workspace = true
 zti-pipeline.workspace = true
 zti-store.workspace = true

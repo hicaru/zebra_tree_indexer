@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 use zti_ann::{AnnCache, AnnHandle, AnnIndexBuilder, SearchMethod, SearchParams};
 use zti_embed::EmbedEngine;
 use zti_rerank::TurboReranker;
-use zti_rerank::gpu::{BATCH_SIZE, GpuTurboScorer, TurboCodeBatch, parse_turbo_code_into};
+use zti_rerank::gpu::{BATCH_SIZE, GpuTurboScratch, TurboCodeBatch, TurboScorerCache, parse_turbo_code_into, score_batch};
 use zti_store::chunks_table::{ChunkHit, ChunksTable};
 
 #[cfg(test)]
@@ -46,6 +46,20 @@ fn apply_keyword_boost(words: &[&str], candidates: &mut [ChunkHit]) {
             } else if content_lc.contains(*w) {
                 c.score += KEYWORD_CONTENT_BOOST;
             }
+        }
+    }
+}
+
+#[inline]
+fn push_scored(
+    heap: &mut BinaryHeap<Reverse<ScoredEntry>>,
+    scored: &[([u8; 16], f32)],
+    raw_k: usize,
+) {
+    for &(chunk_id, score) in scored {
+        heap.push(Reverse(ScoredEntry { score, chunk_id }));
+        if heap.len() > raw_k {
+            heap.pop();
         }
     }
 }
@@ -121,6 +135,7 @@ pub async fn search(
     db: &zti_store::Db,
     reranker: &TurboReranker,
     ann_cache: &AnnCache,
+    turbo_cache: &TurboScorerCache,
     pid: &[u8; 32],
     opts: &SearchOpts<'_>,
 ) -> Result<Vec<Hit>> {
@@ -162,42 +177,39 @@ pub async fn search(
 
     let mut candidates: Vec<ChunkHit> = match params.method {
         SearchMethod::TurboQuant => {
-            let mut gpu_scorer = GpuTurboScorer::from_reranker(reranker, &engine.device()?)?;
-            let rotated_query = gpu_scorer.pre_rotate(query_emb);
-            let dim_over_2 = gpu_scorer.dim_over_2();
-            let sign_bytes = gpu_scorer.sign_bytes_per_code();
+            let core = turbo_cache.get_or_build(reranker, &engine.device()?)?;
+            let mut scratch = GpuTurboScratch::with_capacity(core.num_projections(), core.dim_over_2());
+            let mut rotated_query: Vec<f32> = Vec::with_capacity(engine.dim());
+            core.pre_rotate_into(query_emb, &mut rotated_query);
 
-            let mut batch = TurboCodeBatch::with_capacity(BATCH_SIZE, dim_over_2, sign_bytes);
+            let mut batch = TurboCodeBatch::with_capacity(
+                BATCH_SIZE,
+                core.dim_over_2(),
+                core.sign_bytes_per_code(),
+            );
             let mut heap: BinaryHeap<Reverse<ScoredEntry>> = BinaryHeap::with_capacity(raw_k + 1);
 
             chunks_table
                 .iter_turbo_codes(opts.languages, opts.path_glob, |id, code| {
                     parse_turbo_code_into(code, &mut batch, id);
                     if batch.len() >= BATCH_SIZE {
-                        let scored = gpu_scorer
-                            .score_batch(&batch, &rotated_query)
-                            .map_err(|e| anyhow!("GPU score batch: {e}"))?;
-                        for (chunk_id, score) in scored {
-                            heap.push(Reverse(ScoredEntry { score, chunk_id }));
-                            if heap.len() > raw_k {
-                                heap.pop();
-                            }
-                        }
+                        // CPU + GPU work — keep it off the reactor.
+                        let scored = tokio::task::block_in_place(|| {
+                            score_batch(&core, &mut scratch, &batch, &rotated_query)
+                                .map_err(|e| anyhow!("GPU score batch: {e}"))
+                        })?;
+                        push_scored(&mut heap, scored, raw_k);
                         batch.clear();
                     }
                     Ok(true)
                 })
                 .await?;
             if !batch.is_empty() {
-                let scored = gpu_scorer
-                    .score_batch(&batch, &rotated_query)
-                    .map_err(|e| anyhow!("GPU score batch: {e}"))?;
-                for (chunk_id, score) in scored {
-                    heap.push(Reverse(ScoredEntry { score, chunk_id }));
-                    if heap.len() > raw_k {
-                        heap.pop();
-                    }
-                }
+                let scored = tokio::task::block_in_place(|| {
+                    score_batch(&core, &mut scratch, &batch, &rotated_query)
+                        .map_err(|e| anyhow!("GPU score batch: {e}"))
+                })?;
+                push_scored(&mut heap, scored, raw_k);
             }
 
             let mut scores: Vec<(f32, [u8; 16])> = Vec::with_capacity(heap.len());
@@ -260,7 +272,7 @@ pub async fn search(
         .iter()
         .map(|c| (c.turbo_code.as_slice(), c.score))
         .collect();
-    let mut ranked = reranker.rerank(&rerank_input, query_emb);
+    let mut ranked = tokio::task::block_in_place(|| reranker.rerank(&rerank_input, query_emb));
 
     diversify_by_parent_in_place(&mut ranked, &candidates, opts.limit);
 

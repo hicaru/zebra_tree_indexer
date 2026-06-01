@@ -63,6 +63,11 @@ fn init_tracing(default_level: &str) {
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
+    // `.init()` installs the global LogTracer with no max-level cap, so
+    // every dependency `log!` is bridged + filtered at runtime. Cap it so
+    // warn+ records from dependencies are dropped before reaching the
+    // tracing dispatcher.
+    log::set_max_level(log::LevelFilter::Warn);
 }
 
 fn main() -> Result<()> {

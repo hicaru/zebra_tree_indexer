@@ -1,8 +1,9 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use bitpolar::{StoredRotation, TurboQuantizer};
-use candle_core::{DType, Device, Tensor};
+use candle_core::{DType, Device, DeviceLocation, Tensor};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, StandardNormal};
@@ -49,7 +50,9 @@ impl TurboCodeBatch {
     }
 }
 
-pub struct GpuTurboScorer {
+/// Immutable, device-resident state shared across queries via `Arc`.
+/// Deterministic from (quantizer params, device); built once.
+pub struct GpuTurboCore {
     device: Device,
     dim_over_2: usize,
     num_projections: usize,
@@ -59,11 +62,10 @@ pub struct GpuTurboScorer {
     sin_table: Tensor,
     qjl_proj: Tensor,
     rotation: StoredRotation,
-    pre_signs_flat: Vec<f32>,
 }
 
-impl GpuTurboScorer {
-    pub fn from_reranker(reranker: &TurboReranker, device: &Device) -> Result<Self> {
+impl GpuTurboCore {
+    pub fn from_reranker(reranker: &TurboReranker, device: &Device) -> Result<Arc<Self>> {
         let q: &TurboQuantizer = reranker.quantizer();
         let dim = q.dim();
         let bits = q.bits();
@@ -89,7 +91,7 @@ impl GpuTurboScorer {
 
         let rotation = StoredRotation::new(dim, q.seed())?;
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             device: device.clone(),
             dim_over_2,
             num_projections,
@@ -99,109 +101,187 @@ impl GpuTurboScorer {
             sin_table,
             qjl_proj,
             rotation,
-            pre_signs_flat: Vec::with_capacity(BATCH_SIZE * num_projections),
-        })
+        }))
     }
 
-    pub fn pre_rotate(&self, query: &[f32]) -> Vec<f32> {
-        let mut out = Vec::with_capacity(self.dim_over_2 * 2);
-        self.rotation.apply_slice(query, &mut out);
-        out
+    #[inline]
+    pub const fn num_projections(&self) -> usize {
+        self.num_projections
     }
 
-    pub fn dim_over_2(&self) -> usize {
+    #[inline]
+    pub const fn dim_over_2(&self) -> usize {
         self.dim_over_2
     }
 
-    pub fn sign_bytes_per_code(&self) -> usize {
+    #[inline]
+    pub const fn sign_bytes_per_code(&self) -> usize {
         self.sign_bytes_per_code
     }
 
-    pub fn score_batch(
-        &mut self,
-        batch: &TurboCodeBatch,
-        rotated_query: &[f32],
-    ) -> Result<Vec<([u8; 16], f32)>> {
-        let n = batch.len();
-        if n == 0 {
-            return Ok(Vec::new());
-        }
-
-        tracing::trace!(
-            n = n,
-            device = ?self.device,
-            dim = self.dim_over_2 * 2,
-            proj = self.num_projections,
-            "score_batch: GPU QJL matmul",
-        );
-
-        let dim = self.dim_over_2 * 2;
-        let rotated_query_t = Tensor::from_slice(rotated_query, dim, &self.device)?;
-
-        // Step 1: QJL projection of query — keep result on GPU.
-        let projected = self
-            .qjl_proj
-            .matmul(&rotated_query_t.unsqueeze(1)?)?
-            .squeeze(1)?;
-
-        // Step 2: polar decode on GPU (unchanged from original).
-        let radii_t = Tensor::from_slice(&batch.radii, (n, self.dim_over_2), &self.device)?
-            .to_dtype(DType::F32)?;
-        let angle_i64: Vec<i64> = batch.angle_indices.iter().map(|&v| v as i64).collect();
-        let angle_t = Tensor::from_slice(&angle_i64, n * self.dim_over_2, &self.device)?;
-
-        let cos_vals = self
-            .cos_table
-            .index_select(&angle_t, 0)?
-            .reshape((n, self.dim_over_2))?;
-        let sin_vals = self
-            .sin_table
-            .index_select(&angle_t, 0)?
-            .reshape((n, self.dim_over_2))?;
-
-        let x_comps = (radii_t.clone() * cos_vals)?;
-        let y_comps = (radii_t * sin_vals)?;
-
-        let decoded =
-            Tensor::cat(&[&x_comps.unsqueeze(2)?, &y_comps.unsqueeze(2)?], 2)?.reshape((n, dim))?;
-
-        let polar_ip = decoded
-            .broadcast_mul(&rotated_query_t)?
-            .sum(1)?
-            .to_vec1::<f32>()?;
-
-        // Step 3: QJL sum — branchless bit unpack on CPU, then GPU matmul.
-        let proj_count = self.num_projections;
-        let sign_stride = self.sign_bytes_per_code;
-
-        self.pre_signs_flat.clear();
-        for i in 0..n {
-            let base = i * sign_stride;
-            for p in 0..proj_count {
-                let byte_idx = p >> 3;
-                let bit_idx = p & 7;
-                let bit = (batch.signs[base + byte_idx] >> bit_idx) & 1;
-                self.pre_signs_flat.push((bit as f32) * 2.0 - 1.0);
-            }
-        }
-
-        let signs_t = Tensor::from_slice(
-            &self.pre_signs_flat,
-            (n, proj_count),
-            &self.device,
-        )?;
-        // projected is [proj_count]; reshape to [proj_count, 1] for matmul
-        let qjl_sums_t = signs_t.matmul(&projected.unsqueeze(1)?)?.squeeze(1)?;
-        let qjl_sums = qjl_sums_t.to_vec1::<f32>()?;
-
-        // Step 4: combine polar + QJL scores.
-        let mut scores = Vec::with_capacity(n);
-        for i in 0..n {
-            let qjl_ip = batch.norms[i] * self.scale_factor * qjl_sums[i];
-            scores.push((batch.chunk_ids[i], polar_ip[i] + qjl_ip));
-        }
-        Ok(scores)
+    #[inline]
+    pub fn pre_rotate_into(&self, query: &[f32], out: &mut Vec<f32>) {
+        out.clear();
+        out.reserve(self.dim_over_2 * 2);
+        self.rotation.apply_slice(query, out);
     }
+}
+
+/// Per-query scratch — reused buffers, never shared between tasks.
+#[derive(Default)]
+pub struct GpuTurboScratch {
+    pub pre_signs_flat: Vec<f32>,
+    pub angle_i64: Vec<i64>,
+    pub scores: Vec<([u8; 16], f32)>,
+}
+
+impl GpuTurboScratch {
+    pub fn with_capacity(num_projections: usize, dim_over_2: usize) -> Self {
+        Self {
+            pre_signs_flat: Vec::with_capacity(BATCH_SIZE * num_projections),
+            angle_i64: Vec::with_capacity(BATCH_SIZE * dim_over_2),
+            scores: Vec::with_capacity(BATCH_SIZE),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq)]
+struct CoreKey {
+    dim: usize,
+    seed: u64,
+    location: DeviceLocation,
+}
+
+/// Mirrors `AnnCache::get_or_build`. Keyed on (dim, seed, device-location) —
+/// the three things `GpuTurboCore` actually depends on.
+#[derive(Default)]
+pub struct TurboScorerCache {
+    inner: Mutex<Option<(CoreKey, Arc<GpuTurboCore>)>>,
+}
+
+impl TurboScorerCache {
+    pub fn get_or_build(
+        &self,
+        reranker: &TurboReranker,
+        device: &Device,
+    ) -> Result<Arc<GpuTurboCore>> {
+        let key = CoreKey {
+            dim: reranker.dim(),
+            seed: reranker.quantizer().seed(),
+            location: device.location(),
+        };
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_key, core)) = guard.as_ref()
+            && *cached_key == key
+        {
+            return Ok(Arc::clone(core));
+        }
+        let core = GpuTurboCore::from_reranker(reranker, device)?;
+        *guard = Some((key, Arc::clone(&core)));
+        Ok(core)
+    }
+}
+
+/// Zero-alloc batch scoring using pre-built core and reusable scratch.
+/// Returns a slice into `scratch.scores` — values must be consumed before
+/// the next call to `score_batch` with the same scratch.
+pub fn score_batch<'s>(
+    core: &GpuTurboCore,
+    scratch: &'s mut GpuTurboScratch,
+    batch: &TurboCodeBatch,
+    rotated_query: &[f32],
+) -> Result<&'s [([u8; 16], f32)]> {
+    let n = batch.len();
+    if n == 0 {
+        scratch.scores.clear();
+        return Ok(&scratch.scores);
+    }
+
+    tracing::trace!(
+        n = n,
+        device = ?core.device,
+        dim = core.dim_over_2 * 2,
+        proj = core.num_projections,
+        "score_batch: GPU QJL matmul",
+    );
+
+    let dim = core.dim_over_2 * 2;
+    let rotated_query_t = Tensor::from_slice(rotated_query, dim, &core.device)?;
+
+    // Step 1: QJL projection of query — keep result on GPU.
+    let projected = core
+        .qjl_proj
+        .matmul(&rotated_query_t.unsqueeze(1)?)?
+        .squeeze(1)?;
+
+    // Step 2: polar decode on GPU.
+    let radii_t = Tensor::from_slice(&batch.radii, (n, core.dim_over_2), &core.device)?
+        .to_dtype(DType::F32)?;
+
+    scratch.angle_i64.clear();
+    scratch.angle_i64.extend(batch.angle_indices.iter().map(|&v| i64::from(v)));
+    let angle_t = Tensor::from_slice(&scratch.angle_i64, n * core.dim_over_2, &core.device)?;
+
+    let cos_vals = core
+        .cos_table
+        .index_select(&angle_t, 0)?
+        .reshape((n, core.dim_over_2))?;
+    let sin_vals = core
+        .sin_table
+        .index_select(&angle_t, 0)?
+        .reshape((n, core.dim_over_2))?;
+
+    // No clone — candle implements Mul for &Tensor.
+    let x_comps = (&radii_t * &cos_vals)?;
+    let y_comps = (&radii_t * &sin_vals)?;
+
+    let decoded =
+        Tensor::cat(&[&x_comps.unsqueeze(2)?, &y_comps.unsqueeze(2)?], 2)?.reshape((n, dim))?;
+
+    let polar_ip = decoded
+        .broadcast_mul(&rotated_query_t)?
+        .sum(1)?
+        .to_vec1::<f32>()?;
+
+    // Step 3: QJL sum — branchless bit unpack on CPU, then GPU matmul.
+    let proj_count = core.num_projections;
+    let sign_stride = core.sign_bytes_per_code;
+
+    scratch.pre_signs_flat.clear();
+    for i in 0..n {
+        let base = i * sign_stride;
+        for p in 0..proj_count {
+            let byte_idx = p >> 3;
+            let bit_idx = p & 7;
+            let bit = (batch.signs[base + byte_idx] >> bit_idx) & 1;
+            scratch.pre_signs_flat.push((bit as f32) * 2.0 - 1.0);
+        }
+    }
+
+    let signs_t = Tensor::from_slice(
+        &scratch.pre_signs_flat,
+        (n, proj_count),
+        &core.device,
+    )?;
+    let qjl_sums_t = signs_t.matmul(&projected.unsqueeze(1)?)?.squeeze(1)?;
+    let qjl_sums = qjl_sums_t.to_vec1::<f32>()?;
+
+    // Step 4: combine polar + QJL scores — zipped iterator, no indexing.
+    scratch.scores.clear();
+    scratch.scores.reserve(n);
+    scratch.scores.extend(
+        batch
+            .chunk_ids
+            .iter()
+            .zip(&batch.norms)
+            .zip(&qjl_sums)
+            .zip(&polar_ip)
+            .map(|(((&id, &norm), &qjl), &polar)| {
+                (id, polar + norm * core.scale_factor * qjl)
+            }),
+    );
+
+    Ok(&scratch.scores)
 }
 
 fn build_qjl_matrix(dim: usize, projections: usize, seed: u64) -> Vec<f32> {

@@ -54,6 +54,9 @@ pub fn run_daemon(config: &DaemonConfig<'_>) -> Result<()> {
         }))
         .with_writer(std::io::stderr)
         .init();
+    // Cap the `log` bridge: dependency debug/trace records are dropped
+    // before they reach the tracing dispatcher (matching the main.rs policy).
+    log::set_max_level(log::LevelFilter::Warn);
 
     let socket_path = zti_common::paths::daemon_socket()?;
     if socket_path.exists() {

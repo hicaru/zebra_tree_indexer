@@ -64,6 +64,7 @@ pub async fn handle(req: &SearchReq, state: &DaemonState) -> Response {
                 &project.db,
                 &reranker,
                 &state.ann,
+                &state.turbo,
                 &pid,
                 &opts,
             )

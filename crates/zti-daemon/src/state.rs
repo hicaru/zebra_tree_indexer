@@ -10,6 +10,7 @@ use zti_ann::AnnCache;
 use zti_common::ids;
 use zti_dsl::ProjectIndex;
 use zti_embed::{EmbedEngine, LoadOverrides};
+use zti_rerank::gpu::TurboScorerCache;
 use zti_store::Db;
 
 pub struct LoadedProject {
@@ -28,6 +29,7 @@ pub struct DaemonState {
     pub model_dtype: Option<String>,
     pub registry: RwLock<HashMap<[u8; 32], Arc<LoadedProject>>>,
     pub ann: Arc<AnnCache>,
+    pub turbo: Arc<TurboScorerCache>,
     pub started_at_ns: u64,
     pub started_at: Instant,
     pub shutdown_tx: watch::Sender<bool>,
@@ -63,6 +65,7 @@ impl DaemonState {
             model_dtype,
             registry: RwLock::new(HashMap::with_capacity(4)),
             ann: Arc::new(AnnCache::default()),
+            turbo: Arc::new(TurboScorerCache::default()),
             started_at_ns,
             started_at: Instant::now(),
             shutdown_tx,
