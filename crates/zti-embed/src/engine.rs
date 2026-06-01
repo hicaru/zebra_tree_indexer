@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use anyhow::{Result, anyhow};
+use tokio::sync::{mpsc, oneshot};
 use arrow::array::{FixedSizeListArray, Float32Array};
 use arrow::datatypes::{DataType, Field};
 use candle_core::{DType, Tensor};
@@ -12,7 +13,7 @@ use candle_transformers::models::bert::Config as BertConfig;
 use crate::bert::BertModel;
 
 use crate::batch::{BATCH_BUCKETS, BATCH_CEILING, SEQ_BUCKETS, next_bucket};
-use crate::model_registry::{ModelProfile, read_json, resolve_profile};
+use crate::model_registry::{ModelProfile, PoolingStrategyEnum, read_json, resolve_profile};
 use crate::normalize::normalize_l2;
 use crate::pooling::{PoolingStrategy, pool_row_into};
 use crate::tokenizer::{Tokenized, Tokenizer};
@@ -114,8 +115,32 @@ struct State {
     scratch: Scratch,
 }
 
+/// Immutable shape/pooling config the worker needs per request. Captured once
+/// at load (post-warmup) and owned by the worker thread.
+#[derive(Clone, Copy)]
+struct WorkerCfg {
+    dim: usize,
+    max_length: usize,
+    pooling: PoolingStrategyEnum,
+}
+
+/// One embedding job: the shared tokenized batch, the indices into it to embed,
+/// and a one-shot channel to return the pooled result.
+struct EmbedRequest {
+    encs: Arc<Vec<Tokenized>>,
+    idxs: Vec<usize>,
+    reply: oneshot::Sender<Result<Pooled>>,
+}
+
 pub struct EmbedEngine {
-    state: Arc<Mutex<State>>,
+    /// Hands jobs to the single thread that owns the model/device/scratch. The
+    /// reactor never blocks on GPU work and the model is never contended —
+    /// exactly one thread ever runs a forward pass.
+    tx: mpsc::UnboundedSender<EmbedRequest>,
+    /// Clone source for [`Self::device`]. The model lives on the worker; this
+    /// is a cheap, uncontended handle used only to build the GPU rerank scorer
+    /// on the search path.
+    device: Mutex<candle_core::Device>,
     tokenizer: Tokenizer,
     profile: ModelProfile,
     hardware: Arc<Hardware>,
@@ -192,12 +217,37 @@ impl EmbedEngine {
 
         let scratch = Scratch::with_capacity(BATCH_CEILING, profile.max_length, profile.dim);
 
+        // Spawn the single embedding worker. It owns the model, device, and
+        // scratch for its whole life; callers submit jobs over `tx` and await a
+        // one-shot reply. This keeps GPU work off the tokio reactor (no
+        // `block_in_place`) and removes the global model mutex — only this
+        // thread ever runs a forward pass.
+        let device_handle = device.clone();
+        let cfg = WorkerCfg {
+            dim: profile.dim,
+            max_length: profile.max_length,
+            pooling: profile.pooling,
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel::<EmbedRequest>();
+        let mut state = State {
+            model,
+            device,
+            scratch,
+        };
+        std::thread::Builder::new()
+            .name("zti-embed".into())
+            .spawn(move || {
+                while let Some(req) = rx.blocking_recv() {
+                    let refs: Vec<&Tokenized> =
+                        req.idxs.iter().filter_map(|&i| req.encs.get(i)).collect();
+                    let _ = req.reply.send(embed_on_state(&mut state, &refs, &cfg));
+                }
+            })
+            .map_err(|e| anyhow!("spawn embed worker: {e}"))?;
+
         Ok(Self {
-            state: Arc::new(Mutex::new(State {
-                model,
-                device,
-                scratch,
-            })),
+            tx,
+            device: Mutex::new(device_handle),
             tokenizer,
             profile,
             hardware: hw,
@@ -217,11 +267,11 @@ impl EmbedEngine {
     }
 
     pub fn device(&self) -> Result<candle_core::Device> {
-        let state = self
-            .state
+        let device = self
+            .device
             .lock()
-            .map_err(|_| anyhow!("embed state lock poisoned"))?;
-        Ok(state.device.clone())
+            .map_err(|_| anyhow!("embed device lock poisoned"))?;
+        Ok(device.clone())
     }
 
     pub fn recommended_batch_size(&self) -> usize {
@@ -244,14 +294,23 @@ impl EmbedEngine {
         self.tokenizer.truncation_max_length().is_some()
     }
 
-    pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
-            return Ok(Vec::new());
-        }
-        let encs = self.tokenizer.encode_batch(texts)?;
-        let refs: Vec<&Tokenized> = encs.iter().collect();
-        let pooled = self.embed_batch_tokenized_sync(&refs)?;
-        Ok(pooled.rows().map(|r| r.to_vec()).collect())
+    /// Submit a tokenized batch to the embedding worker and await the pooled
+    /// result. `idxs` selects which rows of `encs` to embed (the indexer sorts
+    /// by length and slices, so the indices are not contiguous). The heavy
+    /// token buffers are shared via `Arc` — only the small index list is owned
+    /// per call. The reactor never blocks: the GPU forward runs on the worker
+    /// thread while this task is parked on the one-shot.
+    pub async fn embed_tokenized(
+        &self,
+        encs: Arc<Vec<Tokenized>>,
+        idxs: Vec<usize>,
+    ) -> Result<Pooled> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(EmbedRequest { encs, idxs, reply })
+            .map_err(|_| anyhow!("embed worker thread is gone"))?;
+        rx.await
+            .map_err(|_| anyhow!("embed worker dropped without replying"))?
     }
 
     pub async fn embed_batch_async(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
@@ -259,38 +318,16 @@ impl EmbedEngine {
             return Ok(Vec::new());
         }
         let encs = self.tokenizer.encode_batch(texts)?;
-        let refs: Vec<&Tokenized> = encs.iter().collect();
-        let pooled = tokio::task::block_in_place(|| self.embed_batch_tokenized_sync(&refs))?;
-        Ok(pooled.rows().map(|r| r.to_vec()).collect())
-    }
-
-    pub fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        let input = apply_prefix(text, &self.profile.query_prefix);
-        let encs = self.tokenizer.encode_batch(&[&*input])?;
-        let refs: Vec<&Tokenized> = encs.iter().collect();
-        let pooled = self.embed_batch_tokenized_sync(&refs)?;
-        if pooled.data.is_empty() {
-            anyhow::bail!("no embedding produced");
-        }
-        Ok(pooled.data)
+        let n = encs.len();
+        let pooled = self.embed_tokenized(Arc::new(encs), (0..n).collect()).await?;
+        Ok(pooled.rows().map(<[f32]>::to_vec).collect())
     }
 
     pub async fn embed_query_async(&self, text: &str) -> Result<Vec<f32>> {
         let input = apply_prefix(text, &self.profile.query_prefix);
         let encs = self.tokenizer.encode_batch(&[&*input])?;
-        let refs: Vec<&Tokenized> = encs.iter().collect();
-        let pooled = tokio::task::block_in_place(|| self.embed_batch_tokenized_sync(&refs))?;
-        if pooled.data.is_empty() {
-            anyhow::bail!("no embedding produced");
-        }
-        Ok(pooled.data)
-    }
-
-    pub fn embed_passage(&self, text: &str) -> Result<Vec<f32>> {
-        let input = apply_prefix(text, &self.profile.passage_prefix);
-        let encs = self.tokenizer.encode_batch(&[&*input])?;
-        let refs: Vec<&Tokenized> = encs.iter().collect();
-        let pooled = self.embed_batch_tokenized_sync(&refs)?;
+        let n = encs.len();
+        let pooled = self.embed_tokenized(Arc::new(encs), (0..n).collect()).await?;
         if pooled.data.is_empty() {
             anyhow::bail!("no embedding produced");
         }
@@ -300,69 +337,67 @@ impl EmbedEngine {
     pub async fn embed_passage_async(&self, text: &str) -> Result<Vec<f32>> {
         let input = apply_prefix(text, &self.profile.passage_prefix);
         let encs = self.tokenizer.encode_batch(&[&*input])?;
-        let refs: Vec<&Tokenized> = encs.iter().collect();
-        let pooled = tokio::task::block_in_place(|| self.embed_batch_tokenized_sync(&refs))?;
+        let n = encs.len();
+        let pooled = self.embed_tokenized(Arc::new(encs), (0..n).collect()).await?;
         if pooled.data.is_empty() {
             anyhow::bail!("no embedding produced");
         }
         Ok(pooled.data)
     }
+}
 
-    pub async fn embed_batch_tokenized_async(&self, encs: &[&Tokenized]) -> Result<Pooled> {
-        tokio::task::block_in_place(|| self.embed_batch_tokenized_sync(encs))
+/// Run one embedding job against the worker-owned `State`. Numerically
+/// identical to the previous in-mutex path — only the call site (a dedicated
+/// thread instead of `block_in_place`) changed.
+fn embed_on_state(state: &mut State, encs: &[&Tokenized], cfg: &WorkerCfg) -> Result<Pooled> {
+    let real_batch = encs.len();
+    if real_batch == 0 {
+        return Ok(Pooled::empty(cfg.dim));
+    }
+    if real_batch > BATCH_CEILING {
+        anyhow::bail!(
+            "batch size {} exceeds BATCH_CEILING ({})",
+            real_batch,
+            BATCH_CEILING,
+        );
     }
 
-    pub fn embed_batch_tokenized_sync(&self, encs: &[&Tokenized]) -> Result<Pooled> {
-        let real_batch = encs.len();
-        if real_batch == 0 {
-            return Ok(Pooled::empty(self.profile.dim));
-        }
-        if real_batch > BATCH_CEILING {
-            anyhow::bail!(
-                "batch size {} exceeds BATCH_CEILING ({})",
-                real_batch,
-                BATCH_CEILING,
-            );
-        }
+    let max_len = cfg.max_length;
+    let real_seq = encs
+        .iter()
+        .map(|e| e.ids.len().min(max_len))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let seq = next_bucket(SEQ_BUCKETS, real_seq, max_len);
+    let batch = next_bucket(BATCH_BUCKETS, real_batch, BATCH_CEILING);
 
-        let max_len = self.profile.max_length;
-        let real_seq = encs
-            .iter()
-            .map(|e| e.ids.len().min(max_len))
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        let seq = next_bucket(SEQ_BUCKETS, real_seq, max_len);
-        let batch = next_bucket(BATCH_BUCKETS, real_batch, BATCH_CEILING);
+    let State {
+        model,
+        device,
+        scratch,
+    } = state;
+    scratch.prepare(batch, seq);
+    fill_scratch(scratch, encs, seq);
 
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let State {
-            model,
-            device,
-            scratch,
-        } = &mut *state;
-        scratch.prepare(batch, seq);
-        fill_scratch(scratch, encs, seq);
+    run_and_pool(
+        model,
+        device,
+        scratch,
+        Shape {
+            batch,
+            seq,
+            real_batch,
+            dim: cfg.dim,
+        },
+        &PoolingStrategy::from(cfg.pooling),
+    )?;
 
-        run_and_pool(
-            model,
-            device,
-            scratch,
-            Shape {
-                batch,
-                seq,
-                real_batch,
-                dim: self.profile.dim,
-            },
-            &PoolingStrategy::from(self.profile.pooling),
-        )?;
-
-        Ok(Pooled {
-            data: std::mem::take(&mut scratch.pooled_flat),
-            dim: self.profile.dim,
-            batch: real_batch,
-        })
-    }
+    Ok(Pooled {
+        data: std::mem::take(&mut scratch.pooled_flat),
+        dim: cfg.dim,
+        batch: real_batch,
+    })
 }
 
 fn fill_scratch(scratch: &mut Scratch, encs: &[&Tokenized], seq: usize) {
@@ -419,4 +454,64 @@ fn run_and_pool(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+
+    /// Loads the model named by `ZTI_TEST_MODEL`, or `None` (skip) when unset
+    /// or unresolvable — clean CI has no weights, the daemon host does.
+    fn test_engine() -> Option<EmbedEngine> {
+        let model = std::env::var("ZTI_TEST_MODEL").ok()?;
+        match EmbedEngine::load(&model) {
+            Ok(e) => Some(e),
+            Err(e) => {
+                eprintln!("skipping worker test: cannot load {model}: {e}");
+                None
+            }
+        }
+    }
+
+    /// The embed math is moved verbatim into `embed_on_state`, so equality with
+    /// the prior sync path holds by construction. What the worker rewrite can
+    /// still break is the *plumbing*: this asserts the worker is deterministic
+    /// and that many concurrent jobs all resolve to the same vector with no
+    /// deadlock or cross-request scratch races.
+    #[test]
+    fn worker_embed_is_deterministic_and_concurrent() {
+        // Load the engine *outside* any runtime — exactly as the daemon does
+        // (hf-hub blocks internally on load, which panics inside a runtime).
+        let Some(engine) = test_engine() else {
+            return;
+        };
+        let engine = Arc::new(engine);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .expect("build test runtime");
+
+        rt.block_on(async {
+            let query = "fn parse_config(path: &str) -> Result<Config>";
+
+            let base = engine.embed_query_async(query).await.expect("embed base");
+            assert_eq!(base.len(), engine.dim(), "embedding width must equal dim");
+            assert!(base.iter().any(|v| *v != 0.0), "embedding must be non-trivial");
+
+            let again = engine.embed_query_async(query).await.expect("embed again");
+            assert_eq!(base, again, "worker embeddings must be deterministic");
+
+            let mut handles = Vec::with_capacity(16);
+            for _ in 0..16 {
+                let e = Arc::clone(&engine);
+                let q = query.to_string();
+                handles.push(tokio::spawn(async move { e.embed_query_async(&q).await }));
+            }
+            for h in handles {
+                let v = h.await.expect("join").expect("concurrent embed");
+                assert_eq!(v, base, "concurrent embedding must equal the serial result");
+            }
+        });
+    }
 }

@@ -409,7 +409,7 @@ pub async fn index_project(
     let total_chunks = all_pending.len();
     // Tokenize in batches so the progress bar advances 0→N instead of
     // freezing until all chunks are tokenized.
-    let encs: Vec<zti_embed::Tokenized> = {
+    let encs: Arc<Vec<zti_embed::Tokenized>> = Arc::new({
         let passage_prefix = &engine.profile().passage_prefix;
         let prefixed: Vec<Cow<'_, str>> = all_pending
             .iter()
@@ -432,7 +432,7 @@ pub async fn index_project(
             );
         }
         out
-    };
+    });
 
     // All length math below must use the same cap that `prepare_from_encs`
     // applies before running the model — otherwise a chunk that tokenizes to
@@ -458,10 +458,6 @@ pub async fn index_project(
     let max_items = batch_size
         .saturating_mul(4)
         .min(zti_embed::batch::BATCH_CEILING);
-
-    // Reusable per-batch view into `encs` (no per-batch allocation: cleared
-    // and refilled with references each iteration).
-    let mut batch_encs: Vec<&zti_embed::Tokenized> = Vec::with_capacity(max_items);
 
     // Coalesce embed-batch RecordBatches and flush them with a single Lance
     // `add` (one manifest commit) once ~CHUNK_FLUSH_ROWS rows accumulate,
@@ -492,11 +488,8 @@ pub async fn index_project(
         let idxs = &order[cursor..end];
         let n_batch = idxs.len();
 
-        batch_encs.clear();
-        batch_encs.extend(idxs.iter().map(|&i| &encs[i]));
-
         let batch_started = std::time::Instant::now();
-        match engine.embed_batch_tokenized_async(&batch_encs).await {
+        match engine.embed_tokenized(Arc::clone(&encs), idxs.to_vec()).await {
             Ok(embs) => {
                 let dim = engine.dim();
                 let now_ns = std::time::SystemTime::now()
