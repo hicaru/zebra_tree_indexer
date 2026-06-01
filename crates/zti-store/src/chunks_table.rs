@@ -20,6 +20,46 @@ use zti_common::chunk_strategy::ChunkStrategy;
 
 use crate::schema;
 
+/// Columns `decode_batch` reads when `has_distance = true`.
+/// Excludes `language`, `indexed_at_ns`, and the heavy `embedding` column
+/// (3 KB/row at dim=768) that `decode_batch` never touches.
+const CHUNK_HIT_COLS_WITH_DISTANCE: &[&str] = &[
+    "chunk_id",
+    "file_path",
+    "symbol_qualified",
+    "symbol_kind",
+    "sym_id",
+    "sub_chunk_idx",
+    "total_sub_chunks",
+    "chunk_strategy",
+    "parent_sym_id",
+    "appendix_sym_ids",
+    "start_line",
+    "end_line",
+    "content",
+    "turbo_code",
+    "_distance",
+];
+
+/// Same as [`CHUNK_HIT_COLS_WITH_DISTANCE`] but without `_distance` — used by
+/// non-vector queries (`fetch_by_chunk_ids`, `lexical_match`, `get_by_sym_ids`).
+const CHUNK_HIT_COLS_NO_DISTANCE: &[&str] = &[
+    "chunk_id",
+    "file_path",
+    "symbol_qualified",
+    "symbol_kind",
+    "sym_id",
+    "sub_chunk_idx",
+    "total_sub_chunks",
+    "chunk_strategy",
+    "parent_sym_id",
+    "appendix_sym_ids",
+    "start_line",
+    "end_line",
+    "content",
+    "turbo_code",
+];
+
 pub struct ChunksTable {
     table: Table,
     index_created: bool,
@@ -164,7 +204,8 @@ impl ChunksTable {
             .query()
             .nearest_to(query)?
             .distance_type(lancedb::DistanceType::Cosine)
-            .limit(k);
+            .limit(k)
+            .select(lancedb::query::Select::columns(CHUNK_HIT_COLS_WITH_DISTANCE));
 
         if params.method.is_lancedb_index() {
             q = q
@@ -206,7 +247,9 @@ impl ChunksTable {
         }
         filter.push(')');
 
-        let results = self.table.query().only_if(filter).execute().await?;
+        let results = self.table.query().only_if(filter)
+            .select(lancedb::query::Select::columns(CHUNK_HIT_COLS_NO_DISTANCE))
+            .execute().await?;
 
         let mut hits = Vec::with_capacity(ids.len());
         let mut stream = std::pin::pin!(results);
@@ -240,7 +283,9 @@ impl ChunksTable {
             None => chunk_filter,
         };
 
-        let results = self.table.query().only_if(filter).execute().await?;
+        let results = self.table.query().only_if(filter)
+            .select(lancedb::query::Select::columns(CHUNK_HIT_COLS_NO_DISTANCE))
+            .execute().await?;
 
         let mut hits = Vec::with_capacity(ids.len());
         let mut stream = std::pin::pin!(results);
@@ -372,7 +417,8 @@ impl ChunksTable {
             .nearest_to(query)?
             .distance_type(lancedb::DistanceType::Cosine)
             .bypass_vector_index()
-            .limit(k);
+            .limit(k)
+            .select(lancedb::query::Select::columns(CHUNK_HIT_COLS_WITH_DISTANCE));
 
         if let Some(filter) = build_lang_path_filter(languages, path_glob) {
             q = q.only_if(filter);
@@ -447,6 +493,7 @@ impl ChunksTable {
             .query()
             .only_if(predicate)
             .limit(k)
+            .select(lancedb::query::Select::columns(CHUNK_HIT_COLS_NO_DISTANCE))
             .execute()
             .await?;
 
