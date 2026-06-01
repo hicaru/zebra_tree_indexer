@@ -182,6 +182,26 @@ impl TurboScorerCache {
     }
 }
 
+/// 256-entry lookup: byte → 8 sign floats ({-1.0, +1.0}).
+/// Indexed by the raw sign byte from a turbo code; turns the 6 M-iteration
+/// per-batch bit-unpack loop into a table read + `extend_from_slice`.
+const SIGN_LOOKUP: [[f32; 8]; 256] = {
+    let mut table = [[0.0f32; 8]; 256];
+    let mut b = 0u8;
+    loop {
+        let mut bit = 0;
+        while bit < 8 {
+            table[b as usize][bit] = if (b >> bit) & 1 != 0 { 1.0 } else { -1.0 };
+            bit += 1;
+        }
+        if b == 255 {
+            break;
+        }
+        b = b.wrapping_add(1);
+    }
+    table
+};
+
 /// Zero-alloc batch scoring using pre-built core and reusable scratch.
 /// Returns a slice into `scratch.scores` — values must be consumed before
 /// the next call to `score_batch` with the same scratch.
@@ -231,30 +251,43 @@ pub fn score_batch<'s>(
         .index_select(&angle_t, 0)?
         .reshape((n, core.dim_over_2))?;
 
-    // No clone — candle implements Mul for &Tensor.
     let x_comps = (&radii_t * &cos_vals)?;
     let y_comps = (&radii_t * &sin_vals)?;
 
     let decoded =
         Tensor::cat(&[&x_comps.unsqueeze(2)?, &y_comps.unsqueeze(2)?], 2)?.reshape((n, dim))?;
 
-    let polar_ip = decoded
-        .broadcast_mul(&rotated_query_t)?
-        .sum(1)?
-        .to_vec1::<f32>()?;
+    // Keep on GPU — single readback at the end.
+    let polar_ip_t = decoded.broadcast_mul(&rotated_query_t)?.sum(1)?;
 
-    // Step 3: QJL sum — branchless bit unpack on CPU, then GPU matmul.
+    // Step 3: QJL sign expansion — lookup-table driven, no bit-unpack loop.
     let proj_count = core.num_projections;
     let sign_stride = core.sign_bytes_per_code;
+    let full_bytes = proj_count >> 3;
+    let rem_bits = proj_count & 7;
 
     scratch.pre_signs_flat.clear();
     for i in 0..n {
         let base = i * sign_stride;
-        for p in 0..proj_count {
-            let byte_idx = p >> 3;
-            let bit_idx = p & 7;
-            let bit = (batch.signs[base + byte_idx] >> bit_idx) & 1;
-            scratch.pre_signs_flat.push((bit as f32) * 2.0 - 1.0);
+        let bytes = batch
+            .signs
+            .get(base..base.saturating_add(sign_stride))
+            .unwrap_or(&[]);
+        if bytes.len() < sign_stride {
+            scratch
+                .pre_signs_flat
+                .resize(scratch.pre_signs_flat.len() + proj_count, 0.0);
+            continue;
+        }
+        for b in 0..full_bytes {
+            scratch
+                .pre_signs_flat
+                .extend_from_slice(&SIGN_LOOKUP[bytes[b] as usize]);
+        }
+        if rem_bits > 0 {
+            scratch
+                .pre_signs_flat
+                .extend_from_slice(&SIGN_LOOKUP[bytes[full_bytes] as usize][..rem_bits]);
         }
     }
 
@@ -264,21 +297,22 @@ pub fn score_batch<'s>(
         &core.device,
     )?;
     let qjl_sums_t = signs_t.matmul(&projected.unsqueeze(1)?)?.squeeze(1)?;
-    let qjl_sums = qjl_sums_t.to_vec1::<f32>()?;
 
-    // Step 4: combine polar + QJL scores — zipped iterator, no indexing.
+    // Step 4: combine polar + QJL on-device → single GPU→CPU readback.
+    let norms_t = Tensor::from_slice(&batch.norms, n, &core.device)?;
+    let scale_t = Tensor::new(&[core.scale_factor], &core.device)?;
+    let norms_scaled = norms_t.broadcast_mul(&scale_t)?;
+    let combined = (&polar_ip_t + (&norms_scaled * &qjl_sums_t)?)?;
+    let combined_vec = combined.to_vec1::<f32>()?;
+
     scratch.scores.clear();
     scratch.scores.reserve(n);
     scratch.scores.extend(
         batch
             .chunk_ids
             .iter()
-            .zip(&batch.norms)
-            .zip(&qjl_sums)
-            .zip(&polar_ip)
-            .map(|(((&id, &norm), &qjl), &polar)| {
-                (id, polar + norm * core.scale_factor * qjl)
-            }),
+            .zip(&combined_vec)
+            .map(|(&id, &score)| (id, score)),
     );
 
     Ok(&scratch.scores)

@@ -9,6 +9,12 @@ use zti_rerank::gpu::{
 const BENCH_DIM: usize = 128;
 const BENCH_SEED: u64 = 42;
 const BATCH_N: usize = 4096;
+const BENCH_DEVICE: Device = Device::Cpu;
+const DEVICE_LABEL: &str = "Cpu";
+
+fn bench_name(base: &str) -> String {
+    format!("{base}/n={BATCH_N}_dim={BENCH_DIM}_{DEVICE_LABEL}")
+}
 
 fn bench_reranker() -> TurboReranker {
     TurboReranker::with_params(
@@ -44,13 +50,12 @@ fn bench_batch(reranker: &TurboReranker) -> TurboCodeBatch {
 
 fn bench_scorer_construction(c: &mut Criterion) {
     let reranker = bench_reranker();
-    let device = Device::Cpu;
 
-    c.bench_function("scorer_construction", |b| {
+    c.bench_function(&bench_name("scorer_construction"), |b| {
         b.iter(|| {
             // This is the per-query cost BEFORE caching — LU + RNG + tensor
             // uploads. With the cache, this runs once (cold), then never again.
-            let core = GpuTurboCore::from_reranker(black_box(&reranker), black_box(&device))
+            let core = GpuTurboCore::from_reranker(black_box(&reranker), black_box(&BENCH_DEVICE))
                 .expect("build core");
             black_box(core);
         });
@@ -59,19 +64,16 @@ fn bench_scorer_construction(c: &mut Criterion) {
 
 fn bench_scorer_cache_hit(c: &mut Criterion) {
     let reranker = bench_reranker();
-    let device = Device::Cpu;
     let cache = TurboScorerCache::default();
 
-    // Warm the cache.
     cache
-        .get_or_build(&reranker, &device)
+        .get_or_build(&reranker, &BENCH_DEVICE)
         .expect("cache fill");
 
-    c.bench_function("scorer_cache_hit", |b| {
+    c.bench_function(&bench_name("scorer_cache_hit"), |b| {
         b.iter(|| {
-            // Cache hit — Arc::clone bump only, no LU/RNG/tensor-upload.
             let core = cache
-                .get_or_build(black_box(&reranker), black_box(&device))
+                .get_or_build(black_box(&reranker), black_box(&BENCH_DEVICE))
                 .expect("cache hit");
             black_box(core);
         });
@@ -80,9 +82,8 @@ fn bench_scorer_cache_hit(c: &mut Criterion) {
 
 fn bench_score_batch(c: &mut Criterion) {
     let reranker = bench_reranker();
-    let device = Device::Cpu;
     let cache = TurboScorerCache::default();
-    let core = cache.get_or_build(&reranker, &device).expect("build core");
+    let core = cache.get_or_build(&reranker, &BENCH_DEVICE).expect("build core");
     let batch = bench_batch(&reranker);
     let query = bench_query();
     let mut rq: Vec<f32> = Vec::with_capacity(query.len());
@@ -90,7 +91,7 @@ fn bench_score_batch(c: &mut Criterion) {
 
     let mut scratch = GpuTurboScratch::with_capacity(core.num_projections(), core.dim_over_2());
 
-    c.bench_function("score_batch", |b| {
+    c.bench_function(&bench_name("score_batch"), |b| {
         b.iter(|| {
             let scores = score_batch(
                 black_box(&core),
