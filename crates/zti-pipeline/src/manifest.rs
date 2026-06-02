@@ -82,9 +82,16 @@ fn is_generated_file(name: &str) -> bool {
     false
 }
 
+fn is_tabular(name: &str) -> bool {
+    name.ends_with(".tsv")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Code(Language),
+    /// Tab-separated values. Chunked one row at a time so a dense database
+    /// dump becomes one record per row, not thousands of byte-sized passages.
+    Tsv,
     /// Any file we don't parse with tree-sitter but can read as UTF-8 text
     /// (READMEs, design docs, plain text, YAML, JSON, etc.). One chunk per
     /// file.
@@ -95,7 +102,24 @@ impl SourceKind {
     pub fn label(&self) -> &'static str {
         match self {
             SourceKind::Code(lang) => lang.as_str(),
+            SourceKind::Tsv => "tsv",
             SourceKind::Text => "text",
+        }
+    }
+}
+
+/// Classify a file path into a source kind by extension alone. Pure — does no
+/// I/O — so the walker and tests share one source of truth.
+fn classify_kind(path: &Path) -> SourceKind {
+    match detect_from_path(path) {
+        Some(l) => SourceKind::Code(l),
+        None => {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if is_tabular(name) {
+                SourceKind::Tsv
+            } else {
+                SourceKind::Text
+            }
         }
     }
 }
@@ -176,13 +200,10 @@ pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
             continue;
         }
 
-        // Tree-sitter language if recognised, otherwise text. Binary files
-        // are filtered naturally by `read_to_string` returning Err on
-        // invalid UTF-8.
-        let kind = match detect_from_path(path) {
-            Some(l) => SourceKind::Code(l),
-            None => SourceKind::Text,
-        };
+        // Tree-sitter language if recognised, tabular for `.tsv`, otherwise
+        // text. Binary files are filtered naturally by `read_to_string`
+        // returning Err on invalid UTF-8.
+        let kind = classify_kind(path);
 
         let rel = path
             .strip_prefix(root)
@@ -266,5 +287,35 @@ pub fn detect_changes(current: &HashMap<String, FileSnapshot>, previous: &[FileR
         modified,
         removed,
         unchanged,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SourceKind, classify_kind};
+    use std::path::Path;
+    use zti_tree_sitter::Language;
+
+    #[test]
+    fn tsv_is_tabular_not_text() {
+        assert_eq!(classify_kind(Path::new("db/findings.tsv")), SourceKind::Tsv);
+    }
+
+    #[test]
+    fn code_extensions_unchanged() {
+        assert_eq!(
+            classify_kind(Path::new("src/main.rs")),
+            SourceKind::Code(Language::Rust),
+        );
+        assert_eq!(
+            classify_kind(Path::new("app/widget.dart")),
+            SourceKind::Code(Language::Dart),
+        );
+    }
+
+    #[test]
+    fn docs_remain_plain_text() {
+        assert_eq!(classify_kind(Path::new("README.md")), SourceKind::Text);
+        assert_eq!(classify_kind(Path::new("data.csv")), SourceKind::Text);
     }
 }

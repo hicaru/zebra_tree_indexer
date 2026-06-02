@@ -188,6 +188,62 @@ pub fn chunk_text_file(rel_path: String, full_path: String, content: String) -> 
     }
 }
 
+/// Render one TSV data row as an embeddable body: a `rel_path row N` header
+/// followed by one `column: value` line per cell. Cells with no matching
+/// header (ragged rows) fall back to a positional `colN` label.
+fn render_tsv_row(rel_path: &str, line_no: u32, headers: &[&str], row: &str) -> String {
+    let mut body = String::with_capacity(row.len() + rel_path.len() + 16);
+    let _ = write!(body, "{rel_path} row {line_no}");
+    for (i, value) in row.split('\t').enumerate() {
+        match headers.get(i).copied().filter(|h| !h.is_empty()) {
+            Some(name) => {
+                let _ = write!(body, "\n{name}: {value}");
+            }
+            None => {
+                let _ = write!(body, "\ncol{}: {value}", i + 1);
+            }
+        }
+    }
+    body
+}
+
+/// Row-aware chunks for a TSV file. The first physical line is the header;
+/// each subsequent non-empty line becomes one `Document` chunk. This keeps a
+/// dense database dump at one record per row instead of recursively splitting
+/// the whole file into thousands of byte-sized passages. Oversized rows are
+/// split downstream by the indexer's adaptive splitter.
+pub fn chunk_tsv_file(rel_path: &str, full_path: &str, content: &str) -> Vec<Chunk<'static>> {
+    let mut lines = content.lines();
+    let Some(header_line) = lines.next() else {
+        return Vec::new();
+    };
+    let headers: Vec<&str> = header_line.split('\t').collect();
+
+    let row_cap = content.bytes().filter(|&b| b == b'\n').count();
+    let mut out = Vec::with_capacity(row_cap);
+    for (i, line) in lines.enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        // Header occupies line 1, so the first data row is line 2.
+        let line_no = i as u32 + 2;
+        out.push(Chunk {
+            file: full_path.to_string(),
+            rel_file: rel_path.to_string(),
+            start_line: line_no,
+            end_line: line_no,
+            sym_id: u32::MAX,
+            sub_chunk_idx: 0,
+            total_sub_chunks: 1,
+            chunk_strategy: ChunkStrategy::Symbol,
+            body: Cow::Owned(render_tsv_row(rel_path, line_no, &headers, line)),
+            qualified: format!("{rel_path}:row:{}", i + 1),
+            kind: Kind::Document,
+        });
+    }
+    out
+}
+
 pub fn is_chunkable_kind(kind: Kind) -> bool {
     matches!(
         kind,
@@ -256,6 +312,46 @@ mod tests {
             String::new(),
         );
         assert_eq!(c.end_line, 1);
+    }
+
+    #[test]
+    fn chunk_tsv_one_chunk_per_data_row() {
+        let content = "id\tname\tnote\n1\talice\thi\n2\tbob\tyo\n";
+        let chunks = chunk_tsv_file("db/users.tsv", "/abs/db/users.tsv", content);
+        assert_eq!(chunks.len(), 2);
+
+        let c0 = &chunks[0];
+        assert_eq!(c0.kind, Kind::Document);
+        assert_eq!(c0.start_line, 2);
+        assert_eq!(c0.end_line, 2);
+        assert_eq!(c0.qualified, "db/users.tsv:row:1");
+        assert_eq!(c0.rel_file, "db/users.tsv");
+        assert_eq!(
+            c0.body.as_ref(),
+            "db/users.tsv row 2\nid: 1\nname: alice\nnote: hi",
+        );
+
+        assert_eq!(chunks[1].start_line, 3);
+        assert_eq!(chunks[1].qualified, "db/users.tsv:row:2");
+    }
+
+    #[test]
+    fn chunk_tsv_header_only_yields_nothing() {
+        let chunks = chunk_tsv_file("h.tsv", "/abs/h.tsv", "a\tb\tc\n");
+        assert!(chunks.is_empty());
+        assert!(chunk_tsv_file("e.tsv", "/abs/e.tsv", "").is_empty());
+    }
+
+    #[test]
+    fn chunk_tsv_skips_blank_lines_and_labels_ragged_cells() {
+        // Blank line between records is skipped; a row with more cells than
+        // headers gets a positional `colN` label for the extra cell.
+        let content = "a\tb\n1\t2\n\n3\t4\t5\n";
+        let chunks = chunk_tsv_file("r.tsv", "/abs/r.tsv", content);
+        assert_eq!(chunks.len(), 2);
+        // Second record is on physical line 4 (blank line 3 skipped).
+        assert_eq!(chunks[1].start_line, 4);
+        assert_eq!(chunks[1].body.as_ref(), "r.tsv row 4\na: 3\nb: 4\ncol3: 5");
     }
 
     #[test]

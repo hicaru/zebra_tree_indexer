@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::Subcommand;
 
-use zti_dsl::chunking::chunk_text_file;
+use zti_dsl::chunking::{chunk_text_file, chunk_tsv_file};
 use zti_dsl::render::dsl::{DslRenderer, render_files_only};
 use zti_dsl::render::tree::AsciiTreeRenderer;
 use zti_dsl::DslChunker;
@@ -427,41 +427,55 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
                     .unwrap_or(&path)
                     .trim_start_matches('/')
                     .to_string();
-                let chunk = chunk_text_file(rel, path, contents);
+
+                // TSV files are chunked one record per row; everything else is
+                // a single whole-file Document chunk. Mirror the indexer so the
+                // trace counts match a real run.
+                let is_tsv = path.ends_with(".tsv");
+                let chunks = if is_tsv {
+                    chunk_tsv_file(&rel, &path, &contents)
+                } else {
+                    vec![chunk_text_file(rel, path, contents)]
+                };
                 let f_locate = f_start.elapsed();
 
                 eprintln!(
-                    "DEBUG [{}/{}] {} ({}B, ~{} tok, text) -> 1 chunk in {:?}{}",
+                    "DEBUG [{}/{}] {} ({}B, ~{} tok, {}) -> {} chunks in {:?}{}",
                     i + 1,
                     total,
-                    chunk.file,
+                    chunks.first().map(|c| c.file.as_str()).unwrap_or(""),
                     bytes,
                     est_tokens,
+                    if is_tsv { "tsv" } else { "text" },
+                    chunks.len(),
                     f_locate,
                     if f_locate.as_millis() > 500 { " WARN" } else { "" },
                 );
 
-                let c_start = Instant::now();
-                let sub = zti_recursive_chunk::split_text(
-                    &chunk.body,
-                    &sizing,
-                    None,
-                    &[],
-                );
-                let c_elapsed = c_start.elapsed();
-
-                if c_elapsed.as_millis() > 50 {
-                    eprintln!(
-                        "DEBUG   [1/1] sym=N/A kind=Document body={}B -> {} sub in {:?}{}",
-                        chunk.body.len(),
-                        sub.len(),
-                        c_elapsed,
-                        if c_elapsed.as_millis() > 500 { " WARN" } else { "" },
+                for chunk in &chunks {
+                    let c_start = Instant::now();
+                    let sub = zti_recursive_chunk::split_text(
+                        &chunk.body,
+                        &sizing,
+                        None,
+                        &[],
                     );
+                    let c_elapsed = c_start.elapsed();
+
+                    if c_elapsed.as_millis() > 50 {
+                        eprintln!(
+                            "DEBUG   sym=N/A kind=Document body={}B -> {} sub in {:?}{}",
+                            chunk.body.len(),
+                            sub.len(),
+                            c_elapsed,
+                            if c_elapsed.as_millis() > 500 { " WARN" } else { "" },
+                        );
+                    }
+
+                    total_sub += sub.len();
                 }
 
-                total_sub += sub.len();
-                total_chunks += 1;
+                total_chunks += chunks.len();
 
                 let f_total = f_start.elapsed();
                 if f_total.as_millis() > 1000 {

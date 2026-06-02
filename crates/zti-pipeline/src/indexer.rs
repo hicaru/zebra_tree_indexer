@@ -238,7 +238,7 @@ pub async fn index_project(
             content: snap.contents.as_str(),
             language: lang,
         }),
-        SourceKind::Text => None,
+        SourceKind::Tsv | SourceKind::Text => None,
     });
     let dsl_index = build_index_from_sources(
         root_str.to_string(),
@@ -312,6 +312,21 @@ pub async fn index_project(
                                 &c, &sizing, Some(&ts_lang), lang.as_str(), &mut out, terminal_ids,
                             ),
                             None => out.push((c, lang.as_str())),
+                        }
+                    }
+                    out
+                }
+                SourceKind::Tsv => {
+                    let full_path = root.join(rel).display().to_string();
+                    let rows =
+                        zti_dsl::chunking::chunk_tsv_file(rel, &full_path, &snap.contents);
+                    let mut out = Vec::with_capacity(rows.len());
+                    for chunk in rows {
+                        match adaptive_split(&chunk.body, engine) {
+                            Some(sizing) => generate_sub_chunks(
+                                &chunk, &sizing, None, "tsv", &mut out, &[],
+                            ),
+                            None => out.push((chunk, "tsv")),
                         }
                     }
                     out
@@ -697,7 +712,7 @@ pub async fn index_project(
         .values()
         .filter_map(|s| match s.kind {
             SourceKind::Code(l) => Some(l),
-            SourceKind::Text => None,
+            SourceKind::Tsv | SourceKind::Text => None,
         })
         .collect();
     let languages: Vec<&Language> = languages.iter().collect();
