@@ -433,7 +433,7 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
                 // trace counts match a real run.
                 let is_tsv = path.ends_with(".tsv");
                 let chunks = if is_tsv {
-                    chunk_tsv_file(&rel, &path, &contents)
+                    chunk_tsv_file(&rel, &path, &contents, sizing.chunk_size)
                 } else {
                     vec![chunk_text_file(rel, path, contents)]
                 };

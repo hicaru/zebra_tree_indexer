@@ -188,60 +188,96 @@ pub fn chunk_text_file(rel_path: String, full_path: String, content: String) -> 
     }
 }
 
-/// Render one TSV data row as an embeddable body: a `rel_path row N` header
-/// followed by one `column: value` line per cell. Cells with no matching
-/// header (ragged rows) fall back to a positional `colN` label.
-fn render_tsv_row(rel_path: &str, line_no: u32, headers: &[&str], row: &str) -> String {
-    let mut body = String::with_capacity(row.len() + rel_path.len() + 16);
-    let _ = write!(body, "{rel_path} row {line_no}");
-    for (i, value) in row.split('\t').enumerate() {
-        match headers.get(i).copied().filter(|h| !h.is_empty()) {
-            Some(name) => {
-                let _ = write!(body, "\n{name}: {value}");
-            }
-            None => {
-                let _ = write!(body, "\ncol{}: {value}", i + 1);
-            }
-        }
-    }
-    body
+/// One accumulated run of consecutive TSV rows plus the physical line span it
+/// covers. Finalized into a single `Chunk` once it reaches the byte budget.
+struct RowGroup {
+    buf: String,
+    first: u32,
+    last: u32,
 }
 
-/// Row-aware chunks for a TSV file. The first physical line is the header;
-/// each subsequent non-empty line becomes one `Document` chunk. This keeps a
-/// dense database dump at one record per row instead of recursively splitting
-/// the whole file into thousands of byte-sized passages. Oversized rows are
-/// split downstream by the indexer's adaptive splitter.
-pub fn chunk_tsv_file(rel_path: &str, full_path: &str, content: &str) -> Vec<Chunk<'static>> {
-    let mut lines = content.lines();
-    let Some(header_line) = lines.next() else {
-        return Vec::new();
-    };
-    let headers: Vec<&str> = header_line.split('\t').collect();
+/// State threaded through the packing fold: finished chunks plus the group
+/// currently being filled.
+struct PackState {
+    done: Vec<Chunk<'static>>,
+    pending: Option<RowGroup>,
+}
 
-    let row_cap = content.bytes().filter(|&b| b == b'\n').count();
-    let mut out = Vec::with_capacity(row_cap);
-    for (i, line) in lines.enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-        // Header occupies line 1, so the first data row is line 2.
-        let line_no = i as u32 + 2;
-        out.push(Chunk {
-            file: full_path.to_string(),
-            rel_file: rel_path.to_string(),
-            start_line: line_no,
-            end_line: line_no,
-            sym_id: u32::MAX,
-            sub_chunk_idx: 0,
-            total_sub_chunks: 1,
-            chunk_strategy: ChunkStrategy::Symbol,
-            body: Cow::Owned(render_tsv_row(rel_path, line_no, &headers, line)),
-            qualified: format!("{rel_path}:row:{}", i + 1),
-            kind: Kind::Document,
-        });
+/// Finalize an accumulated row group into a `Chunk`, moving its buffer into
+/// `Cow::Owned` (no copy). The body is the raw row text only — no column labels.
+fn finalize_group(rel_path: &str, full_path: &str, group: RowGroup) -> Chunk<'static> {
+    Chunk {
+        file: full_path.to_string(),
+        rel_file: rel_path.to_string(),
+        start_line: group.first,
+        end_line: group.last,
+        sym_id: u32::MAX,
+        sub_chunk_idx: 0,
+        total_sub_chunks: 1,
+        chunk_strategy: ChunkStrategy::Symbol,
+        qualified: format!("{rel_path}:rows:{}-{}", group.first, group.last),
+        body: Cow::Owned(group.buf),
+        kind: Kind::Document,
     }
-    out
+}
+
+/// Row-aware chunks for a TSV file. The first physical line is the header and is
+/// dropped; each subsequent non-empty line is a record embedded as its raw
+/// values. Consecutive records are greedily packed into one chunk until adding
+/// the next would exceed `target_bytes`, keeping a dense database dump record
+/// aligned (never split mid-record) while small rows pack densely. A single row
+/// larger than `target_bytes` becomes its own chunk and is split downstream by
+/// the indexer's adaptive splitter.
+pub fn chunk_tsv_file(
+    rel_path: &str,
+    full_path: &str,
+    content: &str,
+    target_bytes: usize,
+) -> Vec<Chunk<'static>> {
+    let cap = content.len() / target_bytes.max(1) + 1;
+    // `enumerate` before `skip(1)` keeps `i` as the 0-based physical line, so the
+    // first data row (physical line 2) lands at `i == 1`.
+    let state = content
+        .lines()
+        .enumerate()
+        .skip(1)
+        .filter(|(_, line)| !line.is_empty())
+        .fold(
+            PackState {
+                done: Vec::with_capacity(cap),
+                pending: None,
+            },
+            |mut state, (i, line)| {
+                let phys = i as u32 + 1;
+                let start_new = match state.pending.as_ref() {
+                    Some(group) => group.buf.len() + 1 + line.len() > target_bytes,
+                    None => true,
+                };
+                if start_new {
+                    if let Some(group) = state.pending.take() {
+                        state.done.push(finalize_group(rel_path, full_path, group));
+                    }
+                    let mut buf = String::with_capacity(target_bytes.max(line.len()));
+                    buf.push_str(line);
+                    state.pending = Some(RowGroup {
+                        buf,
+                        first: phys,
+                        last: phys,
+                    });
+                } else if let Some(group) = state.pending.as_mut() {
+                    group.buf.push('\n');
+                    group.buf.push_str(line);
+                    group.last = phys;
+                }
+                state
+            },
+        );
+
+    let PackState { mut done, pending } = state;
+    if let Some(group) = pending {
+        done.push(finalize_group(rel_path, full_path, group));
+    }
+    done
 }
 
 pub fn is_chunkable_kind(kind: Kind) -> bool {
@@ -315,43 +351,66 @@ mod tests {
     }
 
     #[test]
-    fn chunk_tsv_one_chunk_per_data_row() {
+    fn chunk_tsv_packs_small_rows_into_one_chunk() {
         let content = "id\tname\tnote\n1\talice\thi\n2\tbob\tyo\n";
-        let chunks = chunk_tsv_file("db/users.tsv", "/abs/db/users.tsv", content);
-        assert_eq!(chunks.len(), 2);
+        // Generous budget → both data rows pack into a single chunk.
+        let chunks = chunk_tsv_file("db/users.tsv", "/abs/db/users.tsv", content, 4096);
+        assert_eq!(chunks.len(), 1);
 
-        let c0 = &chunks[0];
-        assert_eq!(c0.kind, Kind::Document);
-        assert_eq!(c0.start_line, 2);
-        assert_eq!(c0.end_line, 2);
-        assert_eq!(c0.qualified, "db/users.tsv:row:1");
-        assert_eq!(c0.rel_file, "db/users.tsv");
-        assert_eq!(
-            c0.body.as_ref(),
-            "db/users.tsv row 2\nid: 1\nname: alice\nnote: hi",
-        );
+        let c = &chunks[0];
+        assert_eq!(c.kind, Kind::Document);
+        assert_eq!(c.rel_file, "db/users.tsv");
+        // Spans physical lines 2..=3 (header is line 1).
+        assert_eq!(c.start_line, 2);
+        assert_eq!(c.end_line, 3);
+        assert_eq!(c.qualified, "db/users.tsv:rows:2-3");
+        // Raw values only, records joined by newline — no column labels.
+        assert_eq!(c.body.as_ref(), "1\talice\thi\n2\tbob\tyo");
+    }
 
+    #[test]
+    fn chunk_tsv_starts_new_chunk_at_budget() {
+        let content = "id\tname\n1\talice\n2\tbob\n3\tcarol\n";
+        // Budget holds one ~7-byte record but not two → one chunk per record.
+        let chunks = chunk_tsv_file("u.tsv", "/abs/u.tsv", content, 8);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].body.as_ref(), "1\talice");
+        assert_eq!(chunks[0].start_line, 2);
+        assert_eq!(chunks[0].end_line, 2);
+        assert_eq!(chunks[0].qualified, "u.tsv:rows:2-2");
+        assert_eq!(chunks[2].body.as_ref(), "3\tcarol");
+        assert_eq!(chunks[2].start_line, 4);
+    }
+
+    #[test]
+    fn chunk_tsv_oversized_row_stands_alone() {
+        // A record larger than the budget is emitted on its own (the indexer
+        // splits it downstream); neighbours do not merge into it.
+        let content = "h\nshort\nthisrowislongerthanbudget\ntiny\n";
+        let chunks = chunk_tsv_file("o.tsv", "/abs/o.tsv", content, 10);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[1].body.as_ref(), "thisrowislongerthanbudget");
         assert_eq!(chunks[1].start_line, 3);
-        assert_eq!(chunks[1].qualified, "db/users.tsv:row:2");
+        assert_eq!(chunks[1].end_line, 3);
     }
 
     #[test]
-    fn chunk_tsv_header_only_yields_nothing() {
-        let chunks = chunk_tsv_file("h.tsv", "/abs/h.tsv", "a\tb\tc\n");
-        assert!(chunks.is_empty());
-        assert!(chunk_tsv_file("e.tsv", "/abs/e.tsv", "").is_empty());
+    fn chunk_tsv_header_only_or_empty_yields_nothing() {
+        assert!(chunk_tsv_file("h.tsv", "/abs/h.tsv", "a\tb\tc\n", 4096).is_empty());
+        assert!(chunk_tsv_file("e.tsv", "/abs/e.tsv", "", 4096).is_empty());
     }
 
     #[test]
-    fn chunk_tsv_skips_blank_lines_and_labels_ragged_cells() {
-        // Blank line between records is skipped; a row with more cells than
-        // headers gets a positional `colN` label for the extra cell.
-        let content = "a\tb\n1\t2\n\n3\t4\t5\n";
-        let chunks = chunk_tsv_file("r.tsv", "/abs/r.tsv", content);
+    fn chunk_tsv_skips_blank_lines_keeping_physical_line_numbers() {
+        // Blank line 3 is skipped; the second record keeps its physical line 4.
+        let content = "a\tb\n1\t2\n\n3\t4\n";
+        // Tiny budget → one chunk per record so each line span is assertable.
+        let chunks = chunk_tsv_file("r.tsv", "/abs/r.tsv", content, 3);
         assert_eq!(chunks.len(), 2);
-        // Second record is on physical line 4 (blank line 3 skipped).
+        assert_eq!(chunks[0].start_line, 2);
+        assert_eq!(chunks[0].body.as_ref(), "1\t2");
         assert_eq!(chunks[1].start_line, 4);
-        assert_eq!(chunks[1].body.as_ref(), "r.tsv row 4\na: 3\nb: 4\ncol3: 5");
+        assert_eq!(chunks[1].body.as_ref(), "3\t4");
     }
 
     #[test]

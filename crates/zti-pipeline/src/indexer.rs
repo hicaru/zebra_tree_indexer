@@ -318,8 +318,16 @@ pub async fn index_project(
                 }
                 SourceKind::Tsv => {
                     let full_path = root.join(rel).display().to_string();
-                    let rows =
-                        zti_dsl::chunking::chunk_tsv_file(rel, &full_path, &snap.contents);
+                    // Pack rows up to the same byte budget `adaptive_split` uses
+                    // so multi-row chunks fit the model and aren't re-split.
+                    let budget =
+                        engine.profile().max_length.saturating_mul(CHARS_PER_TOKEN);
+                    let rows = zti_dsl::chunking::chunk_tsv_file(
+                        rel,
+                        &full_path,
+                        &snap.contents,
+                        budget,
+                    );
                     let mut out = Vec::with_capacity(rows.len());
                     for chunk in rows {
                         match adaptive_split(&chunk.body, engine) {
