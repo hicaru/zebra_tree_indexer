@@ -83,6 +83,8 @@ rustyline = "18"
 rmcp = { version = "1.7", features = ["server","macros","transport-io"] }
 schemars = "1"
 globset = "0.4"
+notify                 = "8"
+notify-debouncer-full  = "0.5"
 
 indoc = "2"
 toml    = "1"

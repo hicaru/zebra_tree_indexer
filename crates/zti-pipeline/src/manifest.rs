@@ -52,6 +52,44 @@ const PIPELINE_SKIP_DIRS: &[&str] = &[
     "deps",
 ];
 
+/// Basename-only ignore test shared by the walker and the watcher. Mirrors the
+/// files the walker drops: hidden, manifests, lockfiles, license boilerplate,
+/// non-code assets, generated code.
+fn is_ignored_basename(name: &str) -> bool {
+    name.starts_with('.')
+        || MANIFEST_NAMES.contains(&name)
+        || is_lock_file(name)
+        || is_license_file(name)
+        || is_non_code_asset(name)
+        || is_generated_file(name)
+}
+
+/// Coarse path filter for the filesystem watcher: `true` when `path` could be an
+/// indexable source file under `root`. The walker still applies gitignore on top;
+/// this only drops obvious build-artifact noise (`target/`, `node_modules/`,
+/// `.git/`, lockfiles, generated code) so churn there never schedules a reindex.
+pub fn is_index_candidate(root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else {
+        return false;
+    };
+    let mut comps = rel.components();
+    // Any hidden or skip-dir component disqualifies (matches the walker's
+    // `.hidden(true)` + skip-dir `filter_entry`).
+    let dir_blocked = comps.any(|c| match c {
+        std::path::Component::Normal(os) => {
+            let name = os.to_string_lossy();
+            name.starts_with('.') || PIPELINE_SKIP_DIRS.contains(&name.as_ref())
+        }
+        _ => false,
+    });
+    if dir_blocked {
+        return false;
+    }
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| !is_ignored_basename(name))
+}
+
 fn is_generated_file(name: &str) -> bool {
     if name.starts_with("frb_generated") {
         return true;
@@ -186,13 +224,7 @@ pub fn walk_source_files(root: &Path) -> HashMap<String, FileSnapshot> {
         }
 
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if file_name.starts_with('.')
-            || MANIFEST_NAMES.contains(&file_name)
-            || is_lock_file(file_name)
-            || is_license_file(file_name)
-            || is_non_code_asset(file_name)
-            || is_generated_file(file_name)
-        {
+        if is_ignored_basename(file_name) {
             continue;
         }
 

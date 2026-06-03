@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
@@ -18,6 +19,9 @@ pub struct LoadedProject {
     pub dsl_index: RwLock<Option<Arc<ProjectIndex>>>,
     pub indexing_lock: Mutex<()>,
     pub cancel: AtomicBool,
+    /// Set while an auto-reindex is queued or running, so overlapping FS events
+    /// coalesce into one trailing run instead of stacking tasks.
+    pub reindex_scheduled: AtomicBool,
 }
 
 pub struct DaemonState {
@@ -34,6 +38,7 @@ pub struct DaemonState {
     pub started_at: Instant,
     pub shutdown_tx: watch::Sender<bool>,
     pub shutdown_rx: watch::Receiver<bool>,
+    pub watch: OnceLock<Arc<crate::watch::WatchManager>>,
     _pid_lock: File,
 }
 
@@ -70,6 +75,7 @@ impl DaemonState {
             started_at: Instant::now(),
             shutdown_tx,
             shutdown_rx,
+            watch: OnceLock::new(),
             _pid_lock: pid_lock,
         }
     }
@@ -129,6 +135,7 @@ impl DaemonState {
             dsl_index: RwLock::new(None),
             indexing_lock: Mutex::new(()),
             cancel: AtomicBool::new(false),
+            reindex_scheduled: AtomicBool::new(false),
         });
 
         {

@@ -52,5 +52,9 @@ pub async fn handle(req: &RemoveProjectReq, state: &DaemonState) -> Response {
         _ => {}
     }
 
+    if let Some(manager) = state.watch.get() {
+        manager.unwatch(&pid).await;
+    }
+
     Response::RemoveProject(Ok(()))
 }

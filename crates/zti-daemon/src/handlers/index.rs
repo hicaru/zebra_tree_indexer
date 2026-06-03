@@ -87,17 +87,26 @@ where
     };
 
     let terminal = match final_result {
-        Ok(stats) => Response::Index(Ok(IndexStats {
-            total_chunks: stats.total_chunks,
-            total_files: stats.total_files,
-            new_chunks: stats.new_chunks,
-            reindexed_files: stats.reindexed_files,
-            duration_ms: stats.duration_ms,
-            paused: stats.paused,
-        })),
+        Ok(stats) => {
+            if let Some(manager) = state.watch.get()
+                && let Ok(root) = std::path::Path::new(&req.project_root).canonicalize()
+            {
+                let pid = zti_common::ids::project_id(&root);
+                let _ = manager.watch(root, pid).await;
+            }
+            Response::Index(Ok(IndexStats {
+                total_chunks: stats.total_chunks,
+                total_files: stats.total_files,
+                new_chunks: stats.new_chunks,
+                reindexed_files: stats.reindexed_files,
+                duration_ms: stats.duration_ms,
+                paused: stats.paused,
+            }))
+        }
         Err(e) => Response::Index(Err(ErrorBody {
             message: e.to_string(),
         })),
     };
+
     write_frame(writer, &terminal).await
 }
