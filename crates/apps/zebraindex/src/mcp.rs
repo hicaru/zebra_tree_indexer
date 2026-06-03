@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
-use rmcp::{ErrorData, ServiceExt, tool};
+use rmcp::{tool, ErrorData, ServiceExt};
 use tokio::sync::Mutex;
 use zti_ipc_client::Client;
 use zti_protocol::format_search_results;
@@ -98,8 +98,6 @@ pub struct ProjectListParams {}
 
 #[derive(Clone)]
 struct ZebraMcpServer {
-    #[allow(dead_code)]
-    tool_router: ToolRouter<Self>,
     daemon: Arc<Mutex<Option<Client>>>,
     indexed_projects_roots: String,
 }
@@ -107,7 +105,6 @@ struct ZebraMcpServer {
 impl ZebraMcpServer {
     fn new(indexed_projects_roots: String) -> Self {
         Self {
-            tool_router: Self::tool_router(),
             daemon: Arc::new(Mutex::new(None)),
             indexed_projects_roots,
         }
