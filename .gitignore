@@ -1,3 +1,6 @@
 /target
 Cargo.lock
 .pi
+.rpiv/
+.claude/
+meta-prompt.md
