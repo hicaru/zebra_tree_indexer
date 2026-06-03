@@ -238,7 +238,7 @@ pub async fn index_project(
             content: snap.contents.as_str(),
             language: lang,
         }),
-        SourceKind::Tsv | SourceKind::Text => None,
+        SourceKind::Tsv | SourceKind::Psv | SourceKind::Text => None,
     });
     let dsl_index = build_index_from_sources(
         root_str.to_string(),
@@ -316,25 +316,26 @@ pub async fn index_project(
                     }
                     out
                 }
-                SourceKind::Tsv => {
+                SourceKind::Tsv | SourceKind::Psv => {
                     let full_path = root.join(rel).display().to_string();
                     // Pack rows up to the same byte budget `adaptive_split` uses
                     // so multi-row chunks fit the model and aren't re-split.
                     let budget =
                         engine.profile().max_length.saturating_mul(CHARS_PER_TOKEN);
-                    let rows = zti_dsl::chunking::chunk_tsv_file(
+                    let rows = zti_dsl::chunking::chunk_tabular_file(
                         rel,
                         &full_path,
                         &snap.contents,
                         budget,
                     );
+                    let label = snap.kind.label();
                     let mut out = Vec::with_capacity(rows.len());
                     for chunk in rows {
                         match adaptive_split(&chunk.body, engine) {
                             Some(sizing) => generate_sub_chunks(
-                                &chunk, &sizing, None, "tsv", &mut out, &[],
+                                &chunk, &sizing, None, label, &mut out, &[],
                             ),
-                            None => out.push((chunk, "tsv")),
+                            None => out.push((chunk, label)),
                         }
                     }
                     out
@@ -720,7 +721,7 @@ pub async fn index_project(
         .values()
         .filter_map(|s| match s.kind {
             SourceKind::Code(l) => Some(l),
-            SourceKind::Tsv | SourceKind::Text => None,
+            SourceKind::Tsv | SourceKind::Psv | SourceKind::Text => None,
         })
         .collect();
     let languages: Vec<&Language> = languages.iter().collect();

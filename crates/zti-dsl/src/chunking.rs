@@ -221,14 +221,14 @@ fn finalize_group(rel_path: &str, full_path: &str, group: RowGroup) -> Chunk<'st
     }
 }
 
-/// Row-aware chunks for a TSV file. The first physical line is the header and is
-/// dropped; each subsequent non-empty line is a record embedded as its raw
-/// values. Consecutive records are greedily packed into one chunk until adding
-/// the next would exceed `target_bytes`, keeping a dense database dump record
-/// aligned (never split mid-record) while small rows pack densely. A single row
-/// larger than `target_bytes` becomes its own chunk and is split downstream by
-/// the indexer's adaptive splitter.
-pub fn chunk_tsv_file(
+/// Row-aware chunks for a tabular file (TSV/PSV). The first physical line is
+/// the header and is dropped; each subsequent non-empty line is a record
+/// embedded as its raw text. Consecutive records are greedily packed into one
+/// chunk until adding the next would exceed `target_bytes` (never split
+/// mid-record). The delimiter is irrelevant here — packing is line-based — so
+/// this serves both tab- and pipe-separated inputs. A single row larger than
+/// `target_bytes` becomes its own chunk and is split downstream.
+pub fn chunk_tabular_file(
     rel_path: &str,
     full_path: &str,
     content: &str,
@@ -351,10 +351,10 @@ mod tests {
     }
 
     #[test]
-    fn chunk_tsv_packs_small_rows_into_one_chunk() {
+    fn chunk_tabular_packs_small_rows_into_one_chunk() {
         let content = "id\tname\tnote\n1\talice\thi\n2\tbob\tyo\n";
         // Generous budget → both data rows pack into a single chunk.
-        let chunks = chunk_tsv_file("db/users.tsv", "/abs/db/users.tsv", content, 4096);
+        let chunks = chunk_tabular_file("db/users.tsv", "/abs/db/users.tsv", content, 4096);
         assert_eq!(chunks.len(), 1);
 
         let c = &chunks[0];
@@ -369,10 +369,10 @@ mod tests {
     }
 
     #[test]
-    fn chunk_tsv_starts_new_chunk_at_budget() {
+    fn chunk_tabular_starts_new_chunk_at_budget() {
         let content = "id\tname\n1\talice\n2\tbob\n3\tcarol\n";
         // Budget holds one ~7-byte record but not two → one chunk per record.
-        let chunks = chunk_tsv_file("u.tsv", "/abs/u.tsv", content, 8);
+        let chunks = chunk_tabular_file("u.tsv", "/abs/u.tsv", content, 8);
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[0].body.as_ref(), "1\talice");
         assert_eq!(chunks[0].start_line, 2);
@@ -383,11 +383,11 @@ mod tests {
     }
 
     #[test]
-    fn chunk_tsv_oversized_row_stands_alone() {
+    fn chunk_tabular_oversized_row_stands_alone() {
         // A record larger than the budget is emitted on its own (the indexer
         // splits it downstream); neighbours do not merge into it.
         let content = "h\nshort\nthisrowislongerthanbudget\ntiny\n";
-        let chunks = chunk_tsv_file("o.tsv", "/abs/o.tsv", content, 10);
+        let chunks = chunk_tabular_file("o.tsv", "/abs/o.tsv", content, 10);
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[1].body.as_ref(), "thisrowislongerthanbudget");
         assert_eq!(chunks[1].start_line, 3);
@@ -395,22 +395,34 @@ mod tests {
     }
 
     #[test]
-    fn chunk_tsv_header_only_or_empty_yields_nothing() {
-        assert!(chunk_tsv_file("h.tsv", "/abs/h.tsv", "a\tb\tc\n", 4096).is_empty());
-        assert!(chunk_tsv_file("e.tsv", "/abs/e.tsv", "", 4096).is_empty());
+    fn chunk_tabular_header_only_or_empty_yields_nothing() {
+        assert!(chunk_tabular_file("h.tsv", "/abs/h.tsv", "a\tb\tc\n", 4096).is_empty());
+        assert!(chunk_tabular_file("e.tsv", "/abs/e.tsv", "", 4096).is_empty());
     }
 
     #[test]
-    fn chunk_tsv_skips_blank_lines_keeping_physical_line_numbers() {
+    fn chunk_tabular_skips_blank_lines_keeping_physical_line_numbers() {
         // Blank line 3 is skipped; the second record keeps its physical line 4.
         let content = "a\tb\n1\t2\n\n3\t4\n";
         // Tiny budget → one chunk per record so each line span is assertable.
-        let chunks = chunk_tsv_file("r.tsv", "/abs/r.tsv", content, 3);
+        let chunks = chunk_tabular_file("r.tsv", "/abs/r.tsv", content, 3);
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].start_line, 2);
         assert_eq!(chunks[0].body.as_ref(), "1\t2");
         assert_eq!(chunks[1].start_line, 4);
         assert_eq!(chunks[1].body.as_ref(), "3\t4");
+    }
+
+    #[test]
+    fn chunk_tabular_packs_pipe_rows() {
+        let content = "id|name|note\n1|alice|hi\n2|bob|yo\n";
+        let chunks = chunk_tabular_file("db/users.psv", "/abs/db/users.psv", content, 4096);
+        assert_eq!(chunks.len(), 1);
+        let c = &chunks[0];
+        assert_eq!(c.start_line, 2);
+        assert_eq!(c.end_line, 3);
+        assert_eq!(c.qualified, "db/users.psv:rows:2-3");
+        assert_eq!(c.body.as_ref(), "1|alice|hi\n2|bob|yo");
     }
 
     #[test]

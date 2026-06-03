@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::Subcommand;
 
-use zti_dsl::chunking::{chunk_text_file, chunk_tsv_file};
+use zti_dsl::chunking::{chunk_text_file, chunk_tabular_file};
 use zti_dsl::render::dsl::{DslRenderer, render_files_only};
 use zti_dsl::render::tree::AsciiTreeRenderer;
 use zti_dsl::DslChunker;
@@ -428,12 +428,18 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
                     .trim_start_matches('/')
                     .to_string();
 
-                // TSV files are chunked one record per row; everything else is
-                // a single whole-file Document chunk. Mirror the indexer so the
-                // trace counts match a real run.
-                let is_tsv = path.ends_with(".tsv");
-                let chunks = if is_tsv {
-                    chunk_tsv_file(&rel, &path, &contents, sizing.chunk_size)
+                // Tabular files (TSV/PSV) are chunked one record per row;
+                // everything else is a single whole-file Document chunk.
+                // Mirror the indexer so the trace counts match a real run.
+                let ext = Path::new(&path).extension().and_then(|e| e.to_str());
+                let is_tabular = matches!(ext, Some("tsv") | Some("psv"));
+                let trace_lang = match ext {
+                    Some("tsv") => "tsv",
+                    Some("psv") => "psv",
+                    _ => "text",
+                };
+                let chunks = if is_tabular {
+                    chunk_tabular_file(&rel, &path, &contents, sizing.chunk_size)
                 } else {
                     vec![chunk_text_file(rel, path, contents)]
                 };
@@ -446,7 +452,7 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
                     chunks.first().map(|c| c.file.as_str()).unwrap_or(""),
                     bytes,
                     est_tokens,
-                    if is_tsv { "tsv" } else { "text" },
+                    trace_lang,
                     chunks.len(),
                     f_locate,
                     if f_locate.as_millis() > 500 { " WARN" } else { "" },

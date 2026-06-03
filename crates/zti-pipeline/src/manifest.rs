@@ -82,16 +82,14 @@ fn is_generated_file(name: &str) -> bool {
     false
 }
 
-fn is_tabular(name: &str) -> bool {
-    name.ends_with(".tsv")
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Code(Language),
     /// Tab-separated values. Chunked one row at a time so a dense database
     /// dump becomes one record per row, not thousands of byte-sized passages.
     Tsv,
+    /// Pipe-separated values. Same row-aware chunking as `Tsv`.
+    Psv,
     /// Any file we don't parse with tree-sitter but can read as UTF-8 text
     /// (READMEs, design docs, plain text, YAML, JSON, etc.). One chunk per
     /// file.
@@ -103,6 +101,7 @@ impl SourceKind {
         match self {
             SourceKind::Code(lang) => lang.as_str(),
             SourceKind::Tsv => "tsv",
+            SourceKind::Psv => "psv",
             SourceKind::Text => "text",
         }
     }
@@ -113,14 +112,11 @@ impl SourceKind {
 fn classify_kind(path: &Path) -> SourceKind {
     match detect_from_path(path) {
         Some(l) => SourceKind::Code(l),
-        None => {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if is_tabular(name) {
-                SourceKind::Tsv
-            } else {
-                SourceKind::Text
-            }
-        }
+        None => match path.extension().and_then(|e| e.to_str()) {
+            Some("tsv") => SourceKind::Tsv,
+            Some("psv") => SourceKind::Psv,
+            _ => SourceKind::Text,
+        },
     }
 }
 
@@ -299,6 +295,11 @@ mod tests {
     #[test]
     fn tsv_is_tabular_not_text() {
         assert_eq!(classify_kind(Path::new("db/findings.tsv")), SourceKind::Tsv);
+    }
+
+    #[test]
+    fn psv_is_its_own_kind() {
+        assert_eq!(classify_kind(Path::new("db/findings.psv")), SourceKind::Psv);
     }
 
     #[test]
