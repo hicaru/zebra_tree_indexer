@@ -81,7 +81,9 @@ mod tests {
     #[tokio::test]
     async fn append_batches_empty_is_noop() {
         let table = temp_table("empty").await;
-        append_batches(&table, Vec::new()).await.expect("noop append");
+        append_batches(&table, Vec::new())
+            .await
+            .expect("noop append");
         assert_eq!(table.count_rows(None).await.expect("count"), 0);
     }
 }

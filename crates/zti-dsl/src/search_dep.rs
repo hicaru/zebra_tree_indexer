@@ -3,9 +3,9 @@ use std::fmt::Write as _;
 use zti_common::dsl::SymbolBodyEntry;
 use zti_ts_core::types::Symbol;
 
+use crate::AsciiTreeRenderer;
 use crate::batch::resolve_symbol_bodies;
 use crate::model::ProjectIndex;
-use crate::AsciiTreeRenderer;
 
 const BYTES_PER_TOKEN: usize = 4;
 const MAX_CANDIDATE_ALIASES: usize = 3;

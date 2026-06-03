@@ -104,7 +104,9 @@ pub async fn run(
                 Ok(p) => p,
                 Err(_) => root
                     .canonicalize()
-                    .map_err(|_| anyhow::anyhow!("Project directory not found: {}", root.display()))?
+                    .map_err(|_| {
+                        anyhow::anyhow!("Project directory not found: {}", root.display())
+                    })?
                     .to_string_lossy()
                     .to_string(),
             };
@@ -204,7 +206,9 @@ pub async fn run(
                 Response::Search(Ok(results)) => {
                     print!("{}", format_search_results(&results));
                     if results.total == 0 {
-                        println!("0 results (hint: project may not be indexed; run `zebraindex index --root <root>` to index)");
+                        println!(
+                            "0 results (hint: project may not be indexed; run `zebraindex index --root <root>` to index)"
+                        );
                     } else {
                         println!("{} results", results.total);
                     }

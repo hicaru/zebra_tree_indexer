@@ -6,10 +6,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use super::common::{bar_slice, centered_rect, render_button_row, spinner_ch, EMPTY_20, FILLED_20};
-use super::super::app::{
-    App, DetailButton, Modal,
-};
+use super::super::app::{App, DetailButton, Modal};
+use super::common::{EMPTY_20, FILLED_20, bar_slice, centered_rect, render_button_row, spinner_ch};
 use super::setup::draw_method_selection_modal;
 
 pub fn draw_modal(f: &mut Frame, app: &App, tick: u16) {
@@ -227,10 +225,7 @@ fn phase_row(
         Ordering::Equal => ("\u{25b6}", Color::Cyan),
         Ordering::Greater => ("\u{00b7}", Color::DarkGray),
     };
-    let head = Span::styled(
-        format!("  {} {}  ", icon, name),
-        Style::default().fg(color),
-    );
+    let head = Span::styled(format!("  {} {}  ", icon, name), Style::default().fg(color));
     if ord < active_order {
         let suffix = match pdef {
             zti_protocol::response::IndexPhase::Dsl => {
@@ -267,7 +262,11 @@ fn phase_row(
         } else {
             Span::styled(message.to_string(), Style::default().fg(Color::Gray))
         };
-        Line::from(vec![head, Span::styled(bar, Style::default().fg(Color::Cyan)), tail])
+        Line::from(vec![
+            head,
+            Span::styled(bar, Style::default().fg(Color::Cyan)),
+            tail,
+        ])
     } else {
         Line::from(vec![
             head,
@@ -276,12 +275,7 @@ fn phase_row(
     }
 }
 
-fn draw_modal_indexing(
-    f: &mut Frame,
-    tick: u16,
-    m: &super::super::app::Modal,
-    app: &App,
-) {
+fn draw_modal_indexing(f: &mut Frame, tick: u16, m: &super::super::app::Modal, app: &App) {
     let (phase, current, total, message, is_reindex, started_at, files, chunks) = match m {
         super::super::app::Modal::Indexing {
             phase,
@@ -291,15 +285,29 @@ fn draw_modal_indexing(
             is_reindex,
             started_at,
             files,
-            chunks, ..
-        } => (phase, *current, *total, message.as_str(), *is_reindex, *started_at, *files, *chunks),
+            chunks,
+            ..
+        } => (
+            phase,
+            *current,
+            *total,
+            message.as_str(),
+            *is_reindex,
+            *started_at,
+            *files,
+            *chunks,
+        ),
         _ => return,
     };
 
     let area = centered_rect(55, 46, f.area());
     f.render_widget(Clear, area);
 
-    let title = if is_reindex { " Reindexing " } else { " Indexing " };
+    let title = if is_reindex {
+        " Reindexing "
+    } else {
+        " Indexing "
+    };
 
     let block = Block::default()
         .title(title)
@@ -307,8 +315,16 @@ fn draw_modal_indexing(
         .border_style(Style::default().fg(Color::Cyan));
 
     let elapsed = started_at.elapsed();
-    let elapsed_str = format!("elapsed {}:{:02}", elapsed.as_secs() / 60, elapsed.as_secs() % 60);
-    let label = if is_reindex { "Reindexing project..." } else { "Indexing project..." };
+    let elapsed_str = format!(
+        "elapsed {}:{:02}",
+        elapsed.as_secs() / 60,
+        elapsed.as_secs() % 60
+    );
+    let label = if is_reindex {
+        "Reindexing project..."
+    } else {
+        "Indexing project..."
+    };
 
     let active_order = phase.order();
 
@@ -339,7 +355,14 @@ fn draw_modal_indexing(
 
     for (pdef, name) in phase_labels {
         lines.push(phase_row(
-            *pdef, name, active_order, current, total, files, chunks, message,
+            *pdef,
+            name,
+            active_order,
+            current,
+            total,
+            files,
+            chunks,
+            message,
         ));
     }
 
@@ -361,7 +384,9 @@ fn draw_modal_indexing(
     )));
     lines.push(Line::from(""));
 
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 
@@ -406,5 +431,3 @@ fn draw_add_project(f: &mut Frame, path_input: &str, error: Option<&str>) {
         .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
-
-

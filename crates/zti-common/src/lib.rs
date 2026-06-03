@@ -130,11 +130,7 @@ mod tests {
                 for end in 0u32..8 {
                     let expected = line_byte_range(src, start, end);
                     let got = idx.byte_range(start, end);
-                    assert_eq!(
-                        got, expected,
-                        "src={:?} start={} end={}",
-                        src, start, end
-                    );
+                    assert_eq!(got, expected, "src={:?} start={} end={}", src, start, end);
                 }
             }
         }

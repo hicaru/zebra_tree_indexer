@@ -83,7 +83,9 @@ fn bench_scorer_cache_hit(c: &mut Criterion) {
 fn bench_score_batch(c: &mut Criterion) {
     let reranker = bench_reranker();
     let cache = TurboScorerCache::default();
-    let core = cache.get_or_build(&reranker, &BENCH_DEVICE).expect("build core");
+    let core = cache
+        .get_or_build(&reranker, &BENCH_DEVICE)
+        .expect("build core");
     let batch = bench_batch(&reranker);
     let query = bench_query();
     let mut rq: Vec<f32> = Vec::with_capacity(query.len());

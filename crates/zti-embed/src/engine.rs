@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use anyhow::{Result, anyhow};
-use tokio::sync::{mpsc, oneshot};
 use arrow::array::{FixedSizeListArray, Float32Array};
 use arrow::datatypes::{DataType, Field};
 use candle_core::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::Config as BertConfig;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::bert::BertModel;
 
@@ -319,7 +319,9 @@ impl EmbedEngine {
         }
         let encs = self.tokenizer.encode_batch(texts)?;
         let n = encs.len();
-        let pooled = self.embed_tokenized(Arc::new(encs), (0..n).collect()).await?;
+        let pooled = self
+            .embed_tokenized(Arc::new(encs), (0..n).collect())
+            .await?;
         Ok(pooled.rows().map(<[f32]>::to_vec).collect())
     }
 
@@ -327,7 +329,9 @@ impl EmbedEngine {
         let input = apply_prefix(text, &self.profile.query_prefix);
         let encs = self.tokenizer.encode_batch(&[&*input])?;
         let n = encs.len();
-        let pooled = self.embed_tokenized(Arc::new(encs), (0..n).collect()).await?;
+        let pooled = self
+            .embed_tokenized(Arc::new(encs), (0..n).collect())
+            .await?;
         if pooled.data.is_empty() {
             anyhow::bail!("no embedding produced");
         }
@@ -338,7 +342,9 @@ impl EmbedEngine {
         let input = apply_prefix(text, &self.profile.passage_prefix);
         let encs = self.tokenizer.encode_batch(&[&*input])?;
         let n = encs.len();
-        let pooled = self.embed_tokenized(Arc::new(encs), (0..n).collect()).await?;
+        let pooled = self
+            .embed_tokenized(Arc::new(encs), (0..n).collect())
+            .await?;
         if pooled.data.is_empty() {
             anyhow::bail!("no embedding produced");
         }
@@ -497,7 +503,10 @@ mod worker_tests {
 
             let base = engine.embed_query_async(query).await.expect("embed base");
             assert_eq!(base.len(), engine.dim(), "embedding width must equal dim");
-            assert!(base.iter().any(|v| *v != 0.0), "embedding must be non-trivial");
+            assert!(
+                base.iter().any(|v| *v != 0.0),
+                "embedding must be non-trivial"
+            );
 
             let again = engine.embed_query_async(query).await.expect("embed again");
             assert_eq!(base, again, "worker embeddings must be deterministic");

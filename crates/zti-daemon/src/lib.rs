@@ -90,7 +90,13 @@ pub fn run_daemon(config: &DaemonConfig<'_>) -> Result<()> {
     rt.block_on(async {
         let model_id: Arc<str> = Arc::from(config.model.as_ref());
         let model_dtype = config.model_dtype.map(String::from);
-        let state = Arc::new(DaemonState::new(engine, model_id, hw, model_dtype, pid_file));
+        let state = Arc::new(DaemonState::new(
+            engine,
+            model_id,
+            hw,
+            model_dtype,
+            pid_file,
+        ));
         let listener = UnixListener::bind(&socket_path)?;
         tracing::info!("daemon listening on {}", socket_path.display());
         listener::run(listener, state).await?;

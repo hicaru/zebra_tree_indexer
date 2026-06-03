@@ -359,11 +359,7 @@ pub static TYPESCRIPT_CONFIG: LangConfig = LangConfig {
     impl_node: None,
     symbol_name_skip: &[],
     symbol_name_skip_prefix: &[],
-    terminal_node_kinds: &[
-        "comment",
-        "string",
-        "template_string",
-    ],
+    terminal_node_kinds: &["comment", "string", "template_string"],
 };
 
 pub static DART_CONFIG: LangConfig = LangConfig {
@@ -526,7 +522,11 @@ pub static GO_CONFIG: LangConfig = LangConfig {
     impl_node: None,
     symbol_name_skip: &[],
     symbol_name_skip_prefix: &[],
-    terminal_node_kinds: &["comment", "interpreted_string_literal", "raw_string_literal"],
+    terminal_node_kinds: &[
+        "comment",
+        "interpreted_string_literal",
+        "raw_string_literal",
+    ],
 };
 
 pub static JAVASCRIPT_CONFIG: LangConfig = LangConfig {

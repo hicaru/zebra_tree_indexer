@@ -176,16 +176,9 @@ static TS_PREFIXES: &[&str] = &[
     "var ",
 ];
 
-static GO_PREFIXES: &[&str] = &[
-    "func ",
-    "type ",
-];
+static GO_PREFIXES: &[&str] = &["func ", "type "];
 
-static PYTHON_PREFIXES: &[&str] = &[
-    "async ",
-    "def ",
-    "class ",
-];
+static PYTHON_PREFIXES: &[&str] = &["async ", "def ", "class "];
 
 // Deliberately omits return types ("void ", "String ", "Future<…> ", …):
 // stripping them destroys reader-useful info, and enumerating every generic

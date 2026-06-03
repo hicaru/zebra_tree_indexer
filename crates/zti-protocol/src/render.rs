@@ -155,11 +155,7 @@ mod tests {
             total: 1,
         };
         let out = format_search_results(&r);
-        assert!(
-            out.contains("(1 hits, 1 related)"),
-            "header: {}",
-            out
-        );
+        assert!(out.contains("(1 hits, 1 related)"), "header: {}", out);
         assert!(out.contains("#1 0.7407\n"), "hit rank line: {}", out);
         assert!(
             out.contains("src/poly/rq.rs:127-203\n"),
@@ -167,11 +163,7 @@ mod tests {
             out
         );
         assert!(out.contains("    pub fn recip"), "body indent: {}", out);
-        assert!(
-            out.contains("-- deps:\n"),
-            "appendix marker: {}",
-            out
-        );
+        assert!(out.contains("-- deps:\n"), "appendix marker: {}", out);
         assert!(
             out.contains("    pub fn i16_negative_mask"),
             "appendix body indent: {}",

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use tokio::sync::{Mutex, RwLock, watch};

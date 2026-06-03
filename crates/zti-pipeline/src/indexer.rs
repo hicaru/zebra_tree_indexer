@@ -3,13 +3,13 @@ use std::collections::{HashSet, VecDeque};
 
 use rustc_hash::FxHashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use arrow::array::{
-    BinaryBuilder, FixedSizeBinaryBuilder, ListBuilder, RecordBatch, StringArray,
-    StringBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt8Array,
+    BinaryBuilder, FixedSizeBinaryBuilder, ListBuilder, RecordBatch, StringArray, StringBuilder,
+    UInt8Array, UInt32Array, UInt32Builder, UInt64Array,
 };
 use rayon::prelude::*;
 use tracing::info;
@@ -21,8 +21,8 @@ use zti_embed::EmbedEngine;
 use zti_recursive_chunk;
 use zti_rerank::TurboReranker;
 use zti_store::Db;
-use zti_ts_core::walker::LanguageFrontend;
 use zti_tree_sitter::{Language, frontend_for};
+use zti_ts_core::walker::LanguageFrontend;
 
 const APPENDIX_DEPTH: usize = 2;
 const APPENDIX_CAP_PER_CHUNK: usize = 32;
@@ -93,8 +93,9 @@ fn generate_sub_chunks<'a>(
     sizing: &AdaptiveChunkSizing,
     lang: Option<&tree_sitter::Language>,
     kind_label: &'static str,
-    out: &mut Vec<(Chunk<'a>, &'static str)>,
+    out: &mut Vec<(Chunk<'a>, &'static str, u32)>,
     terminal_kinds: &[u16],
+    fidx: u32,
 ) {
     let sub_chunks = zti_recursive_chunk::split_text(
         &chunk.body,
@@ -121,7 +122,7 @@ fn generate_sub_chunks<'a>(
             qualified: chunk.qualified.clone(),
             kind: chunk.kind,
         };
-        out.push((sc, kind_label));
+        out.push((sc, kind_label, fidx));
     }
 }
 
@@ -131,6 +132,7 @@ pub struct IndexStats {
     pub new_chunks: usize,
     pub reindexed_files: usize,
     pub duration_ms: u64,
+    pub paused: bool,
 }
 
 pub async fn index_project(
@@ -190,11 +192,13 @@ pub async fn index_project(
             .chain(changes.modified.iter())
             .cloned()
             .collect();
+        // Delete prior chunks for EVERY file we're about to reindex (added too),
+        // so a resumed run can't duplicate chunks left behind by a paused run.
         to_delete = changes
             .removed
             .iter()
-            .chain(changes.modified.iter())
-            .map(|s| s.as_str())
+            .map(String::as_str)
+            .chain(need_reindex.iter().map(String::as_str))
             .collect();
     }
 
@@ -214,6 +218,7 @@ pub async fn index_project(
             new_chunks: 0,
             reindexed_files: 0,
             duration_ms: elapsed.as_millis() as u64,
+            paused: false,
         });
     }
 
@@ -240,18 +245,14 @@ pub async fn index_project(
         }),
         SourceKind::Tsv | SourceKind::Psv | SourceKind::Text => None,
     });
-    let dsl_index = build_index_from_sources(
-        root_str.to_string(),
-        dsl_sources,
-        |processed| {
-            reporter.set_phase(
-                zti_protocol::response::IndexPhase::Dsl,
-                processed as u64,
-                total_code,
-                "parsing code files",
-            );
-        },
-    );
+    let dsl_index = build_index_from_sources(root_str.to_string(), dsl_sources, |processed| {
+        reporter.set_phase(
+            zti_protocol::response::IndexPhase::Dsl,
+            processed as u64,
+            total_code,
+            "parsing code files",
+        );
+    });
     info!(
         "dsl-graph: {} symbols, {} edges, {} files",
         dsl_index.symbols.len(),
@@ -265,7 +266,10 @@ pub async fn index_project(
         "generating chunks",
     );
     let chunker = DslChunker::new(&dsl_index);
-    info!("dsl-chunker created, building terminal_cache for {} files", dsl_index.files.len());
+    info!(
+        "dsl-chunker created, building terminal_cache for {} files",
+        dsl_index.files.len()
+    );
 
     let mut terminal_cache: FxHashMap<Language, Vec<u16>> =
         FxHashMap::with_capacity_and_hasher(4, rustc_hash::FxBuildHasher);
@@ -285,11 +289,17 @@ pub async fn index_project(
         }
         terminal_cache.insert(lang, ids);
     }
-    info!("terminal_cache built with {} languages, starting chunk generation for {} files", terminal_cache.len(), need_reindex.len());
+    info!(
+        "terminal_cache built with {} languages, starting chunk generation for {} files",
+        terminal_cache.len(),
+        need_reindex.len()
+    );
 
-    let all_pending: Vec<(Chunk<'_>, &'static str)> = need_reindex
+    let all_pending: Vec<(Chunk<'_>, &'static str, u32)> = need_reindex
         .par_iter()
-        .flat_map(|rel| {
+        .enumerate()
+        .flat_map(|(fidx, rel)| {
+            let fidx = fidx as u32;
             let snap = match snapshots.get(rel) {
                 Some(s) => s,
                 None => return Vec::new(),
@@ -309,9 +319,15 @@ pub async fn index_project(
                     for c in chunks {
                         match adaptive_split(&c.body, engine) {
                             Some(sizing) => generate_sub_chunks(
-                                &c, &sizing, Some(&ts_lang), lang.as_str(), &mut out, terminal_ids,
+                                &c,
+                                &sizing,
+                                Some(&ts_lang),
+                                lang.as_str(),
+                                &mut out,
+                                terminal_ids,
+                                fidx,
                             ),
-                            None => out.push((c, lang.as_str())),
+                            None => out.push((c, lang.as_str(), fidx)),
                         }
                     }
                     out
@@ -320,8 +336,7 @@ pub async fn index_project(
                     let full_path = root.join(rel).display().to_string();
                     // Pack rows up to the same byte budget `adaptive_split` uses
                     // so multi-row chunks fit the model and aren't re-split.
-                    let budget =
-                        engine.profile().max_length.saturating_mul(CHARS_PER_TOKEN);
+                    let budget = engine.profile().max_length.saturating_mul(CHARS_PER_TOKEN);
                     let rows = zti_dsl::chunking::chunk_tabular_file(
                         rel,
                         &full_path,
@@ -333,9 +348,15 @@ pub async fn index_project(
                     for chunk in rows {
                         match adaptive_split(&chunk.body, engine) {
                             Some(sizing) => generate_sub_chunks(
-                                &chunk, &sizing, None, label, &mut out, &[],
+                                &chunk,
+                                &sizing,
+                                None,
+                                label,
+                                &mut out,
+                                &[],
+                                fidx,
                             ),
-                            None => out.push((chunk, label)),
+                            None => out.push((chunk, label, fidx)),
                         }
                     }
                     out
@@ -350,12 +371,10 @@ pub async fn index_project(
                     match adaptive_split(&chunk.body, engine) {
                         Some(sizing) => {
                             let mut out = Vec::with_capacity(4);
-                            generate_sub_chunks(
-                                &chunk, &sizing, None, "text", &mut out, &[],
-                            );
+                            generate_sub_chunks(&chunk, &sizing, None, "text", &mut out, &[], fidx);
                             out
                         }
-                        None => vec![(chunk, "text")],
+                        None => vec![(chunk, "text", fidx)],
                     }
                 }
             }
@@ -368,13 +387,35 @@ pub async fn index_project(
         need_reindex.len()
     );
 
+    let mut remaining: Vec<u32> = vec![0u32; need_reindex.len()];
+    for (_, _, fidx) in &all_pending {
+        if let Some(slot) = remaining.get_mut(*fidx as usize) {
+            *slot = slot.saturating_add(1);
+        }
+    }
+
+    // Files that produced no chunks (empty / no symbols) are "done"
+    // immediately — record them now so they aren't re-walked on every resume.
+    let zero_chunk: Vec<&str> = need_reindex
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| remaining.get(*i).copied().unwrap_or(0) == 0)
+        .map(|(_, p)| p.as_str())
+        .collect();
+    if !zero_chunk.is_empty() {
+        upsert_files(&files_table, &snapshots, &zero_chunk).await?;
+    }
+
     info!("building chunk_sym_set from {} chunks", all_pending.len());
     let chunk_sym_set: HashSet<u32> = all_pending
         .iter()
-        .filter(|(c, _)| c.sym_id != u32::MAX)
-        .map(|(c, _)| c.sym_id)
+        .filter(|(c, _, _)| c.sym_id != u32::MAX)
+        .map(|(c, _, _)| c.sym_id)
         .collect();
-    info!("chunk_sym_set built with {} symbols, building appendix BFS", chunk_sym_set.len());
+    info!(
+        "chunk_sym_set built with {} symbols, building appendix BFS",
+        chunk_sym_set.len()
+    );
 
     let appendix_for = |sym_id: u32| -> Vec<u32> {
         let mut visited: HashSet<u32> = HashSet::with_capacity(16);
@@ -431,13 +472,15 @@ pub async fn index_project(
     let reranker = TurboReranker::new(engine.dim())?;
 
     let total_chunks = all_pending.len();
+    let mut paused = false;
+
     // Tokenize in batches so the progress bar advances 0→N instead of
     // freezing until all chunks are tokenized.
     let encs: Arc<Vec<zti_embed::Tokenized>> = Arc::new({
         let passage_prefix = &engine.profile().passage_prefix;
         let prefixed: Vec<Cow<'_, str>> = all_pending
             .iter()
-            .map(|(c, _)| zti_embed::apply_prefix(&c.body, passage_prefix))
+            .map(|(c, _, _)| zti_embed::apply_prefix(&c.body, passage_prefix))
             .collect();
         let refs: Vec<&str> = prefixed.iter().map(|s| s.as_ref()).collect();
 
@@ -445,7 +488,8 @@ pub async fn index_project(
         let mut out: Vec<zti_embed::Tokenized> = Vec::with_capacity(refs.len());
         for slice in refs.chunks(TOK_BATCH) {
             if cancel.load(Ordering::Relaxed) {
-                anyhow::bail!("indexing cancelled");
+                paused = true;
+                break;
             }
             out.extend(engine.tokenize(slice)?);
             reporter.set_phase(
@@ -491,199 +535,222 @@ pub async fn index_project(
     const CHUNK_FLUSH_ROWS: usize = 4096;
     let mut pending_batches: Vec<RecordBatch> = Vec::new();
     let mut pending_rows = 0usize;
+    let mut pending_file_idxs: Vec<u32> = Vec::with_capacity(CHUNK_FLUSH_ROWS);
 
-    let mut cursor = 0usize;
-    while cursor < order.len() {
-        if cancel.load(Ordering::Relaxed) {
-            anyhow::bail!("indexing cancelled");
-        }
-        let mut end = cursor;
-        let mut pad_len = 0usize;
-        while end < order.len() {
-            let l = effective_len(order[end]);
-            let new_pad = pad_len.max(l);
-            let count = end - cursor + 1;
-            if count > 1 && (count.saturating_mul(new_pad) > budget_tokens || count > max_items) {
+    if !paused {
+        let mut cursor = 0usize;
+        while cursor < order.len() {
+            if cancel.load(Ordering::Relaxed) {
+                paused = true;
                 break;
             }
-            pad_len = new_pad;
-            end += 1;
-        }
-        let idxs = &order[cursor..end];
-        let n_batch = idxs.len();
-
-        let batch_started = std::time::Instant::now();
-        match engine.embed_tokenized(Arc::clone(&encs), idxs.to_vec()).await {
-            Ok(embs) => {
-                let dim = engine.dim();
-                let now_ns = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos() as u64;
-
-                let n = idxs.len();
-
-                // Quantize the whole batch in parallel: TurboQuantizer::encode
-                // is the #1 app-CPU cost and was previously run serially on the
-                // async task while rayon cores sat idle. `&reranker` is Sync;
-                // results are index-aligned with `idxs`, preserving order.
-                let turbo_codes: Vec<Option<Vec<u8>>> = (0..n)
-                    .into_par_iter()
-                    .map(|i| match reranker.encode(embs.row(i)) {
-                        Ok(t) => Some(t),
-                        Err(e) => {
-                            tracing::debug!("turbo encode failed: {}", e);
-                            None
-                        }
-                    })
-                    .collect();
-
-                let mut chunk_id_builder = FixedSizeBinaryBuilder::new(16);
-                let mut file_path_builder = StringBuilder::with_capacity(n, n * 64);
-                let mut language_builder = StringBuilder::with_capacity(n, n * 8);
-                let mut symbol_qualified_builder = StringBuilder::with_capacity(n, n * 64);
-                let mut symbol_kind_builder = StringBuilder::with_capacity(n, n * 16);
-                let mut sym_id_builder = UInt32Array::builder(n);
-                let mut sub_chunk_idx_builder = UInt32Array::builder(n);
-                let mut total_sub_chunks_builder = UInt32Array::builder(n);
-                let mut chunk_strategy_builder = UInt8Array::builder(n);
-                let mut parent_sym_id_builder = UInt32Array::builder(n);
-                let mut appendix_sym_ids_builder = ListBuilder::new(UInt32Builder::new());
-                let mut start_line_builder = UInt32Array::builder(n);
-                let mut end_line_builder = UInt32Array::builder(n);
-                let mut content_builder = StringBuilder::with_capacity(n, n * 64);
-                let mut turbo_code_builder = BinaryBuilder::new();
-                let mut indexed_at_builder = UInt64Array::builder(n);
-
-                for (i, &idx) in idxs.iter().enumerate() {
-                    let (chunk, lang) = &all_pending[idx];
-                    let emb = embs.row(i);
-
-                    if emb.iter().any(|v| v.is_nan()) {
-                        anyhow::bail!(
-                            "NaN embedding for {}:{}-{}",
-                            chunk.file,
-                            chunk.start_line,
-                            chunk.end_line,
-                        );
-                    }
-
-                    let mut hasher = blake3::Hasher::new();
-                    hasher.update(chunk.file.as_bytes());
-                    hasher.update(&chunk.start_line.to_le_bytes());
-                    hasher.update(&chunk.end_line.to_le_bytes());
-                    hasher.update(chunk.qualified.as_bytes());
-                    hasher.update(&chunk.sub_chunk_idx.to_le_bytes());
-                    let hash = hasher.finalize();
-                    let mut chunk_id = [0u8; 16];
-                    chunk_id.copy_from_slice(&hash.as_bytes()[..16]);
-
-                    let parent_sym_id = if chunk.sym_id == u32::MAX {
-                        None
-                    } else {
-                        dsl_index
-                            .symbols
-                            .get(chunk.sym_id as usize)
-                            .and_then(|s| s.parent)
-                    };
-                    let appendix_ids: Vec<u32> = if chunk.sym_id == u32::MAX {
-                        Vec::new()
-                    } else {
-                        appendix_for(chunk.sym_id)
-                    };
-
-                    chunk_id_builder.append_value(chunk_id)?;
-                    file_path_builder.append_value(&chunk.file);
-                    language_builder.append_value(lang);
-                    symbol_qualified_builder.append_value(&chunk.qualified);
-                    symbol_kind_builder.append_value(chunk.kind.as_str());
-                    sym_id_builder.append_value(chunk.sym_id);
-                    sub_chunk_idx_builder.append_value(chunk.sub_chunk_idx);
-                    total_sub_chunks_builder.append_value(chunk.total_sub_chunks);
-                    chunk_strategy_builder.append_value(chunk.chunk_strategy as u8);
-                    match parent_sym_id {
-                        Some(p) => parent_sym_id_builder.append_value(p),
-                        None => parent_sym_id_builder.append_null(),
-                    }
-                    if appendix_ids.is_empty() {
-                        appendix_sym_ids_builder.append_null();
-                    } else {
-                        for id in &appendix_ids {
-                            appendix_sym_ids_builder.values().append_value(*id);
-                        }
-                        appendix_sym_ids_builder.append(true);
-                    }
-                    start_line_builder.append_value(chunk.start_line);
-                    end_line_builder.append_value(chunk.end_line);
-                    content_builder.append_value(&chunk.body);
-                    match turbo_codes.get(i).and_then(Option::as_ref) {
-                        Some(t) => turbo_code_builder.append_value(t),
-                        None => turbo_code_builder.append_null(),
-                    }
-                    indexed_at_builder.append_value(now_ns);
-
-                    total_embedded += 1;
-                }
-
+            let mut end = cursor;
+            let mut pad_len = 0usize;
+            while end < order.len() {
+                let l = effective_len(order[end]);
+                let new_pad = pad_len.max(l);
+                let count = end - cursor + 1;
+                if count > 1 && (count.saturating_mul(new_pad) > budget_tokens || count > max_items)
                 {
-                    let embedding_arr = embs.into_fixed_size_list();
+                    break;
+                }
+                pad_len = new_pad;
+                end += 1;
+            }
+            let idxs = &order[cursor..end];
+            let n_batch = idxs.len();
 
-                    let record = RecordBatch::try_new(
-                        std::sync::Arc::new(zti_store::schema::chunks_schema(dim)),
-                        vec![
-                            std::sync::Arc::new(chunk_id_builder.finish()),
-                            std::sync::Arc::new(file_path_builder.finish()),
-                            std::sync::Arc::new(language_builder.finish()),
-                            std::sync::Arc::new(symbol_qualified_builder.finish()),
-                            std::sync::Arc::new(symbol_kind_builder.finish()),
-                            std::sync::Arc::new(sym_id_builder.finish()),
-                            std::sync::Arc::new(sub_chunk_idx_builder.finish()),
-                            std::sync::Arc::new(total_sub_chunks_builder.finish()),
-                            std::sync::Arc::new(chunk_strategy_builder.finish()),
-                            std::sync::Arc::new(parent_sym_id_builder.finish()),
-                            std::sync::Arc::new(appendix_sym_ids_builder.finish()),
-                            std::sync::Arc::new(start_line_builder.finish()),
-                            std::sync::Arc::new(end_line_builder.finish()),
-                            std::sync::Arc::new(content_builder.finish()),
-                            std::sync::Arc::new(turbo_code_builder.finish()),
-                            std::sync::Arc::new(indexed_at_builder.finish()),
-                            std::sync::Arc::new(embedding_arr),
-                        ],
-                    )?;
+            let batch_started = std::time::Instant::now();
+            match engine
+                .embed_tokenized(Arc::clone(&encs), idxs.to_vec())
+                .await
+            {
+                Ok(embs) => {
+                    let dim = engine.dim();
+                    let now_ns = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos() as u64;
 
-                    pending_rows += record.num_rows();
-                    pending_batches.push(record);
-                    if pending_rows >= CHUNK_FLUSH_ROWS {
-                        chunks_table
-                            .append_batches(std::mem::take(&mut pending_batches))
+                    let n = idxs.len();
+
+                    // Quantize the whole batch in parallel: TurboQuantizer::encode
+                    // is the #1 app-CPU cost and was previously run serially on the
+                    // async task while rayon cores sat idle. `&reranker` is Sync;
+                    // results are index-aligned with `idxs`, preserving order.
+                    let turbo_codes: Vec<Option<Vec<u8>>> = (0..n)
+                        .into_par_iter()
+                        .map(|i| match reranker.encode(embs.row(i)) {
+                            Ok(t) => Some(t),
+                            Err(e) => {
+                                tracing::debug!("turbo encode failed: {}", e);
+                                None
+                            }
+                        })
+                        .collect();
+
+                    let mut chunk_id_builder = FixedSizeBinaryBuilder::new(16);
+                    let mut file_path_builder = StringBuilder::with_capacity(n, n * 64);
+                    let mut language_builder = StringBuilder::with_capacity(n, n * 8);
+                    let mut symbol_qualified_builder = StringBuilder::with_capacity(n, n * 64);
+                    let mut symbol_kind_builder = StringBuilder::with_capacity(n, n * 16);
+                    let mut sym_id_builder = UInt32Array::builder(n);
+                    let mut sub_chunk_idx_builder = UInt32Array::builder(n);
+                    let mut total_sub_chunks_builder = UInt32Array::builder(n);
+                    let mut chunk_strategy_builder = UInt8Array::builder(n);
+                    let mut parent_sym_id_builder = UInt32Array::builder(n);
+                    let mut appendix_sym_ids_builder = ListBuilder::new(UInt32Builder::new());
+                    let mut start_line_builder = UInt32Array::builder(n);
+                    let mut end_line_builder = UInt32Array::builder(n);
+                    let mut content_builder = StringBuilder::with_capacity(n, n * 64);
+                    let mut turbo_code_builder = BinaryBuilder::new();
+                    let mut indexed_at_builder = UInt64Array::builder(n);
+
+                    for (i, &idx) in idxs.iter().enumerate() {
+                        let (chunk, lang, fidx) = &all_pending[idx];
+                        pending_file_idxs.push(*fidx);
+                        let emb = embs.row(i);
+
+                        if emb.iter().any(|v| v.is_nan()) {
+                            anyhow::bail!(
+                                "NaN embedding for {}:{}-{}",
+                                chunk.file,
+                                chunk.start_line,
+                                chunk.end_line,
+                            );
+                        }
+
+                        let mut hasher = blake3::Hasher::new();
+                        hasher.update(chunk.file.as_bytes());
+                        hasher.update(&chunk.start_line.to_le_bytes());
+                        hasher.update(&chunk.end_line.to_le_bytes());
+                        hasher.update(chunk.qualified.as_bytes());
+                        hasher.update(&chunk.sub_chunk_idx.to_le_bytes());
+                        let hash = hasher.finalize();
+                        let mut chunk_id = [0u8; 16];
+                        chunk_id.copy_from_slice(&hash.as_bytes()[..16]);
+
+                        let parent_sym_id = if chunk.sym_id == u32::MAX {
+                            None
+                        } else {
+                            dsl_index
+                                .symbols
+                                .get(chunk.sym_id as usize)
+                                .and_then(|s| s.parent)
+                        };
+                        let appendix_ids: Vec<u32> = if chunk.sym_id == u32::MAX {
+                            Vec::new()
+                        } else {
+                            appendix_for(chunk.sym_id)
+                        };
+
+                        chunk_id_builder.append_value(chunk_id)?;
+                        file_path_builder.append_value(&chunk.file);
+                        language_builder.append_value(lang);
+                        symbol_qualified_builder.append_value(&chunk.qualified);
+                        symbol_kind_builder.append_value(chunk.kind.as_str());
+                        sym_id_builder.append_value(chunk.sym_id);
+                        sub_chunk_idx_builder.append_value(chunk.sub_chunk_idx);
+                        total_sub_chunks_builder.append_value(chunk.total_sub_chunks);
+                        chunk_strategy_builder.append_value(chunk.chunk_strategy as u8);
+                        match parent_sym_id {
+                            Some(p) => parent_sym_id_builder.append_value(p),
+                            None => parent_sym_id_builder.append_null(),
+                        }
+                        if appendix_ids.is_empty() {
+                            appendix_sym_ids_builder.append_null();
+                        } else {
+                            for id in &appendix_ids {
+                                appendix_sym_ids_builder.values().append_value(*id);
+                            }
+                            appendix_sym_ids_builder.append(true);
+                        }
+                        start_line_builder.append_value(chunk.start_line);
+                        end_line_builder.append_value(chunk.end_line);
+                        content_builder.append_value(&chunk.body);
+                        match turbo_codes.get(i).and_then(Option::as_ref) {
+                            Some(t) => turbo_code_builder.append_value(t),
+                            None => turbo_code_builder.append_null(),
+                        }
+                        indexed_at_builder.append_value(now_ns);
+
+                        total_embedded += 1;
+                    }
+
+                    {
+                        let embedding_arr = embs.into_fixed_size_list();
+
+                        let record = RecordBatch::try_new(
+                            std::sync::Arc::new(zti_store::schema::chunks_schema(dim)),
+                            vec![
+                                std::sync::Arc::new(chunk_id_builder.finish()),
+                                std::sync::Arc::new(file_path_builder.finish()),
+                                std::sync::Arc::new(language_builder.finish()),
+                                std::sync::Arc::new(symbol_qualified_builder.finish()),
+                                std::sync::Arc::new(symbol_kind_builder.finish()),
+                                std::sync::Arc::new(sym_id_builder.finish()),
+                                std::sync::Arc::new(sub_chunk_idx_builder.finish()),
+                                std::sync::Arc::new(total_sub_chunks_builder.finish()),
+                                std::sync::Arc::new(chunk_strategy_builder.finish()),
+                                std::sync::Arc::new(parent_sym_id_builder.finish()),
+                                std::sync::Arc::new(appendix_sym_ids_builder.finish()),
+                                std::sync::Arc::new(start_line_builder.finish()),
+                                std::sync::Arc::new(end_line_builder.finish()),
+                                std::sync::Arc::new(content_builder.finish()),
+                                std::sync::Arc::new(turbo_code_builder.finish()),
+                                std::sync::Arc::new(indexed_at_builder.finish()),
+                                std::sync::Arc::new(embedding_arr),
+                            ],
+                        )?;
+
+                        pending_rows += record.num_rows();
+                        pending_batches.push(record);
+                        if pending_rows >= CHUNK_FLUSH_ROWS {
+                            chunks_table
+                                .append_batches(std::mem::take(&mut pending_batches))
+                                .await?;
+                            pending_rows = 0;
+                            checkpoint_completed(
+                                &files_table,
+                                &snapshots,
+                                &need_reindex,
+                                &mut remaining,
+                                &std::mem::take(&mut pending_file_idxs),
+                            )
                             .await?;
-                        pending_rows = 0;
+                        }
                     }
                 }
+                Err(e) => {
+                    anyhow::bail!("embed batch failed: {e}");
+                }
             }
-            Err(e) => {
-                anyhow::bail!("embed batch failed: {e}");
-            }
+            tracing::debug!(
+                items = n_batch,
+                seq = pad_len,
+                ms = batch_started.elapsed().as_millis() as u64,
+                "embedded batch",
+            );
+            reporter.inc(n_batch as u64);
+            cursor = end;
         }
-        tracing::debug!(
-            items = n_batch,
-            seq = pad_len,
-            ms = batch_started.elapsed().as_millis() as u64,
-            "embedded batch",
-        );
-        reporter.inc(n_batch as u64);
-        cursor = end;
-    }
 
-    // Flush the tail batches accumulated below the per-flush threshold.
-    if !pending_batches.is_empty() {
-        chunks_table.append_batches(pending_batches).await?;
-    }
+        // Flush the tail batches accumulated below the per-flush threshold.
+        if !pending_batches.is_empty() {
+            chunks_table.append_batches(pending_batches).await?;
+            checkpoint_completed(
+                &files_table,
+                &snapshots,
+                &need_reindex,
+                &mut remaining,
+                &pending_file_idxs,
+            )
+            .await?;
+        }
+    } // if !paused
 
-    if total_chunks > 0 && total_embedded == 0 {
-        anyhow::bail!(
-            "no embeddings produced from {total_chunks} chunks"
-        );
+    if !paused && total_chunks > 0 && total_embedded == 0 {
+        anyhow::bail!("no embeddings produced from {total_chunks} chunks");
     }
 
     let hw = engine.hardware();
@@ -706,16 +773,16 @@ pub async fn index_project(
         hw.mem_avail >> 20
     );
 
-    reporter.set_phase(
-        zti_protocol::response::IndexPhase::BuildIndex,
-        0,
-        0,
-        "building search index",
-    );
-    chunks_table.optimize().await?;
-    chunks_table.build_index(&params).await?;
-
-    upsert_files(&files_table, &snapshots, &need_reindex).await?;
+    if total_in_db > 0 {
+        reporter.set_phase(
+            zti_protocol::response::IndexPhase::BuildIndex,
+            0,
+            0,
+            "building search index",
+        );
+        chunks_table.optimize().await?;
+        chunks_table.build_index(&params).await?;
+    }
 
     let languages: HashSet<Language> = snapshots
         .values()
@@ -737,7 +804,15 @@ pub async fn index_project(
     )
     .await?;
 
-    reporter.finish_with_message(&format!("embedded {} passages", total_embedded));
+    let msg = if paused {
+        format!(
+            "paused — {} passages embedded, run index again to resume",
+            total_embedded
+        )
+    } else {
+        format!("embedded {} passages", total_embedded)
+    };
+    reporter.finish_with_message(&msg);
 
     let elapsed = start.elapsed();
     info!(
@@ -753,19 +828,20 @@ pub async fn index_project(
         new_chunks: total_embedded,
         reindexed_files: need_reindex.len(),
         duration_ms: elapsed.as_millis() as u64,
+        paused,
     })
 }
 
 async fn upsert_files(
     files_table: &zti_store::files_table::FilesTable,
     snapshots: &std::collections::HashMap<String, FileSnapshot>,
-    changed_paths: &[String],
+    changed_paths: &[&str],
 ) -> Result<()> {
     // Build one RecordBatch covering every changed file and merge it in a
     // single call, instead of one merge_insert (and one commit) per file.
-    let rows: Vec<(&String, &FileSnapshot)> = changed_paths
+    let rows: Vec<(&str, &FileSnapshot)> = changed_paths
         .iter()
-        .filter_map(|p| snapshots.get(p).map(|s| (p, s)))
+        .filter_map(|p| snapshots.get(*p).map(|s| (*p, s)))
         .collect();
     if rows.is_empty() {
         return Ok(());
@@ -784,7 +860,7 @@ async fn upsert_files(
     let mut langs: Vec<&str> = Vec::with_capacity(n);
     for (path, snap) in &rows {
         blake3_builder.append_value(snap.blake3)?;
-        paths.push(path.as_str());
+        paths.push(path);
         mtimes.push(snap.mtime_ns as u64);
         sizes.push(snap.size_bytes);
         langs.push(snap.kind.label());
@@ -811,6 +887,33 @@ async fn upsert_files(
     )?;
 
     files_table.upsert(record).await?;
+    Ok(())
+}
+
+/// Decrement per-file chunk counts for a just-committed flush. A file reaching
+/// zero has all its chunks durably in `chunks_table`, so record its row now —
+/// the checkpoint a resumed run relies on.
+async fn checkpoint_completed(
+    files_table: &zti_store::files_table::FilesTable,
+    snapshots: &std::collections::HashMap<String, FileSnapshot>,
+    need_reindex: &[String],
+    remaining: &mut [u32],
+    flushed_file_idxs: &[u32],
+) -> Result<()> {
+    let mut completed: Vec<&str> = Vec::with_capacity(flushed_file_idxs.len());
+    for &fidx in flushed_file_idxs {
+        if let Some(slot) = remaining.get_mut(fidx as usize) {
+            *slot = slot.saturating_sub(1);
+            if *slot == 0
+                && let Some(path) = need_reindex.get(fidx as usize)
+            {
+                completed.push(path.as_str());
+            }
+        }
+    }
+    if !completed.is_empty() {
+        upsert_files(files_table, snapshots, &completed).await?;
+    }
     Ok(())
 }
 
@@ -872,8 +975,8 @@ async fn upsert_project(
 
 #[cfg(test)]
 mod tests_indexing {
-    use std::borrow::Cow;
     use super::{MIN_CHUNK_FLOOR, floor_boundary, sizing_for};
+    use std::borrow::Cow;
     use zti_dsl::chunking::{Chunk, ChunkStrategy};
     use zti_ts_core::types::Kind;
 
@@ -899,7 +1002,10 @@ mod tests_indexing {
         for max in 0..s.len() {
             let end = floor_boundary(s, max);
             assert!(end <= max);
-            assert!(s.is_char_boundary(end), "end {end} not a boundary for max {max}");
+            assert!(
+                s.is_char_boundary(end),
+                "end {end} not a boundary for max {max}"
+            );
             // The slice must not panic and must be valid UTF-8 (guaranteed by &str).
             let _ = &s[..end];
         }
@@ -918,7 +1024,10 @@ mod tests_indexing {
         let s = sizing_for(170_000_000, 512, 7).expect("huge sparse body must split");
         assert_eq!(s.chunk_size, 512 * 7); // 3584, not the old 2048
         assert_eq!(s.min_chunk_size, 256 * 7); // (max_len/2)*bpt = 1792
-        assert!(s.chunk_size > s.min_chunk_size, "chunker requires chunk_size > min");
+        assert!(
+            s.chunk_size > s.min_chunk_size,
+            "chunker requires chunk_size > min"
+        );
     }
 
     #[test]
@@ -978,7 +1087,7 @@ mod tests_indexing {
             },
         ];
 
-        let mut out = Vec::new();
+        let mut out: Vec<(Chunk<'_>, &str, u32)> = Vec::new();
         let total = mock_sub_chunks.len() as u32;
         for (i, sub) in mock_sub_chunks.iter().enumerate() {
             let sc = Chunk {
@@ -994,7 +1103,7 @@ mod tests_indexing {
                 qualified: parent.qualified.clone(),
                 kind: parent.kind,
             };
-            out.push((sc, "rust"));
+            out.push((sc, "rust", 0));
         }
 
         assert_eq!(out.len(), 2);

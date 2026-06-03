@@ -103,11 +103,7 @@ pub struct SourceFile<'a> {
 ///
 /// When `on_progress` needs the total count, it must be captured from the
 /// caller (e.g. by collecting `sources` to a `Vec` first).
-pub fn build_index_from_sources<'a, I, F>(
-    root: String,
-    sources: I,
-    on_progress: F,
-) -> ProjectIndex
+pub fn build_index_from_sources<'a, I, F>(root: String, sources: I, on_progress: F) -> ProjectIndex
 where
     I: IntoIterator<Item = SourceFile<'a>>,
     F: Fn(u32),
@@ -186,8 +182,7 @@ pub fn build_index(root: &str) -> Result<(ProjectIndex, Vec<(String, String)>)> 
             if name.starts_with('.') {
                 return false;
             }
-            if entry.file_type().is_some_and(|ft| ft.is_dir())
-                && SKIP_DIRS.contains(&name.as_ref())
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) && SKIP_DIRS.contains(&name.as_ref())
             {
                 return false;
             }
@@ -215,7 +210,10 @@ pub fn build_index(root: &str) -> Result<(ProjectIndex, Vec<(String, String)>)> 
         let skip_dirs = frontend_for(lang).config().extra_skip_dirs;
         if !skip_dirs.is_empty()
             && let Ok(rel) = path.strip_prefix(&root_path)
-            && rel.to_string_lossy().split('/').any(|c| skip_dirs.contains(&c))
+            && rel
+                .to_string_lossy()
+                .split('/')
+                .any(|c| skip_dirs.contains(&c))
         {
             continue;
         }
@@ -484,7 +482,8 @@ fn resolve_in_same_file(
 fn build_reverse_edges(
     edges: &[zti_ts_core::types::Edge],
 ) -> HashMap<u32, Vec<zti_ts_core::types::Edge>> {
-    let mut reverse: HashMap<u32, Vec<zti_ts_core::types::Edge>> = HashMap::with_capacity(edges.len());
+    let mut reverse: HashMap<u32, Vec<zti_ts_core::types::Edge>> =
+        HashMap::with_capacity(edges.len());
     for edge in edges {
         if let zti_ts_core::types::Target::Resolved(target_id) = edge.to {
             let reverse_edge = zti_ts_core::types::Edge {
@@ -502,7 +501,8 @@ fn build_reverse_edges(
 fn build_forward_edges(
     edges: &[zti_ts_core::types::Edge],
 ) -> HashMap<u32, Vec<zti_ts_core::types::Edge>> {
-    let mut forward: HashMap<u32, Vec<zti_ts_core::types::Edge>> = HashMap::with_capacity(edges.len());
+    let mut forward: HashMap<u32, Vec<zti_ts_core::types::Edge>> =
+        HashMap::with_capacity(edges.len());
     for edge in edges {
         forward.entry(edge.from).or_default().push(edge.clone());
     }
@@ -933,10 +933,7 @@ mod tests {
 
     #[test]
     fn resolve_name_returns_ambiguous_for_duplicated_bare_name() {
-        let symbols = vec![
-            sym(0, "parse", "parse", 0),
-            sym(1, "parse", "parse", 1),
-        ];
+        let symbols = vec![sym(0, "parse", "parse", 0), sym(1, "parse", "parse", 1)];
         let files = vec![file_entry(0, "/p/a.rs"), file_entry(1, "/p/b.rs")];
         let index = ProjectIndex {
             symbols,

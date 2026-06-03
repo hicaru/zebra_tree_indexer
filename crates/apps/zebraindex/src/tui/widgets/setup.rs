@@ -4,9 +4,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
-use super::common::{centered_rect, render_bar, render_button_row, spinner_ch};
 use super::super::app::{IndexMethodButton, SetupPhase};
 use super::super::registry::ModelEntry;
+use super::common::{centered_rect, render_bar, render_button_row, spinner_ch};
 
 pub struct DTypeOption {
     pub label: &'static str,

@@ -149,7 +149,7 @@ pub enum AppMessage {
     ProjectRemoved,
     ProjectRemoveError(String),
     IndexComplete,
-    IndexCancelled,
+    IndexPaused,
     IndexProgress {
         phase: zti_protocol::response::IndexPhase,
         current: u64,
@@ -239,8 +239,12 @@ impl App {
 
     pub fn effective_hardware(&self) -> (&str, u32, u64) {
         match &self.daemon_status {
-            DaemonStatus::Running { device, cpus, mem_total_mb, .. }
-                if *cpus > 0 => (device.as_str(), *cpus, *mem_total_mb),
+            DaemonStatus::Running {
+                device,
+                cpus,
+                mem_total_mb,
+                ..
+            } if *cpus > 0 => (device.as_str(), *cpus, *mem_total_mb),
             DaemonStatus::Running { device, .. } => {
                 (device.as_str(), self.env_cpus, self.env_mem_total_mb)
             }
@@ -249,7 +253,8 @@ impl App {
                 (
                     hw.map(|h| h.device.as_str()).unwrap_or("--"),
                     hw.map(|h| h.cpus as u32).unwrap_or(self.env_cpus),
-                    hw.map(|h| h.mem_total / (1024 * 1024)).unwrap_or(self.env_mem_total_mb),
+                    hw.map(|h| h.mem_total / (1024 * 1024))
+                        .unwrap_or(self.env_mem_total_mb),
                 )
             }
         }
@@ -270,10 +275,14 @@ impl App {
                 }
             }
             AppMessage::SearchDone(results) => {
-                let total = 1 + results.hits.iter().map(|hit| {
-                    let n = hit.content.lines().count();
-                    1 + n.min(PREVIEW_LINES) + if n > PREVIEW_LINES { 1 } else { 0 }
-                }).sum::<usize>();
+                let total = 1 + results
+                    .hits
+                    .iter()
+                    .map(|hit| {
+                        let n = hit.content.lines().count();
+                        1 + n.min(PREVIEW_LINES) + if n > PREVIEW_LINES { 1 } else { 0 }
+                    })
+                    .sum::<usize>();
                 self.results_total_lines = total;
                 self.search_results = Some(results);
                 self.search_error = None;

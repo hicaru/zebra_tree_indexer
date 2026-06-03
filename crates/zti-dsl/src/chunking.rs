@@ -4,8 +4,8 @@ use std::path::Path;
 
 use rustc_hash::FxHashMap;
 
-pub use zti_common::chunk_strategy::ChunkStrategy;
 use zti_common::LineIndex;
+pub use zti_common::chunk_strategy::ChunkStrategy;
 use zti_ts_core::types::Kind;
 
 use crate::model::ProjectIndex;
@@ -54,7 +54,10 @@ impl<'a> DslChunker<'a> {
         for sym in &index.symbols {
             symbols_by_file.entry(sym.file_idx).or_default().push(sym);
         }
-        Self { index, symbols_by_file }
+        Self {
+            index,
+            symbols_by_file,
+        }
     }
 
     pub fn chunks_for_file<'s>(&self, file_path: &str, source: &'s str) -> Vec<Chunk<'s>> {
@@ -95,7 +98,12 @@ impl<'a> DslChunker<'a> {
         fallback.map(|i| i as u16)
     }
 
-    fn make_chunk<'s>(&self, sym: &zti_ts_core::types::Symbol, source: &'s str, line_index: &LineIndex) -> Option<Chunk<'s>> {
+    fn make_chunk<'s>(
+        &self,
+        sym: &zti_ts_core::types::Symbol,
+        source: &'s str,
+        line_index: &LineIndex,
+    ) -> Option<Chunk<'s>> {
         if sym.line == 0 || sym.end_line < sym.line {
             return None;
         }

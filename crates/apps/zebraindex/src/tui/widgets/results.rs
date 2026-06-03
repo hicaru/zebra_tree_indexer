@@ -9,7 +9,8 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use super::super::app::{App, PREVIEW_LINES};
 
 pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
-    app.results_visible_height.set(area.height.saturating_sub(2) as usize);
+    app.results_visible_height
+        .set(area.height.saturating_sub(2) as usize);
 
     let results_block = Block::default().title(" Results ").borders(Borders::ALL);
 
@@ -34,11 +35,11 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
             Cow::Borrowed("")
         };
 
-        let header = format!("\u{2500}\u{2500} Results ({} hits) \u{2500}\u{2500}{}", total_hits, page_info);
-        let header_line = Line::from(Span::styled(
-            header,
-            Style::default().fg(Color::DarkGray),
-        ));
+        let header = format!(
+            "\u{2500}\u{2500} Results ({} hits) \u{2500}\u{2500}{}",
+            total_hits, page_info
+        );
+        let header_line = Line::from(Span::styled(header, Style::default().fg(Color::DarkGray)));
 
         let mut lines: Vec<Line> = Vec::with_capacity(1 + app.results_total_lines);
         lines.push(header_line);

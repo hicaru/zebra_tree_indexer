@@ -263,7 +263,9 @@ pub fn score_batch<'s>(
         .to_dtype(DType::F32)?;
 
     scratch.angle_i64.clear();
-    scratch.angle_i64.extend(batch.angle_indices.iter().map(|&v| i64::from(v)));
+    scratch
+        .angle_i64
+        .extend(batch.angle_indices.iter().map(|&v| i64::from(v)));
     let angle_t = Tensor::from_slice(&scratch.angle_i64, n * core.dim_over_2, &core.device)?;
 
     let cos_vals = core
@@ -315,11 +317,7 @@ pub fn score_batch<'s>(
         }
     }
 
-    let signs_t = Tensor::from_slice(
-        &scratch.pre_signs_flat,
-        (n, proj_count),
-        &core.device,
-    )?;
+    let signs_t = Tensor::from_slice(&scratch.pre_signs_flat, (n, proj_count), &core.device)?;
     let qjl_sums_t = signs_t.matmul(&projected.unsqueeze(1)?)?.squeeze(1)?;
 
     // Step 4: combine polar + QJL on-device → single GPU→CPU readback.
@@ -416,8 +414,7 @@ mod tq_tests {
     }
 
     fn make_reranker(dim: usize) -> crate::turbo::TurboReranker {
-        crate::turbo::TurboReranker::new(dim)
-            .expect("TurboReranker::new should succeed")
+        crate::turbo::TurboReranker::new(dim).expect("TurboReranker::new should succeed")
     }
 
     fn unit_vector(dim: usize) -> Vec<f32> {

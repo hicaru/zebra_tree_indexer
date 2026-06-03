@@ -53,7 +53,12 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let mut text = String::with_capacity(160);
     if let DaemonStatus::Error(err_msg) = &app.daemon_status {
         let first_line = err_msg.lines().next().unwrap_or(err_msg.as_str());
-        write!(text, "{}  Error: {}  (see daemon.log)", indicator, first_line).ok();
+        write!(
+            text,
+            "{}  Error: {}  (see daemon.log)",
+            indicator, first_line
+        )
+        .ok();
     } else {
         write!(
             text,

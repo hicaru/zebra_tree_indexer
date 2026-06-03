@@ -234,10 +234,7 @@ mod tq_tests {
         let code_close = r.encode(&close)?;
         let code_far = r.encode(&far)?;
 
-        let candidates: Vec<(&[u8], f32)> = vec![
-            (&code_far, 1.0),
-            (&code_close, 0.0),
-        ];
+        let candidates: Vec<(&[u8], f32)> = vec![(&code_far, 1.0), (&code_close, 0.0)];
         let ranked = r.rerank(&candidates, &query);
         assert_eq!(ranked.len(), 2);
         let close_idx = ranked.iter().position(|(i, _)| *i == 1).unwrap();
@@ -257,10 +254,7 @@ mod tq_tests {
         let code_valid = r.encode(&v)?;
         let garbage = [0xffu8; 8];
 
-        let candidates: Vec<(&[u8], f32)> = vec![
-            (&garbage, 1.0),
-            (&code_valid, 0.0),
-        ];
+        let candidates: Vec<(&[u8], f32)> = vec![(&garbage, 1.0), (&code_valid, 0.0)];
         let ranked = r.rerank(&candidates, &query);
         assert_eq!(ranked.len(), 1, "invalid code should be filtered");
         assert_eq!(ranked[0].0, 1, "only valid candidate should remain");

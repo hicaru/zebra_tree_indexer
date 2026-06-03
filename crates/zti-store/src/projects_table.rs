@@ -1,7 +1,5 @@
 use anyhow::{Result, anyhow};
-use arrow::array::{
-    FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array, UInt64Array,
-};
+use arrow::array::{FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array, UInt64Array};
 use arrow_array::{Array, ListArray};
 use futures::StreamExt;
 use lancedb::query::ExecutableQuery;

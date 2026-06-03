@@ -32,7 +32,11 @@ impl Embeddings {
                 c.hidden_size,
                 vb.pp("position_embeddings"),
             )?,
-            token_type: embedding(c.type_vocab_size, c.hidden_size, vb.pp("token_type_embeddings"))?,
+            token_type: embedding(
+                c.type_vocab_size,
+                c.hidden_size,
+                vb.pp("token_type_embeddings"),
+            )?,
             layer_norm: layer_norm(c.hidden_size, c.layer_norm_eps, vb.pp("LayerNorm"))?,
         })
     }
@@ -62,7 +66,9 @@ impl BertModel {
         ) {
             (Ok(emb), Ok(enc)) => (emb, enc),
             (Err(err), _) | (_, Err(err)) => {
-                let Some(mt) = &c.model_type else { return Err(err) };
+                let Some(mt) = &c.model_type else {
+                    return Err(err);
+                };
                 match (
                     Embeddings::load(vb.pp(format!("{mt}.embeddings")), c),
                     BertEncoder::load(vb.pp(format!("{mt}.encoder")), c),

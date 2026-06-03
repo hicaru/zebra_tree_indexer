@@ -347,7 +347,10 @@ fn walk_node(
             traits,
         });
 
-        let name = symbols.last().map(|s| s.name.as_str()).unwrap_or("<unknown>");
+        let name = symbols
+            .last()
+            .map(|s| s.name.as_str())
+            .unwrap_or("<unknown>");
         state.push_scope(id, name, is_container, is_fn, kind);
 
         collect_edges(&node, state, id);

@@ -154,10 +154,14 @@ pub async fn download_model(model_id: Arc<str>, tx: mpsc::Sender<app::AppMessage
             let _ = tx.send(app::AppMessage::ModelDownloaded(model_id)).await;
         }
         Ok(Err(e)) => {
-            let _ = tx.send(app::AppMessage::ModelDownloadError(e.to_string())).await;
+            let _ = tx
+                .send(app::AppMessage::ModelDownloadError(e.to_string()))
+                .await;
         }
         Err(e) => {
-            let _ = tx.send(app::AppMessage::ModelDownloadError(e.to_string())).await;
+            let _ = tx
+                .send(app::AppMessage::ModelDownloadError(e.to_string()))
+                .await;
         }
     }
 }
@@ -228,7 +232,9 @@ async fn try_connect(ctx: &ClientCtx, tx: &mpsc::Sender<app::AppMessage>) {
         let mut msg = e.to_string();
         read_daemon_log_tail(&mut msg);
         let _ = tx
-            .send(app::AppMessage::DaemonStatusUpdate(app::DaemonStatus::Error(msg)))
+            .send(app::AppMessage::DaemonStatusUpdate(
+                app::DaemonStatus::Error(msg),
+            ))
             .await;
     }
 }
@@ -244,9 +250,9 @@ async fn daemon_monitor(
             Ok(p) => p,
             Err(_) => {
                 let _ = tx
-                    .send(app::AppMessage::DaemonStatusUpdate(app::DaemonStatus::Error(
-                        "cannot resolve socket path".into(),
-                    )))
+                    .send(app::AppMessage::DaemonStatusUpdate(
+                        app::DaemonStatus::Error("cannot resolve socket path".into()),
+                    ))
                     .await;
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
@@ -256,13 +262,17 @@ async fn daemon_monitor(
         if !socket_path.exists() {
             if !should_run.load(Ordering::Relaxed) {
                 let _ = tx
-                    .send(app::AppMessage::DaemonStatusUpdate(app::DaemonStatus::Stopped))
+                    .send(app::AppMessage::DaemonStatusUpdate(
+                        app::DaemonStatus::Stopped,
+                    ))
                     .await;
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             }
             let _ = tx
-                .send(app::AppMessage::DaemonStatusUpdate(app::DaemonStatus::Starting))
+                .send(app::AppMessage::DaemonStatusUpdate(
+                    app::DaemonStatus::Starting,
+                ))
                 .await;
             try_connect(&ctx, &tx).await;
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -272,9 +282,7 @@ async fn daemon_monitor(
         let status = fetch_daemon_status(&ctx).await;
         if let Some(s) = status {
             let _ = tx.send(app::AppMessage::DaemonStatusUpdate(s)).await;
-            if !env_fetched
-                && let Some(env_info) = fetch_daemon_env(&ctx).await
-            {
+            if !env_fetched && let Some(env_info) = fetch_daemon_env(&ctx).await {
                 let _ = tx
                     .send(app::AppMessage::DaemonEnvLoaded {
                         cpus: env_info.cpus,
@@ -285,7 +293,9 @@ async fn daemon_monitor(
             }
         } else {
             let _ = tx
-                .send(app::AppMessage::DaemonStatusUpdate(app::DaemonStatus::Starting))
+                .send(app::AppMessage::DaemonStatusUpdate(
+                    app::DaemonStatus::Starting,
+                ))
                 .await;
             try_connect(&ctx, &tx).await;
         }
@@ -298,9 +308,7 @@ async fn daemon_monitor(
     }
 }
 
-async fn fetch_daemon_status(
-    ctx: &ClientCtx,
-) -> Option<app::DaemonStatus> {
+async fn fetch_daemon_status(ctx: &ClientCtx) -> Option<app::DaemonStatus> {
     let mut guard = ctx.client.lock().await;
     match guard.as_mut() {
         Some(c) => match c.request(Request::DaemonStatus).await {
@@ -320,9 +328,7 @@ async fn fetch_daemon_status(
     }
 }
 
-async fn fetch_daemon_env(
-    ctx: &ClientCtx,
-) -> Option<zti_protocol::response::DaemonEnvInfo> {
+async fn fetch_daemon_env(ctx: &ClientCtx) -> Option<zti_protocol::response::DaemonEnvInfo> {
     let mut guard = ctx.client.lock().await;
     match guard.as_mut() {
         Some(c) => match c.request(Request::DaemonEnv).await {
@@ -449,7 +455,7 @@ pub async fn do_index(
     ctx: ClientCtx,
     tx: mpsc::Sender<app::AppMessage>,
 ) {
-    let result = async {
+    let result: Result<bool, anyhow::Error> = async {
         let (m, qp, pp, md) = ctx.deref_opts();
         ensure_client(&ctx.client, m, qp, pp, md).await?;
 
@@ -468,13 +474,18 @@ pub async fn do_index(
                 }),
                 |frame| {
                     if let Response::IndexProgress(p) = frame
-                        && tx_p.try_send(app::AppMessage::IndexProgress {
-                            phase: p.phase,
-                            current: p.current,
-                            total: p.total,
-                            message: p.message,
-                            is_reindex: matches!(mode, IndexMode::Reindex | IndexMode::ForceReindex),
-                        }).is_err()
+                        && tx_p
+                            .try_send(app::AppMessage::IndexProgress {
+                                phase: p.phase,
+                                current: p.current,
+                                total: p.total,
+                                message: p.message,
+                                is_reindex: matches!(
+                                    mode,
+                                    IndexMode::Reindex | IndexMode::ForceReindex
+                                ),
+                            })
+                            .is_err()
                     {
                         tracing::warn!("dropped index progress frame");
                     }
@@ -483,7 +494,7 @@ pub async fn do_index(
             .await?;
 
         match resp {
-            Response::Index(Ok(_)) => Ok(()),
+            Response::Index(Ok(stats)) => Ok(stats.paused),
             Response::Index(Err(e)) => Err(anyhow::anyhow!(e.message)),
             other => Err(anyhow::anyhow!("unexpected: {:?}", other)),
         }
@@ -491,34 +502,25 @@ pub async fn do_index(
     .await;
 
     match result {
-        Ok(()) => {
+        Ok(true) => {
+            let _ = tx.send(app::AppMessage::IndexPaused).await;
+        }
+        Ok(false) => {
             let _ = tx.send(app::AppMessage::IndexComplete).await;
         }
         Err(e) => {
-            let msg = e.to_string();
-            if msg == "indexing cancelled" {
-                let _ = tx.send(app::AppMessage::IndexCancelled).await;
-            } else {
-                let _ = tx.send(app::AppMessage::IndexError(msg)).await;
-            }
+            let _ = tx.send(app::AppMessage::IndexError(e.to_string())).await;
         }
     }
 }
 
 pub async fn cancel_index(project_root: String, ctx: ClientCtx) {
     let (m, qp, pp, md) = ctx.deref_opts();
-    let mut client = match zti_ipc_client::Client::connect(
-        Duration::from_secs(10),
-        m,
-        qp,
-        pp,
-        md,
-    )
-    .await
-    {
-        Ok(c) => c,
-        Err(_) => return,
-    };
+    let mut client =
+        match zti_ipc_client::Client::connect(Duration::from_secs(10), m, qp, pp, md).await {
+            Ok(c) => c,
+            Err(_) => return,
+        };
     if client.handshake().await.is_err() {
         return;
     }

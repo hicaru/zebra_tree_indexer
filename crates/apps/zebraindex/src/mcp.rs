@@ -40,13 +40,9 @@ pub struct SearchQueryParams {
     pub project: Option<String>,
     #[schemars(description = "Maximum results to return (default: 5).")]
     pub limit: Option<usize>,
-    #[schemars(
-        description = "Glob pattern to filter files, e.g. \"**/*.rs\" or \"src/**/*.ts\"."
-    )]
+    #[schemars(description = "Glob pattern to filter files, e.g. \"**/*.rs\" or \"src/**/*.ts\".")]
     pub path_glob: Option<String>,
-    #[schemars(
-        description = "Language filter, e.g. [\"rust\", \"dart\"]."
-    )]
+    #[schemars(description = "Language filter, e.g. [\"rust\", \"dart\"].")]
     pub languages: Option<Vec<String>>,
 }
 
@@ -63,25 +59,25 @@ pub struct SearchPassageParams {
     pub project: Option<String>,
     #[schemars(description = "Maximum results to return (default: 5).")]
     pub limit: Option<usize>,
-    #[schemars(
-        description = "Glob pattern to filter files, e.g. \"**/*.rs\" or \"src/**/*.ts\"."
-    )]
+    #[schemars(description = "Glob pattern to filter files, e.g. \"**/*.rs\" or \"src/**/*.ts\".")]
     pub path_glob: Option<String>,
-    #[schemars(
-        description = "Language filter, e.g. [\"rust\", \"dart\"]."
-    )]
+    #[schemars(description = "Language filter, e.g. [\"rust\", \"dart\"].")]
     pub languages: Option<Vec<String>>,
 }
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchDepParams {
-    #[schemars(description = "Symbol, type, or function name. Bare (\"connect\"), scoped \
+    #[schemars(
+        description = "Symbol, type, or function name. Bare (\"connect\"), scoped \
         (\"network::connect\"), or fully-qualified (\"myapp::network::connect\"). Use `::` \
-        separators in any language.")]
+        separators in any language."
+    )]
     pub name: String,
-    #[schemars(description = "Project name, index, or root path. Auto-resolved when omitted. To learn \
-        an external dependency, index its source as a project first, then target it here.")]
+    #[schemars(
+        description = "Project name, index, or root path. Auto-resolved when omitted. To learn \
+        an external dependency, index its source as a project first, then target it here."
+    )]
     pub project: Option<String>,
     #[schemars(description = "Call-graph depth for callers/callees (default 2).")]
     pub depth: Option<usize>,

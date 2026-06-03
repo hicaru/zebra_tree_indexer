@@ -143,8 +143,7 @@ mod tests {
         let (symbols, edges, _) = parse_js(source);
         let caller = symbols.iter().find(|s| s.name == "caller").unwrap();
         let calls = edges.iter().any(|e| {
-            e.from == caller.id
-                && matches!(&e.to, Target::Unresolved(name) if name == "helper")
+            e.from == caller.id && matches!(&e.to, Target::Unresolved(name) if name == "helper")
         });
         assert!(calls);
     }

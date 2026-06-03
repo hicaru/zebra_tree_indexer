@@ -6,8 +6,8 @@ mod registry;
 mod tasks;
 mod widgets;
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -18,9 +18,7 @@ use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
 use app::{App, AppMessage, DaemonStatus, Modal, Screen, SetupPhase};
-use tasks::{
-    fetch_registry, resolve_startup, spawn_daemon_monitor, spawn_refresh_projects,
-};
+use tasks::{fetch_registry, resolve_startup, spawn_daemon_monitor, spawn_refresh_projects};
 
 pub fn run_tui(
     model: Option<&str>,
@@ -126,9 +124,7 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
             });
         }
         AppMessage::ModelDownloaded(model_id) => {
-            let _ = tx
-                .send(AppMessage::SetupComplete { model: model_id })
-                .await;
+            let _ = tx.send(AppMessage::SetupComplete { model: model_id }).await;
         }
         AppMessage::ModelDownloadError(msg) => {
             app.screen = Screen::Setup(SetupPhase::Error {
@@ -174,8 +170,13 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
             is_reindex,
         } => {
             let (started_at, project_root, mut files, mut chunks) = match &app.modal {
-                Some(Modal::Indexing { started_at, project_root, files, chunks, .. }) =>
-                    (*started_at, project_root.clone(), *files, *chunks),
+                Some(Modal::Indexing {
+                    started_at,
+                    project_root,
+                    files,
+                    chunks,
+                    ..
+                }) => (*started_at, project_root.clone(), *files, *chunks),
                 _ => (std::time::Instant::now(), String::new(), 0, 0),
             };
             if phase == zti_protocol::response::IndexPhase::Dsl {
@@ -196,8 +197,9 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
                 chunks,
             });
         }
-        AppMessage::IndexCancelled => {
+        AppMessage::IndexPaused => {
             app.modal = None;
+            spawn_refresh_projects(tx);
         }
         AppMessage::IndexError(e) => {
             app.modal = Some(Modal::Error { message: e });

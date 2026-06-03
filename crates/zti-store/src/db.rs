@@ -127,7 +127,8 @@ pub fn find_project<'a>(projects: &'a [ProjectRow], project_ref: &str) -> Option
 
     // 3. Numeric index (1-based)
     if let Ok(idx) = project_ref.parse::<usize>()
-        && idx > 0 && idx <= projects.len()
+        && idx > 0
+        && idx <= projects.len()
     {
         return Some(&projects[idx - 1]);
     }

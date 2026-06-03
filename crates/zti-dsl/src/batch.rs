@@ -2,8 +2,8 @@ use std::borrow::Cow;
 
 use rustc_hash::FxHashMap;
 
-use zti_common::dsl::SymbolBodyEntry;
 use zti_common::LineIndex;
+use zti_common::dsl::SymbolBodyEntry;
 
 use crate::chunking::find_doc_start_line;
 use crate::model::ProjectIndex;

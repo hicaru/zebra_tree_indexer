@@ -21,8 +21,7 @@ impl<'a> AsciiTreeRenderer<'a> {
         let mut out = String::with_capacity(1024);
 
         // Build set of symbols that receive at least one project-internal call edge.
-        let mut has_incoming: HashSet<u32> =
-            HashSet::with_capacity(self.index.symbols.len() / 4);
+        let mut has_incoming: HashSet<u32> = HashSet::with_capacity(self.index.symbols.len() / 4);
         for edges in self.index.reverse_edges.values() {
             for e in edges {
                 if e.kind == EdgeKind::Call
@@ -52,9 +51,10 @@ impl<'a> AsciiTreeRenderer<'a> {
 
         // Sort paths: shorter first, then by first symbol name for stability.
         paths.sort_by(|a, b| {
-            a.len()
-                .cmp(&b.len())
-                .then_with(|| self.sym_name(a.first().copied()).cmp(self.sym_name(b.first().copied())))
+            a.len().cmp(&b.len()).then_with(|| {
+                self.sym_name(a.first().copied())
+                    .cmp(self.sym_name(b.first().copied()))
+            })
         });
 
         out.push_str("Call chains:\n");
@@ -111,14 +111,7 @@ impl<'a> AsciiTreeRenderer<'a> {
             paths.push(rev);
         } else {
             for caller_id in callers {
-                self.collect_paths_to(
-                    caller_id,
-                    max_depth,
-                    has_incoming,
-                    current,
-                    visited,
-                    paths,
-                );
+                self.collect_paths_to(caller_id, max_depth, has_incoming, current, visited, paths);
             }
         }
 
@@ -141,13 +134,7 @@ impl<'a> AsciiTreeRenderer<'a> {
     }
 
     #[allow(clippy::only_used_in_recursion)]
-    fn render_one_chain(
-        &self,
-        out: &mut String,
-        path: &[u32],
-        is_last: bool,
-        prefix: &mut String,
-    ) {
+    fn render_one_chain(&self, out: &mut String, path: &[u32], is_last: bool, prefix: &mut String) {
         if path.is_empty() {
             return;
         }
@@ -250,10 +237,7 @@ impl<'a> AsciiTreeRenderer<'a> {
             // Non-module basenames (mod.rs, lib.rs, main.rs, index.ts) — use
             // the parent directory name instead.
             let qual = if matches!(short, "mod" | "lib" | "main" | "index") {
-                file.path
-                    .rsplit('/')
-                    .nth(1)
-                    .unwrap_or(short)
+                file.path.rsplit('/').nth(1).unwrap_or(short)
             } else {
                 short
             };

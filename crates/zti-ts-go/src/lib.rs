@@ -22,7 +22,12 @@ impl LanguageFrontend for GoFrontend {
     }
 }
 
-fn extract_one_spec(spec: Node, source: &str, stmt_text: &str, imports: &mut HashMap<String, String>) {
+fn extract_one_spec(
+    spec: Node,
+    source: &str,
+    stmt_text: &str,
+    imports: &mut HashMap<String, String>,
+) {
     let path = spec
         .child_by_field_name("path")
         .and_then(|p| p.utf8_text(source.as_bytes()).ok())
@@ -39,9 +44,7 @@ fn extract_one_spec(spec: Node, source: &str, stmt_text: &str, imports: &mut Has
     if let Some(n) = name
         && !n.is_empty()
     {
-        imports
-            .entry(n)
-            .or_insert_with(|| stmt_text.to_string());
+        imports.entry(n).or_insert_with(|| stmt_text.to_string());
     }
 }
 
@@ -111,8 +114,7 @@ mod tests {
         let (symbols, edges, _) = parse_go(source);
         let caller = symbols.iter().find(|s| s.name == "caller").unwrap();
         let calls = edges.iter().any(|e| {
-            e.from == caller.id
-                && matches!(&e.to, Target::Unresolved(name) if name == "helper")
+            e.from == caller.id && matches!(&e.to, Target::Unresolved(name) if name == "helper")
         });
         assert!(calls);
     }

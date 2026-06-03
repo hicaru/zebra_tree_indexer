@@ -8,7 +8,10 @@ use anyhow::{Result, anyhow};
 use zti_ann::{AnnCache, AnnHandle, AnnIndexBuilder, SearchMethod, SearchParams};
 use zti_embed::EmbedEngine;
 use zti_rerank::TurboReranker;
-use zti_rerank::gpu::{BATCH_SIZE, GpuTurboScratch, TurboCodeBatch, TurboScorerCache, parse_turbo_code_into, score_batch};
+use zti_rerank::gpu::{
+    BATCH_SIZE, GpuTurboScratch, TurboCodeBatch, TurboScorerCache, parse_turbo_code_into,
+    score_batch,
+};
 use zti_store::chunks_table::{ChunkHit, ChunksTable};
 
 #[cfg(test)]
@@ -180,7 +183,8 @@ pub async fn search(
     let mut candidates: Vec<ChunkHit> = match params.method {
         SearchMethod::TurboQuant => {
             let core = turbo_cache.get_or_build(reranker, &engine.device()?)?;
-            let mut scratch = GpuTurboScratch::with_capacity(core.num_projections(), core.dim_over_2());
+            let mut scratch =
+                GpuTurboScratch::with_capacity(core.num_projections(), core.dim_over_2());
             let mut rotated_query: Vec<f32> = Vec::with_capacity(engine.dim());
             core.pre_rotate_into(query_emb, &mut rotated_query);
 

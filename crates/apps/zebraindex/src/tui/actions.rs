@@ -6,10 +6,15 @@ use tokio::sync::mpsc;
 use super::app::{self, DEFAULT_DIM};
 use super::config;
 use super::event;
-use super::tasks::{build_change_method_modal, cancel_index, spawn_daemon_monitor, ClientCtx, IndexMode, do_index, do_remove_project, do_search, download_model, fetch_registry};
+use super::tasks::{
+    ClientCtx, IndexMode, build_change_method_modal, cancel_index, do_index, do_remove_project,
+    do_search, download_model, fetch_registry, spawn_daemon_monitor,
+};
 
 fn spawn_reindex(app: &mut app::App, tx: &mpsc::Sender<app::AppMessage>, mode: IndexMode) {
-    let Some(project) = app.projects.get(app.selected_project) else { return };
+    let Some(project) = app.projects.get(app.selected_project) else {
+        return;
+    };
     let root = project.root_path.clone();
     let mut ctx = ClientCtx::from_app(app);
     ctx.search_method = project
@@ -118,16 +123,12 @@ pub async fn handle_action(
                     });
                 } else {
                     let id = Arc::clone(&model_id);
-                    app.screen =
-                        app::Screen::Setup(app::SetupPhase::DownloadingModel { model_id });
+                    app.screen = app::Screen::Setup(app::SetupPhase::DownloadingModel { model_id });
                     let tx_c = tx.clone();
                     tokio::spawn(async move { download_model(id, tx_c).await });
                 }
             }
-            app::Screen::Setup(app::SetupPhase::DTypeSelection {
-                model_id,
-                selected,
-            }) => {
+            app::Screen::Setup(app::SetupPhase::DTypeSelection { model_id, selected }) => {
                 let dtype_label = super::widgets::setup::DTYPE_CHOICES[*selected].cli_value;
                 app.model_dtype = Some(Arc::from(dtype_label));
 
@@ -184,27 +185,25 @@ pub async fn handle_action(
             }
             _ => {}
         },
-        event::Action::SetupBack => {
-            match &app.screen {
-                app::Screen::Setup(app::SetupPhase::ModelSelection { .. }) => {
-                    if app.model.is_some() {
-                        app.should_run.store(true, Ordering::Relaxed);
-                        app.screen = app::Screen::Main;
-                        spawn_daemon_monitor(app, tx);
-                    } else {
-                        app.should_quit = true;
-                    }
+        event::Action::SetupBack => match &app.screen {
+            app::Screen::Setup(app::SetupPhase::ModelSelection { .. }) => {
+                if app.model.is_some() {
+                    app.should_run.store(true, Ordering::Relaxed);
+                    app.screen = app::Screen::Main;
+                    spawn_daemon_monitor(app, tx);
+                } else {
+                    app.should_quit = true;
                 }
-                app::Screen::Setup(app::SetupPhase::DTypeSelection { .. }) => {
-                    let entries = app.setup_registry.clone().unwrap_or_default();
-                    app.screen = app::Screen::Setup(app::SetupPhase::ModelSelection {
-                        entries,
-                        selected: 0,
-                    });
-                }
-                _ => {}
             }
-        }
+            app::Screen::Setup(app::SetupPhase::DTypeSelection { .. }) => {
+                let entries = app.setup_registry.clone().unwrap_or_default();
+                app.screen = app::Screen::Setup(app::SetupPhase::ModelSelection {
+                    entries,
+                    selected: 0,
+                });
+            }
+            _ => {}
+        },
         event::Action::SetupRetry => {
             app.screen = app::Screen::Setup(app::SetupPhase::FetchingRegistry);
             let tx_c = tx.clone();
@@ -435,7 +434,11 @@ pub async fn handle_action(
                     });
                     let ctx = ClientCtx::from_app(app);
                     let tx_c = tx.clone();
-                    let mode = if is_reindex { IndexMode::ForceReindex } else { IndexMode::Initial };
+                    let mode = if is_reindex {
+                        IndexMode::ForceReindex
+                    } else {
+                        IndexMode::Initial
+                    };
                     tokio::spawn(async move {
                         do_index(root_s, mode, ctx, tx_c).await;
                     });

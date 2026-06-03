@@ -9,14 +9,14 @@ pub(crate) struct BytePos {
 
 impl BytePos {
     pub fn new(byte_offset: usize) -> Self {
-        Self { byte_offset, output: None }
+        Self {
+            byte_offset,
+            output: None,
+        }
     }
 }
 
-pub(crate) fn compute_positions(
-    text: &str,
-    mut positions: Vec<&mut BytePos>,
-) {
+pub(crate) fn compute_positions(text: &str, mut positions: Vec<&mut BytePos>) {
     positions.sort_by_key(|p| p.byte_offset);
 
     let mut iter = positions.into_iter();

@@ -1,7 +1,5 @@
 use anyhow::Result;
-use arrow::array::{
-    FixedSizeBinaryArray, RecordBatch, StringArray, UInt64Array,
-};
+use arrow::array::{FixedSizeBinaryArray, RecordBatch, StringArray, UInt64Array};
 use lancedb::query::ExecutableQuery;
 use lancedb::table::Table;
 use std::sync::Arc;

@@ -51,9 +51,7 @@ fn collect_python_imports(node: Node, source: &str, imports: &mut HashMap<String
         "import_from_statement" => {
             let text = node.utf8_text(source.as_bytes()).unwrap_or("");
             // Skip the module_name dotted_name, capture everything else.
-            let module_name_id = node
-                .child_by_field_name("module_name")
-                .map(|n| n.id());
+            let module_name_id = node.child_by_field_name("module_name").map(|n| n.id());
             let mut c = node.walk();
             for child in node.children(&mut c) {
                 let cid = child.id();
@@ -175,8 +173,7 @@ mod tests {
         let (symbols, edges, _) = parse_py(source);
         let caller = symbols.iter().find(|s| s.name == "caller").unwrap();
         let calls = edges.iter().any(|e| {
-            e.from == caller.id
-                && matches!(&e.to, Target::Unresolved(name) if name == "helper")
+            e.from == caller.id && matches!(&e.to, Target::Unresolved(name) if name == "helper")
         });
         assert!(calls, "caller should have call edge to helper");
     }
@@ -202,10 +199,7 @@ mod tests {
     fn python_import_aliased() {
         let source = "import numpy as np";
         let (_, _, imports) = parse_py(source);
-        assert_eq!(
-            imports.get("np"),
-            Some(&"import numpy as np".to_string())
-        );
+        assert_eq!(imports.get("np"), Some(&"import numpy as np".to_string()));
     }
 
     #[test]

@@ -12,10 +12,7 @@ pub fn draw_search(f: &mut Frame, app: &App, area: Rect) {
 
     let inner = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(5),
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(5)])
         .split(area);
 
     draw_search_input(f, app, inner[0], highlight);
@@ -30,14 +27,12 @@ fn draw_search_input(f: &mut Frame, app: &App, area: Rect, highlight: bool) {
     };
 
     let prefix = match app.search_input.mode {
-        zti_protocol::request::SearchMode::Query => app
-            .query_prefix
-            .as_deref()
-            .unwrap_or("query: "),
-        zti_protocol::request::SearchMode::Passage => app
-            .passage_prefix
-            .as_deref()
-            .unwrap_or("passage: "),
+        zti_protocol::request::SearchMode::Query => {
+            app.query_prefix.as_deref().unwrap_or("query: ")
+        }
+        zti_protocol::request::SearchMode::Passage => {
+            app.passage_prefix.as_deref().unwrap_or("passage: ")
+        }
     };
 
     let input_block = Block::default()

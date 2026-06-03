@@ -6,10 +6,10 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::Subcommand;
 
-use zti_dsl::chunking::{chunk_text_file, chunk_tabular_file};
+use zti_dsl::DslChunker;
+use zti_dsl::chunking::{chunk_tabular_file, chunk_text_file};
 use zti_dsl::render::dsl::{DslRenderer, render_files_only};
 use zti_dsl::render::tree::AsciiTreeRenderer;
-use zti_dsl::DslChunker;
 use zti_tree_sitter::{frontend_for, parse_kinds, parse_language};
 use zti_ts_core::walker::LanguageFrontend;
 
@@ -67,7 +67,11 @@ pub enum DslCommands {
     SearchDep {
         #[arg(short, long, help = "Symbol/type/function name (bare or qualified)")]
         name: String,
-        #[arg(short, long, help = "Dependency/crate name to search in (resolves path from cargo/pub/npm caches)")]
+        #[arg(
+            short,
+            long,
+            help = "Dependency/crate name to search in (resolves path from cargo/pub/npm caches)"
+        )]
         lib: Option<String>,
         #[arg(long, default_value = "2", help = "Call-graph depth")]
         depth: usize,
@@ -85,7 +89,10 @@ fn dep_version_from_lock(root: &Path, lib: &str) -> Option<String> {
         {
             for pkg in packages {
                 if pkg.get("name").and_then(|v| v.as_str()) == Some(lib) {
-                    return pkg.get("version").and_then(|v| v.as_str()).map(String::from);
+                    return pkg
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                 }
             }
         }
@@ -180,18 +187,23 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
     } = command
     {
         let dep_root = resolve_dep_path(root, lib_name).ok_or_else(|| {
-            anyhow::anyhow!("dependency '{lib_name}' not found in cargo registry, npm, or pub cache")
+            anyhow::anyhow!(
+                "dependency '{lib_name}' not found in cargo registry, npm, or pub cache"
+            )
         })?;
         let (index, _text_files) = zti_dsl::build_index(dep_root.to_string_lossy().as_ref())?;
         match zti_dsl::resolve_name(&index, name_lib) {
             zti_dsl::NameMatch::Found(id) => {
-                print!("{}", zti_dsl::render_symbol_overview(&index, id, depth, 6000))
+                print!(
+                    "{}",
+                    zti_dsl::render_symbol_overview(&index, id, depth, 6000)
+                )
             }
             zti_dsl::NameMatch::Ambiguous(ref ids) => {
                 print!("{}", zti_dsl::search_dep::render_candidates(&index, ids))
             }
             zti_dsl::NameMatch::NotFound => {
-                return Err(anyhow::anyhow!("no symbol '{name_lib}' in '{lib_name}'"))
+                return Err(anyhow::anyhow!("no symbol '{name_lib}' in '{lib_name}'"));
             }
         }
         return Ok(());
@@ -278,19 +290,22 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
                 println!("{}\n---", entry);
             }
         }
-        DslCommands::SearchDep { ref name, depth, .. } => {
-            match zti_dsl::resolve_name(&index, name) {
-                zti_dsl::NameMatch::Found(id) => {
-                    print!("{}", zti_dsl::render_symbol_overview(&index, id, depth, 6000))
-                }
-                zti_dsl::NameMatch::Ambiguous(ref ids) => {
-                    print!("{}", zti_dsl::search_dep::render_candidates(&index, ids))
-                }
-                zti_dsl::NameMatch::NotFound => {
-                    return Err(anyhow::anyhow!("no symbol named '{name}'"))
-                }
+        DslCommands::SearchDep {
+            ref name, depth, ..
+        } => match zti_dsl::resolve_name(&index, name) {
+            zti_dsl::NameMatch::Found(id) => {
+                print!(
+                    "{}",
+                    zti_dsl::render_symbol_overview(&index, id, depth, 6000)
+                )
             }
-        }
+            zti_dsl::NameMatch::Ambiguous(ref ids) => {
+                print!("{}", zti_dsl::search_dep::render_candidates(&index, ids))
+            }
+            zti_dsl::NameMatch::NotFound => {
+                return Err(anyhow::anyhow!("no symbol named '{name}'"));
+            }
+        },
         DslCommands::ChunkTrace => {
             const CHARS_PER_TOKEN: usize = 4;
 
@@ -367,7 +382,11 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
                     file.language.as_str(),
                     chunks.len(),
                     f_locate,
-                    if f_locate.as_millis() > 500 { " WARN" } else { "" },
+                    if f_locate.as_millis() > 500 {
+                        " WARN"
+                    } else {
+                        ""
+                    },
                 );
 
                 let frontend = frontend_for(file.language);
@@ -397,7 +416,11 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
                             chunk.body.len(),
                             sub.len(),
                             c_elapsed,
-                            if c_elapsed.as_millis() > 500 { " WARN" } else { "" },
+                            if c_elapsed.as_millis() > 500 {
+                                " WARN"
+                            } else {
+                                ""
+                            },
                         );
                     }
 
@@ -455,17 +478,16 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
                     trace_lang,
                     chunks.len(),
                     f_locate,
-                    if f_locate.as_millis() > 500 { " WARN" } else { "" },
+                    if f_locate.as_millis() > 500 {
+                        " WARN"
+                    } else {
+                        ""
+                    },
                 );
 
                 for chunk in &chunks {
                     let c_start = Instant::now();
-                    let sub = zti_recursive_chunk::split_text(
-                        &chunk.body,
-                        &sizing,
-                        None,
-                        &[],
-                    );
+                    let sub = zti_recursive_chunk::split_text(&chunk.body, &sizing, None, &[]);
                     let c_elapsed = c_start.elapsed();
 
                     if c_elapsed.as_millis() > 50 {
@@ -474,7 +496,11 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
                             chunk.body.len(),
                             sub.len(),
                             c_elapsed,
-                            if c_elapsed.as_millis() > 500 { " WARN" } else { "" },
+                            if c_elapsed.as_millis() > 500 {
+                                " WARN"
+                            } else {
+                                ""
+                            },
                         );
                     }
 
@@ -494,12 +520,8 @@ pub fn run_dsl(root: &Path, command: DslCommands) -> Result<()> {
             let elapsed = trace_start.elapsed();
             println!();
             println!("--- Chunk Trace Summary ---");
-            println!(
-                "Files: {total} (code={code_total}, text={text_total})",
-            );
-            println!(
-                "Chunks: {total_chunks}, Sub-chunks: {total_sub}",
-            );
+            println!("Files: {total} (code={code_total}, text={text_total})",);
+            println!("Chunks: {total_chunks}, Sub-chunks: {total_sub}",);
             println!(
                 "Bytes: ~{} MB, Est. tokens: ~{total_est_tokens}, Time: {:.2}s",
                 total_est_tokens * CHARS_PER_TOKEN / (1024 * 1024),

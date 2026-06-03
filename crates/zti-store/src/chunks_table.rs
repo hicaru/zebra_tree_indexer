@@ -70,31 +70,31 @@ impl ChunksTable {
         let name = "chunks";
         let table = if db.table_names().execute().await?.iter().any(|n| n == name) {
             let existing = db.open_table(name).execute().await?;
-        let existing_schema = existing.schema().await?;
-        let existing_dim = existing_schema
-            .field_with_name("embedding")
-            .ok()
-            .and_then(|f| match f.data_type() {
-                DataType::FixedSizeList(_, n) => Some(*n as usize),
-                _ => None,
-            })
-            .unwrap_or(0);
+            let existing_schema = existing.schema().await?;
+            let existing_dim = existing_schema
+                .field_with_name("embedding")
+                .ok()
+                .and_then(|f| match f.data_type() {
+                    DataType::FixedSizeList(_, n) => Some(*n as usize),
+                    _ => None,
+                })
+                .unwrap_or(0);
 
-        let has_new_cols = existing_schema.field_with_name("sub_chunk_idx").is_ok();
+            let has_new_cols = existing_schema.field_with_name("sub_chunk_idx").is_ok();
 
-        if existing_dim != dim || !has_new_cols {
-            tracing::warn!(
-                "schema changed (dim={}, has_new_cols={}), recreating chunks table",
-                existing_dim,
-                has_new_cols,
-            );
-            db.drop_table("files", &[]).await.ok();
-            db.drop_table(name, &[]).await?;
-            let schema = Arc::new(schema::chunks_schema(dim));
-            db.create_empty_table(name, schema).execute().await?
-        } else {
-            existing
-        }
+            if existing_dim != dim || !has_new_cols {
+                tracing::warn!(
+                    "schema changed (dim={}, has_new_cols={}), recreating chunks table",
+                    existing_dim,
+                    has_new_cols,
+                );
+                db.drop_table("files", &[]).await.ok();
+                db.drop_table(name, &[]).await?;
+                let schema = Arc::new(schema::chunks_schema(dim));
+                db.create_empty_table(name, schema).execute().await?
+            } else {
+                existing
+            }
         } else {
             let schema = Arc::new(schema::chunks_schema(dim));
             db.create_empty_table(name, schema).execute().await?
@@ -213,7 +213,9 @@ impl ChunksTable {
             .nearest_to(query)?
             .distance_type(lancedb::DistanceType::Cosine)
             .limit(k)
-            .select(lancedb::query::Select::columns(CHUNK_HIT_COLS_WITH_DISTANCE));
+            .select(lancedb::query::Select::columns(
+                CHUNK_HIT_COLS_WITH_DISTANCE,
+            ));
 
         if params.method.is_lancedb_index() {
             q = q
@@ -255,9 +257,13 @@ impl ChunksTable {
         }
         filter.push(')');
 
-        let results = self.table.query().only_if(filter)
+        let results = self
+            .table
+            .query()
+            .only_if(filter)
             .select(lancedb::query::Select::columns(CHUNK_HIT_COLS_NO_DISTANCE))
-            .execute().await?;
+            .execute()
+            .await?;
 
         let mut hits = Vec::with_capacity(ids.len());
         let mut stream = std::pin::pin!(results);
@@ -291,9 +297,13 @@ impl ChunksTable {
             None => chunk_filter,
         };
 
-        let results = self.table.query().only_if(filter)
+        let results = self
+            .table
+            .query()
+            .only_if(filter)
             .select(lancedb::query::Select::columns(CHUNK_HIT_COLS_NO_DISTANCE))
-            .execute().await?;
+            .execute()
+            .await?;
 
         let mut hits = Vec::with_capacity(ids.len());
         let mut stream = std::pin::pin!(results);
@@ -426,7 +436,9 @@ impl ChunksTable {
             .distance_type(lancedb::DistanceType::Cosine)
             .bypass_vector_index()
             .limit(k)
-            .select(lancedb::query::Select::columns(CHUNK_HIT_COLS_WITH_DISTANCE));
+            .select(lancedb::query::Select::columns(
+                CHUNK_HIT_COLS_WITH_DISTANCE,
+            ));
 
         if let Some(filter) = build_lang_path_filter(languages, path_glob) {
             q = q.only_if(filter);
@@ -736,9 +748,15 @@ mod tests {
         let total_sub_chunks_arr = Arc::new(UInt32Array::from(vec![1u32, 2, 2]));
         let chunk_strategies = Arc::new(UInt8Array::from(vec![0u8, 1, 255]));
 
-        let batch = RecordBatch::try_new(schema, vec![
-            sym_ids, sub_chunk_idxs, total_sub_chunks_arr, chunk_strategies,
-        ])
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                sym_ids,
+                sub_chunk_idxs,
+                total_sub_chunks_arr,
+                chunk_strategies,
+            ],
+        )
         .unwrap();
 
         let mut hits = Vec::new();

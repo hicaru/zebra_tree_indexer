@@ -1,8 +1,8 @@
 use std::collections::BinaryHeap;
 
-use crate::atom::{AtomChunk, AtomCollector, DEFAULT_LANG_CONFIG, SynLangConfig, LineBreakLevel};
-use crate::positions::{BytePos, OutputPos, compute_positions};
 use crate::SubChunk;
+use crate::atom::{AtomChunk, AtomCollector, DEFAULT_LANG_CONFIG, LineBreakLevel, SynLangConfig};
+use crate::positions::{BytePos, OutputPos, compute_positions};
 
 const SYNTAX_GAP: usize = 512;
 const MISSING_OVERLAP: usize = 512;
@@ -92,12 +92,28 @@ fn collect_atoms(
     for m in re.find_iter(fragment) {
         let sep_end = range_start + m.end();
         if cursor < sep_end {
-            collect_atoms(text, cursor, range_start + m.start(), base_level, sep_id + 1, min_atom, collector);
+            collect_atoms(
+                text,
+                cursor,
+                range_start + m.start(),
+                base_level,
+                sep_id + 1,
+                min_atom,
+                collector,
+            );
         }
         cursor = sep_end;
     }
     if cursor < range_end {
-        collect_atoms(text, cursor, range_end, base_level, sep_id + 1, min_atom, collector);
+        collect_atoms(
+            text,
+            cursor,
+            range_end,
+            base_level,
+            sep_id + 1,
+            min_atom,
+            collector,
+        );
     }
     let lvl = base_level + sep_id + 1;
     if lvl < collector.min_level {
@@ -114,7 +130,13 @@ fn lb_gap(boundary: &LineBreakLevel, internal: &LineBreakLevel) -> usize {
     }
 }
 
-fn merge_atoms(atoms: Vec<AtomChunk>, chunk_size: usize, chunk_overlap: usize, min_chunk: usize, text: &str) -> Vec<(BytePos, BytePos)> {
+fn merge_atoms(
+    atoms: Vec<AtomChunk>,
+    chunk_size: usize,
+    chunk_overlap: usize,
+    min_chunk: usize,
+    text: &str,
+) -> Vec<(BytePos, BytePos)> {
     struct Plan {
         start_idx: usize,
         prev_plan: usize,
@@ -124,7 +146,12 @@ fn merge_atoms(atoms: Vec<AtomChunk>, chunk_size: usize, chunk_overlap: usize, m
 
     let n = atoms.len();
     let mut plans: Vec<Plan> = Vec::with_capacity(n);
-    plans.push(Plan { start_idx: 0, prev_plan: 0, cost: 0, overlap_base: overlap_cost_base(text.len(), 0, chunk_overlap) });
+    plans.push(Plan {
+        start_idx: 0,
+        prev_plan: 0,
+        cost: 0,
+        overlap_base: overlap_cost_base(text.len(), 0, chunk_overlap),
+    });
 
     let mut heap: BinaryHeap<(std::cmp::Reverse<usize>, usize)> = BinaryHeap::with_capacity(n);
     let mut gap_cache = vec![0usize];
@@ -186,7 +213,10 @@ fn merge_atoms(atoms: Vec<AtomChunk>, chunk_size: usize, chunk_overlap: usize, m
                     }
                     heap.pop();
                 }
-                heap.push((std::cmp::Reverse(plans[si].cost + plans[si].overlap_base), si));
+                heap.push((
+                    std::cmp::Reverse(plans[si].cost + plans[si].overlap_base),
+                    si,
+                ));
                 match heap.peek() {
                     Some(&(_, idx)) => idx,
                     None => si,
@@ -247,7 +277,11 @@ fn merge_atoms(atoms: Vec<AtomChunk>, chunk_size: usize, chunk_overlap: usize, m
 }
 
 fn overlap_cost_base(text_len: usize, offset: usize, overlap: usize) -> usize {
-    text_len.saturating_sub(offset).saturating_mul(MISSING_OVERLAP).checked_div(overlap).unwrap_or(0)
+    text_len
+        .saturating_sub(offset)
+        .saturating_mul(MISSING_OVERLAP)
+        .checked_div(overlap)
+        .unwrap_or(0)
 }
 
 fn finish_chunks(
@@ -260,25 +294,38 @@ fn finish_chunks(
     let atoms = collector.seal();
     let mut raw = merge_atoms(atoms, chunk_size, chunk_overlap, min_chunk, source);
 
-    let all_pos: Vec<&mut BytePos> = raw.iter_mut().flat_map(|(s, e)| {
-        [s as &mut BytePos, e as &mut BytePos]
-    }).collect();
+    let all_pos: Vec<&mut BytePos> = raw
+        .iter_mut()
+        .flat_map(|(s, e)| [s as &mut BytePos, e as &mut BytePos])
+        .collect();
     compute_positions(source, all_pos);
 
-    raw.into_iter().map(|(sp, ep)| {
-        let s = match sp.output { Some(o) => o, None => OutputPos { line: 1 } };
-        let e = match ep.output { Some(o) => o, None => OutputPos { line: 1 } };
-        SubChunk {
-            byte_start: sp.byte_offset,
-            byte_end: ep.byte_offset,
-            start_line: s.line,
-            end_line: e.line,
-        }
-    }).collect()
+    raw.into_iter()
+        .map(|(sp, ep)| {
+            let s = match sp.output {
+                Some(o) => o,
+                None => OutputPos { line: 1 },
+            };
+            let e = match ep.output {
+                Some(o) => o,
+                None => OutputPos { line: 1 },
+            };
+            SubChunk {
+                byte_start: sp.byte_offset,
+                byte_end: ep.byte_offset,
+                start_line: s.line,
+                end_line: e.line,
+            }
+        })
+        .collect()
 }
 
 fn min_atom_size(chunk_overlap: usize, min_chunk: usize) -> usize {
-    if chunk_overlap > 0 { chunk_overlap } else { min_chunk }
+    if chunk_overlap > 0 {
+        chunk_overlap
+    } else {
+        min_chunk
+    }
 }
 
 pub(crate) fn chunk_text_with_ts(
@@ -316,9 +363,18 @@ mod tests_merge {
         let source = "Linea 1.\nLinea 2.\n\nLinea 3.";
         let chunks = chunk_text(source, 15, 0, 5);
         assert_eq!(chunks.len(), 3);
-        assert_eq!(&source[chunks[0].byte_start..chunks[0].byte_end], "Linea 1.");
-        assert_eq!(&source[chunks[1].byte_start..chunks[1].byte_end], "Linea 2.");
-        assert_eq!(&source[chunks[2].byte_start..chunks[2].byte_end], "Linea 3.");
+        assert_eq!(
+            &source[chunks[0].byte_start..chunks[0].byte_end],
+            "Linea 1."
+        );
+        assert_eq!(
+            &source[chunks[1].byte_start..chunks[1].byte_end],
+            "Linea 2."
+        );
+        assert_eq!(
+            &source[chunks[2].byte_start..chunks[2].byte_end],
+            "Linea 3."
+        );
     }
 
     #[test]
@@ -349,7 +405,11 @@ mod tests_merge {
         let chunks = chunk_text(source, 30, 0, 10);
         assert!(!chunks.is_empty());
         let first = &source[chunks[0].byte_start..chunks[0].byte_end];
-        assert!(!first.starts_with("  "), "First chunk should not start with spaces, got: '{}'", first);
+        assert!(
+            !first.starts_with("  "),
+            "First chunk should not start with spaces, got: '{}'",
+            first
+        );
     }
 
     /// Returns `(byte_start, byte_end, boundary_syntax_level)` for every atom
@@ -491,6 +551,10 @@ fn other() {
 
         let atoms1 = collector1.seal();
         let atoms2 = collector2.seal();
-        assert_eq!(atoms1.len(), atoms2.len(), "bogus terminal kind ID should not affect output");
+        assert_eq!(
+            atoms1.len(),
+            atoms2.len(),
+            "bogus terminal kind ID should not affect output"
+        );
     }
 }

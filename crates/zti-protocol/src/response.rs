@@ -15,6 +15,8 @@ pub struct IndexStats {
     pub new_chunks: usize,
     pub reindexed_files: usize,
     pub duration_ms: u64,
+    #[serde(default)]
+    pub paused: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

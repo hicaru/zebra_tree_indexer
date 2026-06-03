@@ -2,7 +2,13 @@ use std::sync::Mutex;
 
 pub trait ProgressReporter: Send + Sync {
     fn start(&self, total: u64);
-    fn set_phase(&self, phase: zti_protocol::response::IndexPhase, current: u64, total: u64, message: &str);
+    fn set_phase(
+        &self,
+        phase: zti_protocol::response::IndexPhase,
+        current: u64,
+        total: u64,
+        message: &str,
+    );
     fn inc(&self, n: u64);
     fn finish_with_message(&self, msg: &str);
 }
@@ -41,7 +47,13 @@ impl ProgressReporter for IndicatifReporter {
         *guard = Some(bar);
     }
 
-    fn set_phase(&self, _phase: zti_protocol::response::IndexPhase, _current: u64, _total: u64, message: &str) {
+    fn set_phase(
+        &self,
+        _phase: zti_protocol::response::IndexPhase,
+        _current: u64,
+        _total: u64,
+        message: &str,
+    ) {
         let guard = self.bar.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(bar) = guard.as_ref() {
             bar.set_message(message.to_string());
@@ -67,7 +79,14 @@ pub struct SilentReporter;
 
 impl ProgressReporter for SilentReporter {
     fn start(&self, _total: u64) {}
-    fn set_phase(&self, _phase: zti_protocol::response::IndexPhase, _current: u64, _total: u64, _message: &str) {}
+    fn set_phase(
+        &self,
+        _phase: zti_protocol::response::IndexPhase,
+        _current: u64,
+        _total: u64,
+        _message: &str,
+    ) {
+    }
     fn inc(&self, _n: u64) {}
     fn finish_with_message(&self, _msg: &str) {}
 }
@@ -105,7 +124,13 @@ impl ProgressReporter for IpcReporter {
         });
     }
 
-    fn set_phase(&self, phase: zti_protocol::response::IndexPhase, current: u64, total: u64, message: &str) {
+    fn set_phase(
+        &self,
+        phase: zti_protocol::response::IndexPhase,
+        current: u64,
+        total: u64,
+        message: &str,
+    ) {
         let _ = self.tx.send(zti_protocol::response::IndexingProgress {
             phase,
             current,
@@ -156,7 +181,13 @@ impl ProgressReporter for Reporter {
         }
     }
 
-    fn set_phase(&self, phase: zti_protocol::response::IndexPhase, current: u64, total: u64, message: &str) {
+    fn set_phase(
+        &self,
+        phase: zti_protocol::response::IndexPhase,
+        current: u64,
+        total: u64,
+        message: &str,
+    ) {
         match self {
             Reporter::Indicatif(r) => r.set_phase(phase, current, total, message),
             Reporter::Silent(r) => r.set_phase(phase, current, total, message),

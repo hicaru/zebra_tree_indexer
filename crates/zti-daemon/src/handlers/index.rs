@@ -49,7 +49,13 @@ where
 
     let mut handle = tokio::spawn(async move {
         zti_pipeline::indexer::index_project(
-            &root, &engine, &db, &reporter, override_method, &proj.cancel, refresh,
+            &root,
+            &engine,
+            &db,
+            &reporter,
+            override_method,
+            &proj.cancel,
+            refresh,
         )
         .await
     });
@@ -87,6 +93,7 @@ where
             new_chunks: stats.new_chunks,
             reindexed_files: stats.reindexed_files,
             duration_ms: stats.duration_ms,
+            paused: stats.paused,
         })),
         Err(e) => Response::Index(Err(ErrorBody {
             message: e.to_string(),

@@ -48,9 +48,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_language_rejects_unknown() {
-
-    }
+    fn parse_language_rejects_unknown() {}
 
     #[test]
     fn parse_kinds_returns_empty_when_all_unknown() {
