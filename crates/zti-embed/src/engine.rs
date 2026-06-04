@@ -208,11 +208,8 @@ impl EmbedEngine {
                 Model::Bert(BertModel::load(vb, &config)?)
             }
         };
-        let tokenizer = Tokenizer::from_file(&profile.tokenizer_path)?;
+        let mut tokenizer = Tokenizer::from_file(&profile.tokenizer_path)?;
 
-        if let Some(tok_limit) = tokenizer.truncation_max_length() {
-            profile.max_length = profile.max_length.min(tok_limit);
-        }
         let seq_cap = crate::batch::attention_safe_seq_cap(&profile, &hw);
         if seq_cap < profile.max_length {
             tracing::info!(
@@ -223,6 +220,11 @@ impl EmbedEngine {
             );
             profile.max_length = seq_cap;
         }
+
+        // Override the shipped tokenizer truncation (sentence-transformers repos
+        // often pin 128, far below the resolved context window) so encoding uses
+        // the full resolved/memory-capped length.
+        tokenizer.set_truncation(profile.max_length)?;
 
         // Warmup forward: validates the model is NaN-free for this dtype/device
         // and probes the embedding dim when the config didn't provide it. A

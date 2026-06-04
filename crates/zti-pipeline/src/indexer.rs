@@ -29,7 +29,6 @@ const APPENDIX_DEPTH: usize = 2;
 const APPENDIX_CAP_PER_CHUNK: usize = 32;
 const CHARS_PER_TOKEN: usize = 4;
 const CHUNK_OVERLAP: usize = 200;
-const BPT_SAMPLE_BYTES: usize = 64 * 1024;
 const MIN_CHUNK_FLOOR: usize = 512;
 
 use crate::manifest::{FileSnapshot, SourceKind, detect_changes, walk_source_files};
@@ -39,19 +38,6 @@ use crate::progress::{ProgressReporter, Reporter};
 struct AdaptiveChunkSizing {
     chunk_size: usize,
     min_chunk_size: usize,
-}
-
-/// Largest byte index <= `max` that is a UTF-8 char boundary.
-#[inline]
-fn floor_boundary(s: &str, max: usize) -> usize {
-    if s.len() <= max {
-        return s.len();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    end
 }
 
 /// Pure byte-sizing math: given a measured bytes-per-token ratio, decide whether
@@ -75,17 +61,7 @@ fn adaptive_split(body: &str, engine: &EmbedEngine) -> Option<AdaptiveChunkSizin
         return None;
     }
 
-    let bpt = if engine.truncates() {
-        CHARS_PER_TOKEN
-    } else {
-        let sample = &body[..floor_boundary(body, BPT_SAMPLE_BYTES)];
-        match engine.count_tokens(sample) {
-            Ok(n) if n > 0 => (sample.len() / n).max(1),
-            _ => CHARS_PER_TOKEN,
-        }
-    };
-
-    sizing_for(body.len(), max_len, bpt)
+    sizing_for(body.len(), max_len, CHARS_PER_TOKEN)
 }
 
 #[inline]
@@ -1007,41 +983,10 @@ async fn upsert_project(
 
 #[cfg(test)]
 mod tests_indexing {
-    use super::{MIN_CHUNK_FLOOR, floor_boundary, sizing_for};
+    use super::{MIN_CHUNK_FLOOR, sizing_for};
     use std::borrow::Cow;
     use zti_dsl::chunking::{Chunk, ChunkStrategy};
     use zti_ts_core::types::Kind;
-
-    #[test]
-    fn floor_boundary_returns_len_when_under_max() {
-        let s = "hello";
-        assert_eq!(floor_boundary(s, 100), s.len());
-        assert_eq!(floor_boundary(s, s.len()), s.len());
-    }
-
-    #[test]
-    fn floor_boundary_ascii_is_exact() {
-        // Every byte index in ASCII is a char boundary.
-        let s = "abcdefgh";
-        assert_eq!(floor_boundary(s, 3), 3);
-    }
-
-    #[test]
-    fn floor_boundary_never_splits_a_codepoint() {
-        // "é" is 2 bytes (0xC3 0xA9); "€" is 3 bytes. Build a string where a max
-        // cut would land mid-codepoint, and assert we always get a valid slice.
-        let s = "aé€b"; // bytes: a(1) é(2) €(3) b(1) = 7 bytes
-        for max in 0..s.len() {
-            let end = floor_boundary(s, max);
-            assert!(end <= max);
-            assert!(
-                s.is_char_boundary(end),
-                "end {end} not a boundary for max {max}"
-            );
-            // The slice must not panic and must be valid UTF-8 (guaranteed by &str).
-            let _ = &s[..end];
-        }
-    }
 
     #[test]
     fn sizing_for_none_when_body_fits() {

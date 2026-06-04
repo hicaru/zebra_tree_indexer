@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tokenizers::Tokenizer as HfTokenizer;
+use tokenizers::{Tokenizer as HfTokenizer, TruncationParams};
 
 pub struct Tokenizer {
     inner: HfTokenizer,
@@ -36,6 +36,21 @@ impl Tokenizer {
             out.push(Tokenized { ids, mask });
         }
         Ok(out)
+    }
+
+    /// Force truncation at `max_length`, overriding whatever `tokenizer.json`
+    /// shipped. Sentence-transformers repos often pin a 128-token truncation
+    /// below the model's real context window; this keeps long inputs from
+    /// silently losing context.
+    pub fn set_truncation(&mut self, max_length: usize) -> Result<()> {
+        let params = TruncationParams {
+            max_length,
+            ..Default::default()
+        };
+        self.inner
+            .with_truncation(Some(params))
+            .map_err(|e| anyhow::anyhow!("set truncation: {e}"))?;
+        Ok(())
     }
 
     /// Read the tokenizer's truncation `max_length` if configured.

@@ -90,7 +90,7 @@ pub fn recommended_batch_size(profile: &ModelProfile, hw: &Hardware) -> usize {
 /// hardware and model profile.
 pub fn attention_safe_seq_cap(profile: &ModelProfile, hw: &Hardware) -> usize {
     if let Some(cap) = env_seq_cap() {
-        return prev_bucket(cap).clamp(TYPICAL_SEQ_LEN, profile.max_length);
+        return clamp_seq_cap(cap, profile.max_length);
     }
 
     let (usable_num, usable_den) = usable_fraction(&hw.device);
@@ -105,7 +105,19 @@ pub fn attention_safe_seq_cap(profile: &ModelProfile, hw: &Hardware) -> usize {
         .max(1);
     let cap = (inference_budget / per_seq2).max(1).isqrt();
 
-    prev_bucket(cap).clamp(TYPICAL_SEQ_LEN, profile.max_length)
+    clamp_seq_cap(cap, profile.max_length)
+}
+
+/// Clamp a derived sequence cap to `[min(TYPICAL_SEQ_LEN, max_length), max_length]`.
+///
+/// Flooring at `TYPICAL_SEQ_LEN.min(max_length)` keeps the floor from ever
+/// exceeding the ceiling, so models whose resolved `max_length` is below
+/// `TYPICAL_SEQ_LEN` collapse to their own limit instead of panicking on
+/// `clamp(min > max)`.
+#[inline]
+fn clamp_seq_cap(cap: usize, max_length: usize) -> usize {
+    let floor = TYPICAL_SEQ_LEN.min(max_length);
+    prev_bucket(cap).clamp(floor, max_length)
 }
 
 static FRAC_OVERRIDE: OnceLock<Option<(usize, usize)>> = OnceLock::new();
@@ -256,6 +268,13 @@ mod tests {
             attention_safe_seq_cap(&p, &hw(Device::Metal, 0)),
             TYPICAL_SEQ_LEN
         );
+    }
+
+    #[test]
+    fn attention_safe_seq_cap_handles_max_below_typical() {
+        let p = profile(384, 6, 1536, 6, 128, "/nonexistent");
+        assert_eq!(attention_safe_seq_cap(&p, &hw(Device::Metal, 8)), 128);
+        assert_eq!(attention_safe_seq_cap(&p, &hw(Device::Metal, 0)), 128);
     }
 
     #[test]
