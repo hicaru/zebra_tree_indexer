@@ -104,7 +104,7 @@ impl BertModel {
 
 /// candle's `get_extended_attention_mask`, fixed: a finite fill so a valid
 /// token's `(1 - 1) * fill = 0` (never `0 * -inf = NaN`).
-fn extended_attention_mask(mask: &Tensor, dtype: DType) -> Result<Tensor> {
+pub(crate) fn extended_attention_mask(mask: &Tensor, dtype: DType) -> Result<Tensor> {
     let mask = match mask.rank() {
         3 => mask.unsqueeze(1)?,
         2 => mask.unsqueeze(1)?.unsqueeze(1)?,

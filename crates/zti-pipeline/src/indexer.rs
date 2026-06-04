@@ -477,7 +477,7 @@ pub async fn index_project(
     // Tokenize in batches so the progress bar advances 0→N instead of
     // freezing until all chunks are tokenized.
     let encs: Arc<Vec<zti_embed::Tokenized>> = Arc::new({
-        let passage_prefix = &engine.profile().passage_prefix;
+        let passage_prefix = engine.profile().passage_prefix.as_deref();
         let prefixed: Vec<Cow<'_, str>> = all_pending
             .iter()
             .map(|(c, _, _)| zti_embed::apply_prefix(&c.body, passage_prefix))

@@ -8,9 +8,12 @@ use arrow::datatypes::{DataType, Field};
 use candle_core::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::Config as BertConfig;
+use candle_transformers::models::jina_bert::Config as JinaConfig;
+use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::bert::BertModel;
+use crate::jina_bert::JinaBertModel;
 
 use crate::batch::{BATCH_BUCKETS, BATCH_CEILING, SEQ_BUCKETS, next_bucket};
 use crate::model_registry::{ModelProfile, PoolingStrategyEnum, read_json, resolve_profile};
@@ -57,7 +60,7 @@ impl Pooled {
     }
 }
 
-pub fn apply_prefix<'a>(text: &'a str, prefix: &Option<String>) -> Cow<'a, str> {
+pub fn apply_prefix<'a>(text: &'a str, prefix: Option<&str>) -> Cow<'a, str> {
     match prefix {
         Some(p) => Cow::Owned(format!("{p}{text}")),
         None => Cow::Borrowed(text),
@@ -109,10 +112,35 @@ impl Scratch {
     }
 }
 
+enum Model {
+    Bert(BertModel),
+    Jina(JinaBertModel),
+}
+
+impl Model {
+    fn forward(
+        &self,
+        ids: &Tensor,
+        token_type_ids: &Tensor,
+        mask: Option<&Tensor>,
+    ) -> candle_core::Result<Tensor> {
+        match self {
+            Self::Bert(model) => model.forward(ids, token_type_ids, mask),
+            Self::Jina(model) => model.forward(ids, token_type_ids, mask),
+        }
+    }
+}
+
 struct State {
-    model: BertModel,
+    model: Model,
     device: candle_core::Device,
     scratch: Scratch,
+}
+
+#[derive(Debug, Deserialize)]
+struct PositionEmbeddingPeek {
+    #[serde(default)]
+    position_embedding_type: Option<String>,
 }
 
 /// Immutable shape/pooling config the worker needs per request. Captured once
@@ -167,9 +195,19 @@ impl EmbedEngine {
             VarBuilder::from_mmaped_safetensors(&[&profile.weights_path], dtype, &device)?
         };
 
-        let config: BertConfig = read_json(&profile.config_path)?;
-
-        let model = BertModel::load(vb, &config)?;
+        let model = match read_json::<PositionEmbeddingPeek>(&profile.config_path)?
+            .position_embedding_type
+            .as_deref()
+        {
+            Some("alibi") => {
+                let config: JinaConfig = read_json(&profile.config_path)?;
+                Model::Jina(JinaBertModel::load(vb, &config)?)
+            }
+            _ => {
+                let config: BertConfig = read_json(&profile.config_path)?;
+                Model::Bert(BertModel::load(vb, &config)?)
+            }
+        };
         let tokenizer = Tokenizer::from_file(&profile.tokenizer_path)?;
 
         if let Some(tok_limit) = tokenizer.truncation_max_length() {
@@ -326,7 +364,7 @@ impl EmbedEngine {
     }
 
     pub async fn embed_query_async(&self, text: &str) -> Result<Vec<f32>> {
-        let input = apply_prefix(text, &self.profile.query_prefix);
+        let input = apply_prefix(text, self.profile.query_prefix.as_deref());
         let encs = self.tokenizer.encode_batch(&[&*input])?;
         let n = encs.len();
         let pooled = self
@@ -339,7 +377,7 @@ impl EmbedEngine {
     }
 
     pub async fn embed_passage_async(&self, text: &str) -> Result<Vec<f32>> {
-        let input = apply_prefix(text, &self.profile.passage_prefix);
+        let input = apply_prefix(text, self.profile.passage_prefix.as_deref());
         let encs = self.tokenizer.encode_batch(&[&*input])?;
         let n = encs.len();
         let pooled = self
@@ -425,7 +463,7 @@ struct Shape {
 }
 
 fn run_and_pool(
-    model: &BertModel,
+    model: &Model,
     device: &candle_core::Device,
     scratch: &mut Scratch,
     shape: Shape,
