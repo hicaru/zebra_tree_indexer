@@ -8,6 +8,9 @@ const F32: usize = 4;
 const ATTN_TENSORS: usize = 4;
 const FFN_TENSORS: usize = 2;
 const PIPELINE_LIVE: usize = 2;
+/// Live (count, heads, seq, seq) buffers in one attention op chain (matmul →
+/// /sqrt → +bias → +mask → softmax → matmul); candle is out-of-place.
+const ATTN_LIVE_BUFFERS: usize = 6;
 
 pub const BATCH_CEILING: usize = 64;
 
@@ -35,6 +38,17 @@ pub fn next_bucket(buckets: &[usize], n: usize, cap: usize) -> usize {
         }
     }
     cap
+}
+
+/// Round `n` down to the previous sequence bucket.
+#[inline]
+pub fn prev_bucket(n: usize) -> usize {
+    SEQ_BUCKETS
+        .iter()
+        .rev()
+        .copied()
+        .find(|&b| b <= n)
+        .unwrap_or(TYPICAL_SEQ_LEN)
 }
 
 const DEFAULT_METAL_MEM_FRAC: (usize, usize) = (4, 10);
@@ -69,7 +83,33 @@ pub fn recommended_batch_size(profile: &ModelProfile, hw: &Hardware) -> usize {
     pow2.min(BATCH_CEILING)
 }
 
+/// Largest sequence length whose single-row attention transient fits the
+/// device memory budget. Chunks longer than this are split before embedding so
+/// one long chunk cannot allocate a multi-GB `(heads, seq, seq)` score tensor
+/// per op. `ZTI_EMBED_SEQ_CAP` overrides; otherwise fully derived from the
+/// hardware and model profile.
+pub fn attention_safe_seq_cap(profile: &ModelProfile, hw: &Hardware) -> usize {
+    if let Some(cap) = env_seq_cap() {
+        return prev_bucket(cap).clamp(TYPICAL_SEQ_LEN, profile.max_length);
+    }
+
+    let (usable_num, usable_den) = usable_fraction(&hw.device);
+    let budget = (hw.mem_avail as usize).saturating_mul(usable_num) / usable_den;
+    let weight_bytes = std::fs::metadata(&profile.weights_path)
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
+    let inference_budget = budget.saturating_sub(weight_bytes.saturating_mul(2));
+    let per_seq2 = ATTN_LIVE_BUFFERS
+        .saturating_mul(profile.num_attention_heads.max(1))
+        .saturating_mul(F32)
+        .max(1);
+    let cap = (inference_budget / per_seq2).max(1).isqrt();
+
+    prev_bucket(cap).clamp(TYPICAL_SEQ_LEN, profile.max_length)
+}
+
 static FRAC_OVERRIDE: OnceLock<Option<(usize, usize)>> = OnceLock::new();
+static SEQ_CAP_OVERRIDE: OnceLock<Option<usize>> = OnceLock::new();
 
 fn usable_fraction(device: &Device) -> (usize, usize) {
     let cached = FRAC_OVERRIDE.get_or_init(|| {
@@ -87,6 +127,14 @@ fn usable_fraction(device: &Device) -> (usize, usize) {
         Device::Cuda => DEFAULT_CUDA_MEM_FRAC,
         Device::Cpu => DEFAULT_CPU_MEM_FRAC,
     }
+}
+
+fn env_seq_cap() -> Option<usize> {
+    *SEQ_CAP_OVERRIDE.get_or_init(|| parse_seq_cap(std::env::var("ZTI_EMBED_SEQ_CAP").ok()))
+}
+
+fn parse_seq_cap(value: Option<String>) -> Option<usize> {
+    value?.parse::<usize>().ok().filter(|&cap| cap > 0)
 }
 
 #[inline]
@@ -176,6 +224,46 @@ mod tests {
     fn next_bucket_above_max_clamps_to_cap() {
         assert_eq!(next_bucket(SEQ_BUCKETS, 12_000, 8192), 8192);
         assert_eq!(next_bucket(BATCH_BUCKETS, 200, 64), 64);
+    }
+
+    #[test]
+    fn prev_bucket_boundaries() {
+        assert_eq!(prev_bucket(0), TYPICAL_SEQ_LEN);
+        assert_eq!(prev_bucket(63), TYPICAL_SEQ_LEN);
+        assert_eq!(prev_bucket(64), 64);
+        assert_eq!(prev_bucket(513), 512);
+        assert_eq!(prev_bucket(4096), 4096);
+        assert_eq!(prev_bucket(12_000), 8192);
+    }
+
+    #[test]
+    fn attention_safe_seq_cap_keeps_model_max_on_large_metal() {
+        let p = profile(768, 12, 3072, 12, 8192, "/nonexistent");
+        assert_eq!(attention_safe_seq_cap(&p, &hw(Device::Metal, 64)), 8192);
+    }
+
+    #[test]
+    fn attention_safe_seq_cap_shrinks_to_memory_bucket() {
+        let p = profile(768, 12, 3072, 12, 8192, "/nonexistent");
+        assert_eq!(attention_safe_seq_cap(&p, &hw(Device::Metal, 13)), 4096);
+        assert_eq!(attention_safe_seq_cap(&p, &hw(Device::Metal, 4)), 2048);
+    }
+
+    #[test]
+    fn attention_safe_seq_cap_never_below_typical_seq_len() {
+        let p = profile(768, 12, 3072, 12, 8192, "/nonexistent");
+        assert_eq!(
+            attention_safe_seq_cap(&p, &hw(Device::Metal, 0)),
+            TYPICAL_SEQ_LEN
+        );
+    }
+
+    #[test]
+    fn seq_cap_override_parser_honors_positive_integer() {
+        assert_eq!(parse_seq_cap(Some("4096".into())), Some(4096));
+        assert_eq!(parse_seq_cap(Some("0".into())), None);
+        assert_eq!(parse_seq_cap(Some("not-a-number".into())), None);
+        assert_eq!(parse_seq_cap(None), None);
     }
 
     #[test]

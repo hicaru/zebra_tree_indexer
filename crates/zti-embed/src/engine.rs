@@ -213,6 +213,16 @@ impl EmbedEngine {
         if let Some(tok_limit) = tokenizer.truncation_max_length() {
             profile.max_length = profile.max_length.min(tok_limit);
         }
+        let seq_cap = crate::batch::attention_safe_seq_cap(&profile, &hw);
+        if seq_cap < profile.max_length {
+            tracing::info!(
+                seq_cap,
+                model_max = profile.max_length,
+                device = ?hw.device,
+                "capping embed seq length for memory safety"
+            );
+            profile.max_length = seq_cap;
+        }
 
         // Warmup forward: validates the model is NaN-free for this dtype/device
         // and probes the embedding dim when the config didn't provide it. A

@@ -519,11 +519,15 @@ pub async fn index_project(
     let mut order: Vec<usize> = (0..encs.len()).collect();
     order.sort_by_key(|&i| effective_len(i));
 
-    // Token budget per batch matches the per-sample shape `batch_size` was
-    // sized for (≈512 tokens × batch_size items). Item count is capped at
-    // BATCH_CEILING so very short chunks don't inflate the working set just
-    // because the token budget allows it.
-    let budget_tokens = batch_size.saturating_mul(zti_embed::batch::TYPICAL_SEQ_LEN);
+    // Attention transient memory is O(count · pad²) via the
+    // (count, heads, pad, pad) score/prob tensors, so bound that work rather
+    // than the linear token count. The budget is the same device-derived batch
+    // size at the typical sequence length; long padded batches shrink
+    // automatically while short batches keep the existing throughput.
+    let typical_seq = zti_embed::batch::TYPICAL_SEQ_LEN;
+    let budget_attn = batch_size
+        .saturating_mul(typical_seq)
+        .saturating_mul(typical_seq);
     let max_items = batch_size
         .saturating_mul(4)
         .min(zti_embed::batch::BATCH_CEILING);
@@ -560,9 +564,8 @@ pub async fn index_project(
                     let l = effective_len(order[end]);
                     let new_pad = pad_len.max(l);
                     let count = end - cursor + 1;
-                    if count > 1
-                        && (count.saturating_mul(new_pad) > budget_tokens || count > max_items)
-                    {
+                    let attn = count.saturating_mul(new_pad).saturating_mul(new_pad);
+                    if count > 1 && (attn > budget_attn || count > max_items) {
                         break;
                     }
                     pad_len = new_pad;
