@@ -83,12 +83,9 @@ impl FilesTable {
         if paths.is_empty() {
             return Ok(());
         }
-        let filter = paths
-            .iter()
-            .map(|p| format!("file_path = '{}'", p))
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        self.table.delete(&filter).await?;
+        for filter in crate::delete_filter::file_path_delete_filters(paths) {
+            self.table.delete(&filter).await?;
+        }
         Ok(())
     }
 

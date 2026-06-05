@@ -1,5 +1,7 @@
 pub mod upsert;
 
+pub(crate) mod delete_filter;
+
 pub mod chunks_table;
 pub mod db;
 pub mod files_table;
