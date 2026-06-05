@@ -12,7 +12,7 @@ pub fn parse_language(s: &str) -> Option<Language> {
         "py" | "python" => Some(Language::Python),
         "js" | "javascript" => Some(Language::JavaScript),
         "go" => Some(Language::Go),
-        "ml" | "ocaml" => Some(Language::OCaml),
+        "ml" | "ocaml" | "scilla" => Some(Language::OCaml),
         "mli" => Some(Language::OCamlInterface),
         _ => None,
     }
@@ -50,6 +50,7 @@ mod tests {
         assert_eq!(parse_language("ml").unwrap(), Language::OCaml);
         assert_eq!(parse_language("ocaml").unwrap(), Language::OCaml);
         assert_eq!(parse_language("mli").unwrap(), Language::OCamlInterface);
+        assert_eq!(parse_language("scilla").unwrap(), Language::OCaml);
     }
 
     #[test]

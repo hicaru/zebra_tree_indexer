@@ -259,7 +259,7 @@ Each language gets a dedicated tree-sitter parser that extracts symbols and call
 | **Dart** | `.dart` | functions, classes, methods, constructors, getters/setters |
 | **Go** | `.go` | functions, methods, structs, interfaces, type aliases |
 | **Solidity** | `.sol` | contracts, functions, events, modifiers, structs, enums |
-| **OCaml** | `.ml`, `.mli` | functions (let/value), types, modules, classes, methods, module types |
+| **OCaml** | `.ml`, `.mli`, `.scilla`, `.scillib`, `.scilexp` | functions (let/value), types, modules, classes, methods, module types; also parses Zilliqa Scilla smart contracts |
 
 ---
 
