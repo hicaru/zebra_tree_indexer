@@ -12,6 +12,7 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@astrojs/mdx": "^6.0.2",
     "@tailwindcss/vite": "^4.3.0",
     "astro": "^6.4.4",
     "gsap": "^3.15.0",

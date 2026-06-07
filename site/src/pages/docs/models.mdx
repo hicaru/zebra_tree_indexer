@@ -1,0 +1,87 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Embedding Models
+description: Embedding model registry for zebraindex — 12 models from 22M to 567M parameters
+---
+
+# Embedding Models
+
+zebraindex ships with a registry of 13 embedding models. Models are downloaded automatically on
+first use from HuggingFace. Switch models with `--model`:
+
+```sh
+zebraindex --model BAAI/bge-small-en-v1.5 index .
+```
+
+**Note:** changing the model requires re-indexing — embeddings from different models are not compatible.
+
+---
+
+## Code-optimised (recommended for codebases)
+
+| Model | Params | Context | Notes |
+|-------|--------|---------|-------|
+| `jinaai/jina-embeddings-v2-base-code` | 137M | 8192 | **Default.** State-of-the-art for code search. 30+ languages. |
+
+---
+
+## General purpose — small (CPU-friendly)
+
+| Model | Params | Notes |
+|-------|--------|-------|
+| `sentence-transformers/all-MiniLM-L6-v2` | 22.7M | Fastest; minimal memory |
+| `sentence-transformers/all-MiniLM-L12-v2` | 33.4M | Slightly better than L6 |
+| `BAAI/bge-small-en-v1.5` | 33.4M | Best accuracy in this size class |
+| `intfloat/e5-small-v2` | 33.4M | Requires `query:`/`passage:` prefixes |
+| `thenlper/gte-small` | 33.4M | No prefixes needed; robust on varied text |
+
+---
+
+## General purpose — base (GPU recommended)
+
+| Model | Params | Notes |
+|-------|--------|-------|
+| `BAAI/bge-base-en-v1.5` | 109M | Excellent accuracy/speed balance |
+| `intfloat/e5-base-v2` | 109M | High accuracy; strict prefix routing |
+| `thenlper/gte-base` | 109M | No prefixes; competes with BGE/E5 |
+
+---
+
+## Multilingual
+
+| Model | Params | Languages | Notes |
+|-------|--------|-----------|-------|
+| `intfloat/multilingual-e5-small` | 118M | 100+ | Good for mixed-language repos |
+| `intfloat/multilingual-e5-base` | 278M | 100+ | GPU recommended |
+| `BAAI/bge-m3` | 567M | 100+ | Heavy; only dense retrieval in this mode |
+
+---
+
+## Hardware guide
+
+| Hardware | Recommended models |
+|----------|--------------------|
+| CPU only | MiniLM-L6, bge-small, gte-small |
+| Metal (macOS M-series) | jina-code (default), bge-base, gte-base |
+| CUDA GPU (≥4 GB VRAM) | Any model up to bge-base |
+| CUDA GPU (≥12 GB VRAM) | bge-m3, multilingual-e5-base |
+
+Run `zebraindex doctor` to see which device zebraindex is using and whether the current model
+fits in available memory.
+
+---
+
+## Prefix routing
+
+Models from the E5 and Jina families use instruction prefixes at inference time:
+
+- **Query prefix** — prepended when embedding a search query (e.g. `query: `)
+- **Passage prefix** — prepended when embedding a chunk at index time (e.g. `passage: `)
+
+Configure custom prefixes when starting the daemon:
+
+```sh
+zebraindex --query-prefix "query: " --passage-prefix "passage: " index .
+```
+
+BGE, GTE, and MiniLM models do **not** require prefixes.

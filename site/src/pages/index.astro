@@ -7,59 +7,115 @@ import "../styles/global.css";
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <title>zebra.sh - zebra_tree_indexer</title>
-  <meta name="description" content="zebra_tree_indexer: local-first semantic code index for AI agents." />
+  <title>zebraindex — local semantic code search</title>
+  <meta name="description" content="zebraindex: local-first semantic code index for AI agents. Parse, chunk, embed, store, query — entirely on device." />
+  <script is:inline>
+    const stored = localStorage.getItem('theme');
+    if (stored === 'dark') document.documentElement.classList.add('dark');
+  </script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/">zebra.sh</a>
+    <a class="brand" href="/">zebraindex</a>
     <nav aria-label="links">
+      <a href="/docs">docs</a>
       <a href="https://github.com/hicaru/zebra_tree_indexer" target="_blank" rel="noopener">git</a>
       <a href="https://t.me/+MLRSdmyS6CM4YzAy" target="_blank" rel="noopener">tg</a>
+      <button id="theme-toggle" type="button" aria-label="toggle theme">[dark]</button>
     </nav>
   </header>
 
   <main class="layout">
     <section class="intro" aria-labelledby="title">
-      <p class="path">~/src/zebra_tree_indexer</p>
-      <h1 id="title">semantic code search, local first</h1>
-      <p>
-        Zebra parses your repository with tree-sitter, chunks code by structure,
-        embeds it on your machine, and exposes fast MCP tools for AI agents.
-      </p>
-      <div class="terminal" aria-label="commands">
-        <div class="term-row">
-          <span class="prompt">$</span>
-          <code>cargo install --git https://github.com/hicaru/zebra_tree_indexer</code>
-          <button class="copy-cmd" type="button" data-copy="cargo install --git https://github.com/hicaru/zebra_tree_indexer">copy</button>
+      <div class="term-window">
+        <div class="term-titlebar">
+          <span class="term-title">zebraindex@localhost:~/src/zebraindex</span>
         </div>
-        <div class="term-row">
-          <span class="prompt">$</span>
-          <code>zebraindex</code>
-          <button class="copy-cmd" type="button" data-copy="zebraindex">copy</button>
-        </div>
-        <div class="term-row">
-          <span class="prompt">$</span>
-          <code>zebraindex --mcp</code>
-          <button class="copy-cmd" type="button" data-copy="zebraindex --mcp">copy</button>
+        <div class="term-body">
+          <p class="term-line">
+            <span class="term-user">user@local</span><span class="term-sep">:</span><span class="term-dir">~/src/zebraindex</span><span class="term-dollar"> $</span>
+            <span id="typed-text"></span><span id="typed-cursor" class="cursor blink">▌</span>
+          </p>
+          <div class="terminal" aria-label="commands">
+            <div class="term-row">
+              <span class="prompt">$</span>
+              <code>cargo install --git https://github.com/hicaru/zebra_tree_indexer</code>
+              <button class="copy-cmd" type="button" data-copy="cargo install --git https://github.com/hicaru/zebra_tree_indexer">copy</button>
+            </div>
+            <div class="term-row">
+              <span class="prompt">$</span>
+              <code>zebraindex</code>
+              <button class="copy-cmd" type="button" data-copy="zebraindex">copy</button>
+            </div>
+            <div class="term-row">
+              <span class="prompt">$</span>
+              <code>zebraindex --mcp</code>
+              <button class="copy-cmd" type="button" data-copy="zebraindex --mcp">copy</button>
+            </div>
+          </div>
+          <div class="term-output" aria-hidden="true">
+            <span class="out-line">[daemon] ~/.local/share/zebraindex/daemon.sock</span>
+            <span class="out-line">[model] jina-embeddings-v2-base-code · metal</span>
+            <span class="out-line out-ready">[mcp] stdio ready<span class="cursor blink">▌</span></span>
+          </div>
         </div>
       </div>
+      <h1 id="title">semantic code search, local first</h1>
+      <p>
+        Parses your repo with tree-sitter, chunks by structure,
+        embeds on-device via Candle, and exposes MCP tools for AI agents.
+      </p>
     </section>
 
-    <section class="scene" aria-label="3D tree index visualization">
+    <section class="scene" aria-label="3D zebraindex visualization">
       <canvas id="canvas"></canvas>
       <p class="scene-caption">drag rotate / wheel zoom / no cloud</p>
     </section>
 
-    <aside class="features" aria-label="features">
-      <h2>pipeline</h2>
-      <ol>
-        <li><b>parse</b><span>tree-sitter AST</span></li>
-        <li><b>chunk</b><span>semantic units</span></li>
-        <li><b>embed</b><span>Candle, on-device</span></li>
-        <li><b>store</b><span>LanceDB + ANN</span></li>
-        <li><b>query</b><span>MCP-native tools</span></li>
-      </ol>
+    <aside class="agents" aria-label="supported agents">
+      <h2>agents</h2>
+      <ul class="agent-chips">
+        <li class="agent-chip recommended">
+          <span class="chip-name">Pi</span>
+          <span class="chip-badge">recommended</span>
+        </li>
+        <li class="agent-chip">
+          <span class="chip-name">Claude Code</span>
+          <span class="chip-badge">supported</span>
+        </li>
+        <li class="agent-chip">
+          <span class="chip-name">Cursor</span>
+          <span class="chip-badge">supported</span>
+        </li>
+        <li class="agent-chip">
+          <span class="chip-name">Codex</span>
+          <span class="chip-badge">supported</span>
+        </li>
+        <li class="agent-chip">
+          <span class="chip-name">opencode</span>
+          <span class="chip-badge">supported</span>
+        </li>
+        <li class="agent-chip">
+          <span class="chip-name">Hermes Agent</span>
+          <span class="chip-badge">supported</span>
+        </li>
+        <li class="agent-chip">
+          <span class="chip-name">Gemini</span>
+          <span class="chip-badge">supported</span>
+        </li>
+        <li class="agent-chip">
+          <span class="chip-name">Antigravity</span>
+          <span class="chip-badge">supported</span>
+        </li>
+        <li class="agent-chip">
+          <span class="chip-name">Kiro</span>
+          <span class="chip-badge">supported</span>
+        </li>
+      </ul>
+      <div class="mcp-snippet">
+        <span class="mcp-snippet-label">mcp config</span>
+        <code>&#123;"command":"zebraindex","args":["--mcp"]&#125;</code>
+      </div>
     </aside>
   </main>
 
@@ -72,17 +128,48 @@ import "../styles/global.css";
   </footer>
 
   <script>
-    import '../scripts/scene.js';
+    import { applyTheme } from '../scripts/scene.js';
 
+    // Theme toggle
+    const btn = document.getElementById('theme-toggle') as HTMLButtonElement;
+    const root = document.documentElement;
+    function syncBtn() {
+      btn.textContent = root.classList.contains('dark') ? '[light]' : '[dark]';
+    }
+    syncBtn();
+    applyTheme(root.classList.contains('dark'));
+    btn.addEventListener('click', () => {
+      const dark = root.classList.toggle('dark');
+      localStorage.setItem('theme', dark ? 'dark' : 'light');
+      syncBtn();
+      applyTheme(dark);
+    });
+
+    // Copy buttons
     document.querySelectorAll('[data-copy]').forEach((button) => {
       button.addEventListener('click', async () => {
-        await navigator.clipboard.writeText(button.getAttribute('data-copy'));
+        await navigator.clipboard.writeText((button as HTMLElement).getAttribute('data-copy')!);
         button.textContent = 'copied';
-        setTimeout(() => {
-          button.textContent = 'copy';
-        }, 1200);
+        setTimeout(() => { button.textContent = 'copy'; }, 1200);
       });
     });
+
+    // Typewriter effect in terminal prompt
+    const typed = document.getElementById('typed-text')!;
+    const typedCursor = document.getElementById('typed-cursor')!;
+    const text = 'zebraindex --mcp';
+    let i = 0;
+    function typeNext() {
+      if (i <= text.length) {
+        typed.textContent = text.slice(0, i);
+        i++;
+        setTimeout(typeNext, 75 + Math.random() * 50);
+      } else {
+        typedCursor.style.display = 'inline';
+      }
+    }
+    typedCursor.style.display = 'none';
+    setTimeout(typeNext, 800);
   </script>
 </body>
 </html>

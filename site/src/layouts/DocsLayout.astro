@@ -1,0 +1,64 @@
+---
+import "../styles/global.css";
+const { frontmatter } = Astro.props;
+const path = Astro.url.pathname.replace(/\/$/, '');
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>{frontmatter.title} — zebraindex</title>
+  <meta name="description" content={frontmatter.description ?? 'zebraindex documentation'} />
+  <script is:inline>
+    const stored = localStorage.getItem('theme');
+    if (stored === 'dark') document.documentElement.classList.add('dark');
+  </script>
+</head>
+<body class="docs-body">
+  <header class="topbar">
+    <a class="brand" href="/">zebraindex</a>
+    <nav aria-label="links">
+      <a href="/docs">docs</a>
+      <a href="https://github.com/hicaru/zebra_tree_indexer" target="_blank" rel="noopener">git</a>
+      <button id="theme-toggle" type="button" aria-label="toggle theme">[dark]</button>
+    </nav>
+  </header>
+
+  <div class="docs-layout">
+    <nav class="docs-sidebar" aria-label="docs navigation">
+      <a href="/docs" class={path === '/docs' ? 'active' : ''}>overview</a>
+      <a href="/docs/install" class={path === '/docs/install' ? 'active' : ''}>install</a>
+      <a href="/docs/mcp-tools" class={path === '/docs/mcp-tools' ? 'active' : ''}>mcp tools</a>
+      <a href="/docs/languages" class={path === '/docs/languages' ? 'active' : ''}>languages</a>
+      <a href="/docs/models" class={path === '/docs/models' ? 'active' : ''}>models</a>
+    </nav>
+    <article class="docs-content">
+      <slot />
+    </article>
+  </div>
+
+  <footer class="status">
+    <span>rust</span>
+    <span>tree-sitter</span>
+    <span>candle</span>
+    <span>lancedb</span>
+    <span>mcp</span>
+  </footer>
+
+  <script>
+    const btn = document.getElementById('theme-toggle') as HTMLButtonElement;
+    const root = document.documentElement;
+    function syncBtn() {
+      btn.textContent = root.classList.contains('dark') ? '[light]' : '[dark]';
+    }
+    syncBtn();
+    btn.addEventListener('click', () => {
+      const dark = root.classList.toggle('dark');
+      localStorage.setItem('theme', dark ? 'dark' : 'light');
+      syncBtn();
+    });
+  </script>
+</body>
+</html>

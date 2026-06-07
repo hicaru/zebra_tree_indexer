@@ -4,8 +4,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 const canvas = document.getElementById('canvas');
 const host = canvas.parentElement;
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
-renderer.setPixelRatio(1);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setClearColor(0xffffff, 1);
 
 const scene = new THREE.Scene();
@@ -27,9 +27,10 @@ controls.maxDistance = 18;
 const root = new THREE.Group();
 scene.add(root);
 
-const black = new THREE.LineBasicMaterial({ color: 0x000000 });
-const gray = new THREE.LineBasicMaterial({ color: 0x777777 });
-const faint = new THREE.LineBasicMaterial({ color: 0xb0b0b0 });
+// Materials — kept as module-level refs so applyTheme can mutate them
+const black    = new THREE.LineBasicMaterial({ color: 0x000000 });
+const gray     = new THREE.LineBasicMaterial({ color: 0x777777 });
+const faint    = new THREE.LineBasicMaterial({ color: 0xb0b0b0 });
 const fillWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
 const fillBlack = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
@@ -80,13 +81,21 @@ function textSprite(text) {
   return sprite;
 }
 
-// floor grid: deliberately boring, CAD/UNIX style.
+// Keep sprite refs for dark-mode repainting
+const sprites = [];
+function trackedSprite(text) {
+  const s = textSprite(text);
+  sprites.push({ sprite: s, text });
+  return s;
+}
+
+// Floor grid
 for (let i = -6; i <= 6; i++) {
   line(new THREE.Vector3(i, -2.2, -4), new THREE.Vector3(i, -2.2, 4), i === 0 ? gray : faint);
   line(new THREE.Vector3(-6, -2.2, i), new THREE.Vector3(6, -2.2, i), i === 0 ? gray : faint);
 }
 
-// vertical pipeline spine.
+// Pipeline spine
 line(new THREE.Vector3(0, -2.0, 0), new THREE.Vector3(0, 2.4, 0), black);
 
 const stages = [
@@ -100,7 +109,7 @@ const stages = [
 
 const stageNodes = stages.map((stage, index) => {
   const n = node(0, stage.y, 0, index === 5 ? 0.14 : 0.1, index === 5);
-  const label = textSprite(`${index + 1}:${stage.label}`);
+  const label = trackedSprite(`${index + 1}:${stage.label}`);
   label.position.set(1.35, stage.y, 0);
   root.add(label);
   return n;
@@ -110,7 +119,7 @@ for (let i = 0; i < stageNodes.length - 1; i++) {
   line(stageNodes[i].position, stageNodes[i + 1].position, black);
 }
 
-// source files as plain boxes.
+// Source files
 const sourceBoxes = [];
 ['rs', 'ts', 'py', 'go'].forEach((name, i) => {
   const angle = (i / 4) * Math.PI * 2;
@@ -122,13 +131,13 @@ const sourceBoxes = [];
   root.add(box);
   sourceBoxes.push(box);
   line(box.position, stageNodes[0].position, gray);
-  const tag = textSprite(`.${name}`);
+  const tag = trackedSprite(`.${name}`);
   tag.scale.set(0.62, 0.16, 1);
   tag.position.set(x, stages[0].y + 0.42, z);
   root.add(tag);
 });
 
-// AST tree.
+// AST tree
 const astRoot = stageNodes[1];
 const astChildren = [];
 for (let i = 0; i < 5; i++) {
@@ -143,7 +152,7 @@ for (let i = 0; i < 5; i++) {
   }
 }
 
-// chunks as stacked slabs.
+// Chunks as stacked slabs
 const slabs = [];
 for (let i = 0; i < 6; i++) {
   const slab = wireBox(1.25 - i * 0.08, 0.05, 0.42, i % 2 ? gray : black);
@@ -152,19 +161,22 @@ for (let i = 0; i < 6; i++) {
   slabs.push(slab);
 }
 
-// embedding points.
+// Embedding points
 const embedPositions = new Float32Array(96 * 3);
-for (let i = 0; i < 96; i++) {
-  embedPositions[i * 3] = (Math.random() - 0.5) * 2.0;
-  embedPositions[i * 3 + 1] = stages[3].y + (Math.random() - 0.5) * 0.55;
-  embedPositions[i * 3 + 2] = (Math.random() - 0.5) * 2.0;
+function randomizeEmbedPositions() {
+  for (let i = 0; i < 96; i++) {
+    embedPositions[i * 3]     = (Math.random() - 0.5) * 2.0;
+    embedPositions[i * 3 + 1] = stages[3].y + (Math.random() - 0.5) * 0.55;
+    embedPositions[i * 3 + 2] = (Math.random() - 0.5) * 2.0;
+  }
 }
+randomizeEmbedPositions();
 const embedGeometry = new THREE.BufferGeometry();
 embedGeometry.setAttribute('position', new THREE.BufferAttribute(embedPositions, 3));
 const embedPoints = new THREE.Points(embedGeometry, new THREE.PointsMaterial({ color: 0x000000, size: 0.035 }));
 root.add(embedPoints);
 
-// vector store box + graph.
+// Vector store box + ANN graph
 const db = wireBox(1.15, 0.48, 0.72, black);
 db.position.set(0, stages[4].y, 0);
 root.add(db);
@@ -179,7 +191,7 @@ for (let i = 0; i < graphNodes.length; i++) {
   line(graphNodes[i].position, graphNodes[(i + 3) % graphNodes.length].position, faint);
 }
 
-// query results.
+// Query results
 const results = [];
 for (let i = 0; i < 5; i++) {
   const box = wireBox(0.34, 0.2, 0.1, i === 0 ? black : gray);
@@ -189,33 +201,45 @@ for (let i = 0; i < 5; i++) {
   line(stageNodes[5].position, box.position, i === 0 ? black : gray);
 }
 
-// zebra stripes wrapping the object. Simple black arcs, no glow.
-const stripes = new THREE.Group();
+// Zebra stripe rings — full circles at each height level
 for (let i = 0; i < 9; i++) {
-  const arc = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(
-      Array.from({ length: 40 }, (_, p) => {
-        const a = -Math.PI * 0.72 + (p / 39) * Math.PI * 1.44;
-        const r = 2.25 + (i % 2) * 0.18;
-        return new THREE.Vector3(Math.cos(a) * r, -1.8 + i * 0.48, Math.sin(a) * r);
-      })
-    ),
+  const r = 2.25 + (i % 2) * 0.18;
+  const pts = Array.from({ length: 65 }, (_, p) => {
+    const a = (p / 64) * Math.PI * 2;
+    return new THREE.Vector3(Math.cos(a) * r, -1.8 + i * 0.5, Math.sin(a) * r);
+  });
+  const ring = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
     i % 2 ? gray : black
   );
-  arc.rotation.y = i * 0.42;
-  stripes.add(arc);
+  root.add(ring);
 }
-root.add(stripes);
 
+// "Z" wireframe logo above the scene
+const zPts = [
+  new THREE.Vector3(-0.28, 2.85, 0),
+  new THREE.Vector3( 0.28, 2.85, 0),
+  new THREE.Vector3(-0.28, 2.50, 0),
+  new THREE.Vector3( 0.28, 2.50, 0),
+];
+line(zPts[0], zPts[1], black);
+line(zPts[1], zPts[2], black);
+line(zPts[2], zPts[3], black);
+
+// ── Pulse animation ───────────────────────────────────────────────
 let lastStep = 0;
 let active = 0;
 function pulse() {
   const object = stageNodes[active % stageNodes.length];
-  object.scale.set(1.65, 1.65, 1.65);
-  setTimeout(() => object.scale.set(1, 1, 1), 180);
+  object.scale.set(2.2, 2.2, 2.2);
+  setTimeout(() => object.scale.set(1, 1, 1), 220);
   active += 1;
 }
 
+// ── Embed point scatter ───────────────────────────────────────────
+let embedPhase = -1;
+
+// ── Render loop ───────────────────────────────────────────────────
 const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
@@ -223,12 +247,19 @@ function animate() {
   const dt = clock.getDelta();
 
   root.rotation.y += dt * 0.08;
-  stripes.rotation.y -= dt * 0.1;
   sourceBoxes.forEach((box, i) => { box.rotation.y += dt * (0.25 + i * 0.04); });
   astChildren.forEach((child, i) => { child.position.y = stages[1].y + 0.05 + Math.sin(t * 1.4 + i) * 0.035; });
   slabs.forEach((slab, i) => { slab.position.x = (i - 2.5) * 0.04 + Math.sin(t * 1.2 + i) * 0.025; });
   graphNodes.forEach((n, i) => { n.scale.setScalar(1 + Math.sin(t * 1.7 + i) * 0.12); });
   results.forEach((r, i) => { r.position.y = stages[5].y + 0.45 + Math.sin(t * 1.8 + i) * 0.035; });
+
+  // Scatter embed points every 3 s
+  const ep = Math.floor(t / 3);
+  if (ep !== embedPhase) {
+    embedPhase = ep;
+    randomizeEmbedPositions();
+    embedGeometry.attributes.position.needsUpdate = true;
+  }
 
   if (t - lastStep > 0.75) {
     lastStep = t;
@@ -241,7 +272,7 @@ function animate() {
 
 function resize() {
   const rect = host.getBoundingClientRect();
-  const width = Math.max(1, Math.floor(rect.width));
+  const width  = Math.max(1, Math.floor(rect.width));
   const height = Math.max(1, Math.floor(rect.height));
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
@@ -254,3 +285,42 @@ if ('ResizeObserver' in window) {
   new ResizeObserver(resize).observe(host);
 }
 animate();
+
+// ── Theme API ─────────────────────────────────────────────────────
+export function applyTheme(dark) {
+  const fg  = dark ? 0xd4d4d4 : 0x000000;
+  const bg  = dark ? 0x0d0d0d : 0xffffff;
+  const mid = dark ? 0x888888 : 0x777777;
+  const lo  = dark ? 0x555555 : 0xb0b0b0;
+
+  renderer.setClearColor(bg, 1);
+  scene.background.set(bg);
+
+  black.color.set(fg);
+  gray.color.set(mid);
+  faint.color.set(lo);
+  fillWhite.color.set(bg);
+  fillBlack.color.set(fg);
+  embedPoints.material.color.set(fg);
+
+  // Repaint text sprites
+  sprites.forEach(({ sprite, text }) => {
+    const c2 = document.createElement('canvas');
+    c2.width = 256; c2.height = 64;
+    const ctx = c2.getContext('2d');
+    ctx.fillStyle = dark ? '#0d0d0d' : '#ffffff';
+    ctx.fillRect(0, 0, 256, 64);
+    ctx.strokeStyle = dark ? '#d4d4d4' : '#000000';
+    ctx.strokeRect(0, 0, 256, 64);
+    ctx.fillStyle = dark ? '#d4d4d4' : '#000000';
+    ctx.font = '20px monospace';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 12, 34);
+    const tex = new THREE.CanvasTexture(c2);
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    sprite.material.map.dispose();
+    sprite.material.map = tex;
+    sprite.material.needsUpdate = true;
+  });
+}

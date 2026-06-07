@@ -1,0 +1,67 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Overview
+description: zebraindex — local-first semantic code search for AI agents
+---
+
+# Overview
+
+**zebraindex** is a local-first semantic code index and MCP server. It parses your codebase with tree-sitter, chunks it by structure, embeds everything on your own hardware, and exposes fast query tools for AI coding agents — no cloud, no API keys.
+
+## How it works
+
+```
+your repo
+  ↓ tree-sitter
+AST symbols + edges
+  ↓ chunking
+semantic chunks (symbol-aware or recursive)
+  ↓ Candle (BERT/Jina)
+float32 embeddings  →  TurboQuant (int8)
+  ↓ LanceDB + usearch
+vector + full-text index
+  ↓ MCP stdio server
+AI agent tools: searchQuery · searchDep · fileTree · …
+```
+
+## Architecture
+
+zebraindex is a workspace of focused Rust crates:
+
+| Crate | Role |
+|-------|------|
+| `zti-daemon` | Background process, handles IPC requests |
+| `zti-pipeline` | Index + search pipeline orchestration |
+| `zti-dsl` | Tree-sitter code parsing, chunking, call graphs |
+| `zti-embed` | Candle-based embedding engine (BERT, Jina, BGE, …) |
+| `zti-ann` | ANN index (usearch) + TurboQuant reranker |
+| `zti-store` | LanceDB storage layer |
+| `zti-protocol` | IPC request/response types |
+| `zti-tree-sitter` | Language detection + tree-sitter frontends |
+| `zti-rerank` | TurboQuant reranking (CPU & GPU) |
+| `apps/zebraindex` | CLI, TUI, and MCP server entry point |
+
+## Key properties
+
+- **Local-first** — embeddings run on your CPU, Metal (macOS), or CUDA GPU
+- **Incremental** — only changed files are re-embedded; daemon stays alive
+- **MCP-native** — ships as a stdio server; works with Claude Code, Cursor, Zed, Windsurf, Continue.dev
+- **Multi-language** — Rust, TypeScript, JavaScript, Python, Go, Dart, Solidity, OCaml
+- **12 embedding models** — from 22M-param MiniLM to 567M BGE-M3, auto-downloaded
+
+## Quick start
+
+```sh
+cargo install --git https://github.com/hicaru/zebra_tree_indexer
+
+# index the current project
+zebraindex index .
+
+# search from the terminal
+zebraindex search "retry logic"
+
+# start as MCP stdio server for AI agents
+zebraindex --mcp
+```
+
+See [install](/docs/install) for full setup and MCP config snippets.

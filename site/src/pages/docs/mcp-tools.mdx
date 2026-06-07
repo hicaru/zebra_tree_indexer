@@ -1,0 +1,132 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: MCP Tools
+description: Reference for all six MCP tools exposed by zebraindex
+---
+
+# MCP Tools
+
+zebraindex exposes six tools over the MCP stdio protocol. The `project` parameter auto-resolves to
+the most recently indexed project if omitted — you rarely need to specify it.
+
+---
+
+## searchQuery
+
+Search by **conceptual intent** using natural language. Best for: "what handles retry logic",
+"where is fee calculation done", "find session validation code".
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `text` | `string` | required | Natural language query |
+| `project` | `string?` | auto | Project name, index number, or root path |
+| `limit` | `int?` | 5 | Maximum results |
+| `languages` | `string[]?` | all | Filter by language, e.g. `["rust","ts"]` |
+| `pathGlob` | `string?` | — | File glob, e.g. `"src/**/*.rs"` |
+| `includeTests` | `bool?` | false | Include test files |
+
+```json
+{
+  "tool": "searchQuery",
+  "text": "retry logic with exponential backoff",
+  "languages": ["rust"],
+  "limit": 8
+}
+```
+
+---
+
+## searchPassage
+
+Find code **similar to a snippet** or error trace. Use when you have a concrete example and want
+to find analogous patterns elsewhere.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `text` | `string` | required | Code snippet or error message |
+| `project` | `string?` | auto | Project |
+| `limit` | `int?` | 5 | Max results |
+| `languages` | `string[]?` | all | Language filter |
+| `pathGlob` | `string?` | — | File glob |
+| `includeTests` | `bool?` | false | Include tests |
+
+```json
+{
+  "tool": "searchPassage",
+  "text": "fn embed_query_async(&self, text: &str) -> anyhow::Result<Vec<f32>>"
+}
+```
+
+---
+
+## searchDep
+
+**Exact symbol lookup** with call-graph context. Use when you know the function or struct name.
+Returns the symbol body plus its callers/callees up to the requested depth.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `string` | required | Exact symbol name (function, struct, type, etc.) |
+| `project` | `string?` | auto | Project |
+| `depth` | `int?` | 2 | Call graph depth |
+| `maxTokens` | `int?` | — | Token budget cap |
+
+```json
+{
+  "tool": "searchDep",
+  "name": "search_exhaustive",
+  "depth": 3
+}
+```
+
+---
+
+## fileTree
+
+Returns the **project file tree**, optionally filtered by a glob pattern.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project` | `string?` | auto | Project |
+| `pathGlob` | `string?` | — | Filter, e.g. `"**/*.rs"` |
+
+```json
+{ "tool": "fileTree", "pathGlob": "crates/zti-pipeline/**" }
+```
+
+---
+
+## projectList
+
+Lists **all indexed projects** with their root path, file count, and chunk count.
+No parameters required.
+
+```json
+{ "tool": "projectList" }
+```
+
+---
+
+## doctor
+
+Runs **diagnostics**: hardware detection, model load status, index health, IPC socket reachability.
+Useful when debugging why search results are missing or slow.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project` | `string?` | — | Optional: check a specific project's index |
+
+```json
+{ "tool": "doctor" }
+```
+
+---
+
+## Search modes
+
+`searchQuery` and `searchPassage` use different embedding prefixes internally:
+
+- **Query mode** — embeds with the `query:` instruction prefix (Jina, E5, etc.)
+- **Passage mode** — embeds with the `passage:` prefix; treats the input as code to match against
+
+For models without prefix routing (BGE, GTE, MiniLM) both modes produce identical embeddings.

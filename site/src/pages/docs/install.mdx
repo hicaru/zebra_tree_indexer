@@ -1,0 +1,121 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Installation
+description: Install zebraindex and connect it to your AI agent
+---
+
+# Installation
+
+## Prerequisites
+
+- Rust toolchain (stable, 1.80+) — `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- macOS, Linux, or Windows (WSL2 recommended)
+- Optional: CUDA toolkit for GPU acceleration; Metal is auto-detected on macOS
+
+## Install from source
+
+```sh
+cargo install --git https://github.com/hicaru/zebra_tree_indexer
+```
+
+This compiles and installs the `zebraindex` binary into `~/.cargo/bin/`.
+
+## First run — index a project
+
+```sh
+cd /path/to/your/project
+zebraindex index .
+```
+
+The daemon starts in the background, downloads the default model (`jina-embeddings-v2-base-code`),
+and begins parsing + embedding. Progress is shown in the TUI.
+
+```sh
+zebraindex          # open interactive TUI
+zebraindex status   # show indexed projects
+zebraindex doctor   # check hardware, model health
+```
+
+## MCP server setup
+
+zebraindex ships as a **stdio MCP server**. Add it to your agent's config once and all indexed projects are immediately available.
+
+### Claude Code
+
+Add to `~/.claude/settings.json` (or project `.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "zebraindex": {
+      "command": "zebraindex",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+### Cursor
+
+Create or edit `.cursor/mcp.json` in your home directory:
+
+```json
+{
+  "mcpServers": {
+    "zebraindex": {
+      "command": "zebraindex",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+### Zed
+
+In `~/.config/zed/settings.json`:
+
+```json
+{
+  "context_servers": {
+    "zebraindex": {
+      "command": {
+        "path": "zebraindex",
+        "args": ["--mcp"]
+      }
+    }
+  }
+}
+```
+
+### Windsurf
+
+In `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "zebraindex": {
+      "command": "zebraindex",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+## Choosing a model
+
+zebraindex auto-selects `jina-embeddings-v2-base-code` by default. Override with:
+
+```sh
+zebraindex --model BAAI/bge-small-en-v1.5 index .
+```
+
+See [models](/docs/models) for the full registry and hardware recommendations.
+
+## Environment
+
+```sh
+zebraindex env    # prints data dir, socket path, active model, device
+```
+
+Data is stored in `~/.local/share/zebraindex/` (Linux) or `~/Library/Application Support/zebraindex/` (macOS).

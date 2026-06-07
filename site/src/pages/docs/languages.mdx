@@ -1,0 +1,65 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Supported Languages
+description: Languages and chunking strategies supported by zebraindex
+---
+
+# Supported Languages
+
+zebraindex uses **tree-sitter** to parse source code into an AST, then extracts semantic chunks
+aligned with the actual symbol boundaries of each language.
+
+## Language table
+
+| Language | Extensions | Symbol kinds |
+|----------|-----------|-------------|
+| **Rust** | `.rs` | `fn`, `impl`, `struct`, `enum`, `trait`, `mod` |
+| **TypeScript** | `.ts`, `.tsx` | `function`, `class`, `interface`, `type`, arrow fns |
+| **JavaScript** | `.js`, `.jsx`, `.mjs`, `.cjs` | `function`, `class`, arrow fns |
+| **Python** | `.py` | `def`, `class`, decorators |
+| **Go** | `.go` | `func`, `type`, `interface`, `struct` |
+| **Dart** | `.dart` | `class`, `function`, `mixin`, `extension` |
+| **Solidity** | `.sol` | `contract`, `function`, `modifier`, `event` |
+| **OCaml** | `.ml`, `.mli`, `.scilla`, `.scillib`, `.scilexp` | `let`, `type`, `module` |
+
+## Chunking strategies
+
+### Symbol chunking (default)
+
+Tree-sitter extracts each top-level symbol as a self-contained chunk. Each chunk carries:
+
+- Qualified symbol name (e.g. `MyStruct::my_method`)
+- Symbol kind (`fn`, `class`, `impl`, …)
+- File path, start line, end line
+- Call edges to/from other symbols
+
+This is what powers `searchDep` — the call graph is built at index time from these edges.
+
+### Recursive chunking (fallback)
+
+For files without a tree-sitter frontend (config, docs, generated code), zebraindex falls back
+to a recursive splitter that respects token limits while trying to break at paragraph/line
+boundaries. These chunks have no symbol metadata.
+
+## File classification
+
+Each chunk is tagged with a file type that enables hard-filtering at search time:
+
+| Tag | Included files |
+|-----|---------------|
+| `source` | Regular implementation files (default) |
+| `test` | Files in `tests/`, `*_test.*`, `*.spec.*`, `__tests__/` |
+| `config` | `*.toml`, `*.json`, `*.yaml`, `*.lock`, etc. |
+| `doc` | `*.md`, `*.mdx`, `*.rst`, `*.txt` |
+
+Pass `includeTests: true` in `searchQuery` to include test files in results.
+
+## Adding language support
+
+zebraindex language frontends live in `crates/zti-ts-*`. Each crate wraps a tree-sitter grammar
+and implements the `Frontend` trait from `zti-tree-sitter`. Adding a new language means:
+
+1. Add a `zti-ts-<lang>` crate with the tree-sitter grammar dependency
+2. Implement `Frontend` — define which node types map to which symbol kinds
+3. Register it in `crates/zti-tree-sitter/src/registry.rs`
+4. Add the file extension mapping in `crates/zti-tree-sitter/src/detect.rs`
