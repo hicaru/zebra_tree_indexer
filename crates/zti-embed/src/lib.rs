@@ -1,3 +1,4 @@
+pub mod any;
 pub mod batch;
 mod bert;
 pub mod engine;
@@ -7,6 +8,7 @@ pub mod normalize;
 pub mod pooling;
 pub mod tokenizer;
 
+pub use any::AnyEmbedEngine;
 pub use engine::EmbedEngine;
 pub use engine::LoadOverrides;
 pub use engine::Pooled;

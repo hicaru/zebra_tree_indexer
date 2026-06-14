@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow};
 
 use zti_ann::{AnnCache, AnnHandle, AnnIndexBuilder, SearchMethod, SearchParams};
 use zti_common::file_type::FileType;
-use zti_embed::EmbedEngine;
+use zti_embed::AnyEmbedEngine;
 use zti_rerank::TurboReranker;
 use zti_rerank::gpu::{
     BATCH_SIZE, GpuTurboScratch, TurboCodeBatch, TurboScorerCache, parse_turbo_code_into,
@@ -63,10 +63,11 @@ pub struct SearchOutcome {
 #[allow(clippy::too_many_arguments)]
 async fn run_vector_leg(
     chunks_table: &ChunksTable,
-    engine: &EmbedEngine,
+    engine: &AnyEmbedEngine,
     reranker: &TurboReranker,
     ann_cache: &AnnCache,
     turbo_cache: &TurboScorerCache,
+    hardware: &zti_hw::Hardware,
     pid: &[u8; 32],
     params: &SearchParams,
     query_emb: &[f32],
@@ -75,7 +76,8 @@ async fn run_vector_leg(
 ) -> Result<Vec<ChunkHit>> {
     match params.method {
         SearchMethod::TurboQuant => {
-            let core = turbo_cache.get_or_build(reranker, &engine.device()?)?;
+            let device = engine.device_with_hardware(hardware)?;
+            let core = turbo_cache.get_or_build(reranker, &device)?;
             let mut scratch =
                 GpuTurboScratch::with_capacity(core.num_projections(), core.dim_over_2());
             let mut rotated_query: Vec<f32> = Vec::with_capacity(engine.dim());
@@ -208,11 +210,12 @@ fn materialize_fused_hits(
 pub async fn search(
     query: &str,
     query_emb: &[f32],
-    engine: &EmbedEngine,
+    engine: &AnyEmbedEngine,
     db: &zti_store::Db,
     reranker: &TurboReranker,
     ann_cache: &AnnCache,
     turbo_cache: &TurboScorerCache,
+    hardware: &zti_hw::Hardware,
     pid: &[u8; 32],
     opts: &SearchOpts<'_>,
     params_override: Option<&SearchParams>,
@@ -247,7 +250,7 @@ pub async fn search(
                     .or_else(|| project.as_ref().map(|row| row.total_chunks as usize))
                     .ok_or_else(|| anyhow!("project not indexed"))?,
                 engine.dim(),
-                &zti_hw::probe(),
+                hardware,
                 None,
             );
             &fallback_params
@@ -274,6 +277,7 @@ pub async fn search(
             reranker,
             ann_cache,
             turbo_cache,
+            hardware,
             pid,
             params,
             query_emb,
@@ -340,7 +344,7 @@ fn diversify_by_parent_in_place(ranked: &mut Vec<(usize, f32)>, candidates: &[Ch
 pub async fn search_exhaustive(
     query: &str,
     query_emb: &[f32],
-    engine: &EmbedEngine,
+    engine: &AnyEmbedEngine,
     db: &zti_store::Db,
     pid: &[u8; 32],
     opts: &SearchOpts<'_>,

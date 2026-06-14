@@ -10,7 +10,8 @@ use tokio::sync::{Mutex, RwLock, watch};
 use zti_ann::AnnCache;
 use zti_common::ids;
 use zti_dsl::ProjectIndex;
-use zti_embed::{EmbedEngine, LoadOverrides};
+use zti_embed::{AnyEmbedEngine, EmbedEngine, LoadOverrides};
+use zti_remote_embed::{RemoteEmbedEngine, RemoteModelInfo, RemoteProvider};
 use zti_rerank::TurboReranker;
 use zti_rerank::gpu::TurboScorerCache;
 use zti_store::Db;
@@ -57,11 +58,13 @@ pub struct LoadedProject {
 
 pub struct DaemonState {
     pub primary_model: Arc<str>,
-    primary_engine: Arc<EmbedEngine>,
-    pub engines: RwLock<HashMap<Arc<str>, Arc<EmbedEngine>>>,
-    pub loading_model: RwLock<Option<Arc<str>>>,
+    primary_engine: Arc<AnyEmbedEngine>,
+    pub engines: RwLock<HashMap<Arc<str>, Arc<AnyEmbedEngine>>>,
+    pub load_lock: Mutex<()>,
     pub hardware: Arc<zti_hw::Hardware>,
     pub model_dtype: Option<String>,
+    pub remote_api_key: Option<Arc<str>>,
+    pub remote_dim_hint: Option<usize>,
     pub registry: RwLock<HashMap<[u8; 32], Arc<LoadedProject>>>,
     pub ann: Arc<AnnCache>,
     pub turbo: Arc<TurboScorerCache>,
@@ -76,10 +79,12 @@ pub struct DaemonState {
 
 impl DaemonState {
     pub fn new(
-        engine: EmbedEngine,
+        engine: AnyEmbedEngine,
         model_id: Arc<str>,
         hardware: Arc<zti_hw::Hardware>,
         model_dtype: Option<String>,
+        remote_api_key: Option<Arc<str>>,
+        remote_dim_hint: Option<usize>,
         pid_lock: File,
     ) -> Self {
         let started_at_ns = std::time::SystemTime::now()
@@ -97,9 +102,11 @@ impl DaemonState {
             primary_model: model_id,
             primary_engine: primary,
             engines: RwLock::new(engines),
-            loading_model: RwLock::new(None),
+            load_lock: Mutex::new(()),
             hardware,
             model_dtype,
+            remote_api_key,
+            remote_dim_hint,
             registry: RwLock::new(HashMap::with_capacity(4)),
             ann: Arc::new(AnnCache::default()),
             turbo: Arc::new(TurboScorerCache::default()),
@@ -113,7 +120,7 @@ impl DaemonState {
         }
     }
 
-    pub fn primary_engine(&self) -> Arc<EmbedEngine> {
+    pub fn primary_engine(&self) -> Arc<AnyEmbedEngine> {
         Arc::clone(&self.primary_engine)
     }
 
@@ -121,33 +128,53 @@ impl DaemonState {
         self.hardware.device.as_str()
     }
 
-    pub async fn engine_for_model(&self, model_id: &str) -> anyhow::Result<Arc<EmbedEngine>> {
-        {
-            let engines = self.engines.read().await;
-            if let Some(engine) = engines.get(model_id) {
-                return Ok(Arc::clone(engine));
-            }
+    pub async fn engine_for_model(&self, model_id: &str) -> anyhow::Result<Arc<AnyEmbedEngine>> {
+        if let Some(engine) = self.engines.read().await.get(model_id) {
+            return Ok(Arc::clone(engine));
         }
 
-        {
-            *self.loading_model.write().await = Some(Arc::from(model_id));
+        let _load_guard = self.load_lock.lock().await;
+        if let Some(engine) = self.engines.read().await.get(model_id) {
+            return Ok(Arc::clone(engine));
         }
 
-        let hw = Arc::clone(&self.hardware);
-        let owned = model_id.to_owned();
-        let result = tokio::task::spawn_blocking(move || {
-            EmbedEngine::load_with(&owned, hw, &LoadOverrides::default())
-        })
-        .await?;
-
+        let result = if let Some(remote_model) =
+            model_id.strip_prefix(RemoteProvider::OpenRouter.model_prefix())
         {
-            *self.loading_model.write().await = None;
-        }
+            let api_key = self
+                .remote_api_key
+                .as_ref()
+                .map(Arc::clone)
+                .ok_or_else(|| anyhow::anyhow!("remote API key is not available"))?;
+            let info = RemoteModelInfo {
+                id: remote_model.to_string(),
+                name: remote_model.to_string(),
+                description: String::new(),
+                context_length: 0,
+            };
+            RemoteEmbedEngine::connect(
+                RemoteProvider::OpenRouter,
+                api_key,
+                &info,
+                self.remote_dim_hint,
+            )
+            .await
+            .map(AnyEmbedEngine::Remote)
+        } else {
+            let hw = Arc::clone(&self.hardware);
+            let owned = model_id.to_owned();
+            tokio::task::spawn_blocking(move || {
+                EmbedEngine::load_with(&owned, hw, &LoadOverrides::default())
+                    .map(AnyEmbedEngine::Local)
+            })
+            .await?
+        };
 
-        let engine = result?;
-        let arc = Arc::new(engine);
-        let mut engines = self.engines.write().await;
-        engines.insert(Arc::from(model_id), Arc::clone(&arc));
+        let arc = Arc::new(result?);
+        self.engines
+            .write()
+            .await
+            .insert(Arc::from(model_id), Arc::clone(&arc));
         Ok(arc)
     }
 

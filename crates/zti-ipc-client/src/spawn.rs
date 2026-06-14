@@ -33,6 +33,8 @@ pub async fn connect_or_spawn(
     query_prefix: Option<&str>,
     passage_prefix: Option<&str>,
     model_dtype: Option<&str>,
+    remote_api_key: Option<&str>,
+    remote_dim_hint: Option<usize>,
 ) -> Result<UnixStream> {
     let socket_path = paths::daemon_socket()?;
 
@@ -58,7 +60,14 @@ pub async fn connect_or_spawn(
             Some(m) => tracing::info!("daemon not running, spawning with model {m}..."),
             None => tracing::info!("daemon not running, spawning (no model specified)..."),
         }
-        spawn_daemon(model, query_prefix, passage_prefix, model_dtype)?;
+        spawn_daemon(
+            model,
+            query_prefix,
+            passage_prefix,
+            model_dtype,
+            remote_api_key,
+            remote_dim_hint,
+        )?;
         drop(pid_file);
     } else {
         tracing::debug!("daemon already spawning, waiting for socket...");
@@ -72,6 +81,8 @@ fn spawn_daemon(
     query_prefix: Option<&str>,
     passage_prefix: Option<&str>,
     model_dtype: Option<&str>,
+    remote_api_key: Option<&str>,
+    remote_dim_hint: Option<usize>,
 ) -> Result<()> {
     let exe = std::env::current_exe()?;
     let dir = exe
@@ -122,6 +133,12 @@ fn spawn_daemon(
     }
     if let Some(d) = model_dtype {
         cmd.args(["--model-dtype", d]);
+    }
+    if let Some(key) = remote_api_key {
+        cmd.env("ZEBRA_OPENROUTER_KEY", key);
+    }
+    if let Some(dim) = remote_dim_hint {
+        cmd.env("ZEBRA_REMOTE_DIM_HINT", dim.to_string());
     }
     cmd.spawn()?;
 

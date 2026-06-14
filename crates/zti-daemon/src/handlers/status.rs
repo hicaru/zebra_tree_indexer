@@ -43,7 +43,7 @@ pub async fn handle(req: &ProjectStatusReq, state: &DaemonState) -> Response {
             project_root: root.to_string(),
             total_chunks: chunks_len as u64,
             total_files: files_len as u64,
-            model_id: engine.profile().model_id.clone(),
+            model_id: engine.persisted_model_id().into_owned(),
             model_dim: dim as u32,
             last_indexed_ns,
         })

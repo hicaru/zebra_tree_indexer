@@ -144,6 +144,8 @@ pub struct DaemonEnvInfo {
     pub device: String,
     pub cpus: u32,
     pub mem_total_mb: u64,
+    #[serde(default)]
+    pub model_dim: u32,
     pub query_prefix: Option<String>,
     pub passage_prefix: Option<String>,
 }

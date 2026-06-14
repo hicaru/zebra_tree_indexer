@@ -18,6 +18,7 @@ zti-protocol.workspace = true
 zti-pipeline.workspace = true
 zti-store.workspace = true
 zti-embed.workspace = true
+zti-remote-embed.workspace = true
 zti-dsl.workspace = true
 zti-ts-core.workspace = true
 zti-tree-sitter.workspace = true

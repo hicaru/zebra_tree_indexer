@@ -89,6 +89,7 @@ pub async fn handle(req: &SearchReq, state: &DaemonState) -> Response {
                 &reranker,
                 &state.ann,
                 &state.turbo,
+                state.hardware.as_ref(),
                 &pid,
                 &opts,
                 cached_params.as_deref(),

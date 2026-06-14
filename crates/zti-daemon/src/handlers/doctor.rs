@@ -37,30 +37,22 @@ pub async fn handle(req: &DoctorReq, state: &DaemonState) -> Response {
         state.primary_engine()
     };
 
-    let weights_path = &engine.profile().weights_path;
-    if !weights_path.exists() {
-        checks.push(error_check(
-            "model_load",
-            format!("model weights missing at {}", weights_path.display()),
-        ));
-    } else {
-        match engine.embed_batch_async(&["hello"]).await {
-            Ok(embs) => match embs.first() {
-                Some(emb) if emb.len() == engine.dim() => checks.push(ok_check(
-                    "model_load",
-                    format!("dim={} via {}", emb.len(), weights_path.display()),
-                )),
-                Some(emb) => checks.push(error_check(
-                    "model_load",
-                    format!("dim mismatch: profile={} probe={}", engine.dim(), emb.len()),
-                )),
-                None => checks.push(error_check("model_load", "probe returned no embedding")),
-            },
-            Err(e) => checks.push(error_check(
+    match engine.embed_texts_async(&["hello"]).await {
+        Ok(embs) => match embs.first() {
+            Some(emb) if emb.len() == engine.dim() => checks.push(ok_check(
                 "model_load",
-                format!("embed probe failed: {}", e),
+                format!("dim={} via {}", emb.len(), engine.model_id_str()),
             )),
-        }
+            Some(emb) => checks.push(error_check(
+                "model_load",
+                format!("dim mismatch: profile={} probe={}", engine.dim(), emb.len()),
+            )),
+            None => checks.push(error_check("model_load", "probe returned no embedding")),
+        },
+        Err(e) => checks.push(error_check(
+            "model_load",
+            format!("embed probe failed: {}", e),
+        )),
     }
 
     match zti_common::paths::data_dir() {
@@ -136,8 +128,11 @@ pub async fn handle(req: &DoctorReq, state: &DaemonState) -> Response {
     finalize(&engine, checks)
 }
 
-fn finalize(engine: &zti_embed::EmbedEngine, checks: Vec<DoctorCheck>) -> Response {
-    let device = engine.hardware().device.as_str().to_owned();
+fn finalize(engine: &zti_embed::AnyEmbedEngine, checks: Vec<DoctorCheck>) -> Response {
+    let device = engine
+        .hardware()
+        .map(|hardware| hardware.device.as_str().to_owned())
+        .unwrap_or_else(|| String::from("remote"));
     Response::Doctor(Ok(DoctorReport { device, checks }))
 }
 

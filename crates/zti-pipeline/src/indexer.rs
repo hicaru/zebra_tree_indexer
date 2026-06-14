@@ -12,13 +12,12 @@ use arrow::array::{
     UInt8Array, UInt32Array, UInt32Builder, UInt64Array,
 };
 use rayon::prelude::*;
-use tokio::sync::oneshot;
 use tracing::info;
 
 use zti_common::ids::project_id;
 use zti_dsl::chunking::ChunkStrategy;
 use zti_dsl::{Chunk, DslChunker, EdgeKind, SourceFile, Target, build_index_from_sources};
-use zti_embed::{EmbedEngine, Pooled};
+use zti_embed::{AnyEmbedEngine, Pooled};
 use zti_recursive_chunk;
 use zti_rerank::TurboReranker;
 use zti_store::Db;
@@ -65,8 +64,8 @@ fn sizing_for(body_len: usize, max_len: usize, bpt: usize) -> Option<AdaptiveChu
 }
 
 /// `Some(sizing)` when the body should be recursively split; `None` keeps it whole.
-fn adaptive_split(body: &str, engine: &EmbedEngine) -> Option<AdaptiveChunkSizing> {
-    let max_len = engine.profile().max_length;
+fn adaptive_split(body: &str, engine: &AnyEmbedEngine) -> Option<AdaptiveChunkSizing> {
+    let max_len = engine.max_length();
 
     // Fast path: bytes ≤ max_len → tokens ≤ bytes ≤ max_len → always fits.
     if body.len() <= max_len {
@@ -126,7 +125,7 @@ pub struct IndexStats {
 
 pub async fn index_project(
     root: &Path,
-    engine: &EmbedEngine,
+    engine: &AnyEmbedEngine,
     db: &Db,
     reporter: &Reporter,
     override_method: Option<zti_ann::SearchMethod>,
@@ -332,7 +331,7 @@ pub async fn index_project(
                     let full_path = root.join(rel).display().to_string();
                     // Pack rows up to the same byte budget `adaptive_split` uses
                     // so multi-row chunks fit the model and aren't re-split.
-                    let budget = engine.profile().max_length.saturating_mul(CHARS_PER_TOKEN);
+                    let budget = engine.max_length().saturating_mul(CHARS_PER_TOKEN);
                     let rows = zti_dsl::chunking::chunk_tabular_file(
                         rel,
                         &full_path,
@@ -454,13 +453,20 @@ pub async fn index_project(
         "tokenizing chunks",
     );
 
-    let batch_size = engine.recommended_batch_size();
-    let hw = engine.hardware();
+    let batch_size = engine.recommended_batch_size().max(1);
+    let fallback_hw;
+    let hw = if let Some(hw) = engine.hardware() {
+        hw
+    } else {
+        fallback_hw = zti_hw::probe();
+        &fallback_hw
+    };
     info!(
         batch_size,
         device = ?hw.device,
         mem_avail_mb = hw.mem_avail >> 20,
-        max_length = engine.profile().max_length,
+        max_length = engine.max_length(),
+        remote = engine.is_remote(),
         "computed embed batch_size",
     );
 
@@ -470,62 +476,22 @@ pub async fn index_project(
     let total_chunks = all_pending.len();
     let mut paused = false;
 
-    // Tokenize in batches so the progress bar advances 0→N instead of
-    // freezing until all chunks are tokenized.
-    let encs: Arc<Vec<zti_embed::Tokenized>> = Arc::new({
-        let passage_prefix = engine.profile().passage_prefix.as_deref();
-        let prefixed: Vec<Cow<'_, str>> = all_pending
-            .iter()
-            .map(|(c, _, _)| zti_embed::apply_prefix(&c.body, passage_prefix))
-            .collect();
-        let refs: Vec<&str> = prefixed.iter().map(|s| s.as_ref()).collect();
-
-        const TOK_BATCH: usize = 512;
-        let mut out: Vec<zti_embed::Tokenized> = Vec::with_capacity(refs.len());
-        for slice in refs.chunks(TOK_BATCH) {
-            if cancel.load(Ordering::Relaxed) {
-                paused = true;
-                break;
-            }
-            out.extend(engine.tokenize(slice)?);
-            reporter.set_phase(
-                zti_protocol::response::IndexPhase::Tokenize,
-                out.len() as u64,
-                total_chunks as u64,
-                "tokenizing chunks",
-            );
-        }
-        out
-    });
-
-    // All length math below must use the same cap that `prepare_from_encs`
-    // applies before running the model — otherwise a chunk that tokenizes to
-    // (say) 6000 ids but will be truncated to 2048 at inference inflates the
-    // bucketing pad estimate and forces a batch-of-one, defeating batching.
-    let model_max_len = engine.profile().max_length;
-    let effective_len = |idx: usize| encs[idx].ids.len().min(model_max_len).max(1);
-
-    // Sort ASCENDING. The first batches pack many short chunks (cheap, ~50 ms
-    // each) so progress visibly moves; the last few batches process the long
-    // chunks at seq=max_length (the expensive ones). Descending order is
-    // slightly better for ORT's BFCArena reuse but front-loads every slow
-    // batch and makes the run look frozen for the first 15–30 s — that
-    // perception cost dominated the real arena-extension cost in practice.
-    let mut order: Vec<usize> = (0..encs.len()).collect();
-    order.sort_by_key(|&i| effective_len(i));
-
-    // Attention transient memory is O(count · pad²) via the
-    // (count, heads, pad, pad) score/prob tensors, so bound that work rather
-    // than the linear token count. The budget is the same device-derived batch
-    // size at the typical sequence length; long padded batches shrink
-    // automatically while short batches keep the existing throughput.
-    let typical_seq = zti_embed::batch::TYPICAL_SEQ_LEN;
-    let budget_attn = batch_size
-        .saturating_mul(typical_seq)
-        .saturating_mul(typical_seq);
-    let max_items = batch_size
-        .saturating_mul(4)
-        .min(zti_embed::batch::BATCH_CEILING);
+    reporter.set_phase(
+        zti_protocol::response::IndexPhase::Tokenize,
+        total_chunks as u64,
+        total_chunks as u64,
+        if engine.is_remote() {
+            "remote mode: skipping local tokenization"
+        } else {
+            "tokenizing chunks"
+        },
+    );
+    reporter.set_phase(
+        zti_protocol::response::IndexPhase::Embed,
+        0,
+        total_chunks as u64,
+        "embedding chunks",
+    );
 
     // Coalesce embed-batch RecordBatches and flush them with a single Lance
     // `add` (one manifest commit) once ~CHUNK_FLUSH_ROWS rows accumulate,
@@ -533,221 +499,194 @@ pub async fn index_project(
     // (re)indexed file's prior chunks before this loop, so freshly-hashed
     // chunk_ids can't collide with surviving rows — append is duplicate-free.
     const CHUNK_FLUSH_ROWS: usize = 4096;
-    const PIPELINE_DEPTH: usize = 3;
-    type InFlight = (
-        Arc<[usize]>,
-        usize,
-        std::time::Instant,
-        oneshot::Receiver<Result<Pooled>>,
-    );
-    let mut pending_batches: Vec<RecordBatch> = Vec::new();
+    let mut pending_batches: Vec<RecordBatch> = Vec::with_capacity(4);
     let mut pending_rows = 0usize;
     let mut pending_file_idxs: Vec<u32> = Vec::with_capacity(CHUNK_FLUSH_ROWS);
 
     if !paused {
         let mut cursor = 0usize;
-        let mut inflight = VecDeque::<InFlight>::with_capacity(PIPELINE_DEPTH);
-        loop {
-            while inflight.len() < PIPELINE_DEPTH && cursor < order.len() && !paused {
-                if cancel.load(Ordering::Relaxed) {
-                    paused = true;
-                    break;
-                }
-                let mut end = cursor;
-                let mut pad_len = 0usize;
-                while end < order.len() {
-                    let l = effective_len(order[end]);
-                    let new_pad = pad_len.max(l);
-                    let count = end - cursor + 1;
-                    let attn = count.saturating_mul(new_pad).saturating_mul(new_pad);
-                    if count > 1 && (attn > budget_attn || count > max_items) {
-                        break;
-                    }
-                    pad_len = new_pad;
-                    end += 1;
-                }
-                let idxs = Arc::<[usize]>::from(&order[cursor..end]);
-                let batch_started = std::time::Instant::now();
-                let rx = engine.submit(Arc::clone(&encs), Arc::clone(&idxs))?;
-                inflight.push_back((idxs, pad_len, batch_started, rx));
-                cursor = end;
-            }
-
-            let Some((idxs, pad_len, batch_started, rx)) = inflight.pop_front() else {
+        while cursor < all_pending.len() {
+            if cancel.load(Ordering::Relaxed) {
+                paused = true;
                 break;
-            };
-            let n_batch = idxs.len();
-            match rx
-                .await
-                .map_err(|_| anyhow::anyhow!("embed worker dropped"))?
-            {
-                Ok(embs) => {
-                    let dim = engine.dim();
-                    let now_ns = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos() as u64;
-
-                    let n = idxs.len();
-
-                    // Quantize the whole batch in parallel: TurboQuantizer::encode
-                    // is the #1 app-CPU cost and was previously run serially on the
-                    // async task while rayon cores sat idle. `&reranker` is Sync;
-                    // results are index-aligned with `idxs`, preserving order.
-                    let turbo_codes: Vec<Option<Vec<u8>>> = (0..n)
-                        .into_par_iter()
-                        .map(|i| match reranker.encode(embs.row(i)) {
-                            Ok(t) => Some(t),
-                            Err(e) => {
-                                tracing::debug!("turbo encode failed: {}", e);
-                                None
-                            }
-                        })
-                        .collect();
-
-                    let mut chunk_id_builder = FixedSizeBinaryBuilder::new(16);
-                    let mut file_path_builder = StringBuilder::with_capacity(n, n * 64);
-                    let mut language_builder = StringBuilder::with_capacity(n, n * 8);
-                    let mut file_type_builder = UInt8Array::builder(n);
-                    let mut symbol_qualified_builder = StringBuilder::with_capacity(n, n * 64);
-                    let mut symbol_kind_builder = StringBuilder::with_capacity(n, n * 16);
-                    let mut sym_id_builder = UInt32Array::builder(n);
-                    let mut sub_chunk_idx_builder = UInt32Array::builder(n);
-                    let mut total_sub_chunks_builder = UInt32Array::builder(n);
-                    let mut chunk_strategy_builder = UInt8Array::builder(n);
-                    let mut parent_sym_id_builder = UInt32Array::builder(n);
-                    let mut appendix_sym_ids_builder = ListBuilder::new(UInt32Builder::new());
-                    let mut start_line_builder = UInt32Array::builder(n);
-                    let mut end_line_builder = UInt32Array::builder(n);
-                    let mut content_builder = StringBuilder::with_capacity(n, n * 64);
-                    let mut turbo_code_builder = BinaryBuilder::new();
-                    let mut indexed_at_builder = UInt64Array::builder(n);
-
-                    for (i, &idx) in idxs.iter().enumerate() {
-                        let (chunk, lang, fidx) = &all_pending[idx];
-                        pending_file_idxs.push(*fidx);
-                        let file_type = need_reindex
-                            .get(*fidx as usize)
-                            .and_then(|rel| snapshots.get(rel))
-                            .map(|snap| snap.file_type)
-                            .unwrap_or_default();
-                        let emb = embs.row(i);
-
-                        if emb.iter().any(|v| v.is_nan()) {
-                            anyhow::bail!(
-                                "NaN embedding for {}:{}-{}",
-                                chunk.file,
-                                chunk.start_line,
-                                chunk.end_line,
-                            );
-                        }
-
-                        let chunk_id = content_chunk_id(chunk);
-
-                        let parent_sym_id = if chunk.sym_id == u32::MAX {
-                            None
-                        } else {
-                            dsl_index
-                                .symbols
-                                .get(chunk.sym_id as usize)
-                                .and_then(|s| s.parent)
-                        };
-                        let appendix_ids: Vec<u32> = if chunk.sym_id == u32::MAX {
-                            Vec::new()
-                        } else {
-                            appendix_for(chunk.sym_id)
-                        };
-
-                        chunk_id_builder.append_value(chunk_id)?;
-                        file_path_builder.append_value(&chunk.file);
-                        language_builder.append_value(lang);
-                        file_type_builder.append_value(file_type.into());
-                        symbol_qualified_builder.append_value(&chunk.qualified);
-                        symbol_kind_builder.append_value(chunk.kind.as_str());
-                        sym_id_builder.append_value(chunk.sym_id);
-                        sub_chunk_idx_builder.append_value(chunk.sub_chunk_idx);
-                        total_sub_chunks_builder.append_value(chunk.total_sub_chunks);
-                        chunk_strategy_builder.append_value(chunk.chunk_strategy as u8);
-                        match parent_sym_id {
-                            Some(p) => parent_sym_id_builder.append_value(p),
-                            None => parent_sym_id_builder.append_null(),
-                        }
-                        if appendix_ids.is_empty() {
-                            appendix_sym_ids_builder.append_null();
-                        } else {
-                            for id in &appendix_ids {
-                                appendix_sym_ids_builder.values().append_value(*id);
-                            }
-                            appendix_sym_ids_builder.append(true);
-                        }
-                        start_line_builder.append_value(chunk.start_line);
-                        end_line_builder.append_value(chunk.end_line);
-                        content_builder.append_value(&chunk.body);
-                        match turbo_codes.get(i).and_then(Option::as_ref) {
-                            Some(t) => turbo_code_builder.append_value(t),
-                            None => turbo_code_builder.append_null(),
-                        }
-                        indexed_at_builder.append_value(now_ns);
-
-                        total_embedded += 1;
-                    }
-
-                    {
-                        let embedding_arr = embs.into_fixed_size_list();
-
-                        let record = RecordBatch::try_new(
-                            std::sync::Arc::new(zti_store::schema::chunks_schema(dim)),
-                            vec![
-                                std::sync::Arc::new(chunk_id_builder.finish()),
-                                std::sync::Arc::new(file_path_builder.finish()),
-                                std::sync::Arc::new(language_builder.finish()),
-                                std::sync::Arc::new(file_type_builder.finish()),
-                                std::sync::Arc::new(symbol_qualified_builder.finish()),
-                                std::sync::Arc::new(symbol_kind_builder.finish()),
-                                std::sync::Arc::new(sym_id_builder.finish()),
-                                std::sync::Arc::new(sub_chunk_idx_builder.finish()),
-                                std::sync::Arc::new(total_sub_chunks_builder.finish()),
-                                std::sync::Arc::new(chunk_strategy_builder.finish()),
-                                std::sync::Arc::new(parent_sym_id_builder.finish()),
-                                std::sync::Arc::new(appendix_sym_ids_builder.finish()),
-                                std::sync::Arc::new(start_line_builder.finish()),
-                                std::sync::Arc::new(end_line_builder.finish()),
-                                std::sync::Arc::new(content_builder.finish()),
-                                std::sync::Arc::new(turbo_code_builder.finish()),
-                                std::sync::Arc::new(indexed_at_builder.finish()),
-                                std::sync::Arc::new(embedding_arr),
-                            ],
-                        )?;
-
-                        pending_rows += record.num_rows();
-                        pending_batches.push(record);
-                        if pending_rows >= CHUNK_FLUSH_ROWS {
-                            chunks_table
-                                .append_batches(std::mem::take(&mut pending_batches))
-                                .await?;
-                            pending_rows = 0;
-                            checkpoint_completed(
-                                &files_table,
-                                &snapshots,
-                                &need_reindex,
-                                &mut remaining,
-                                &std::mem::take(&mut pending_file_idxs),
-                            )
-                            .await?;
-                        }
-                    }
-                }
-                Err(e) => {
-                    anyhow::bail!("embed batch failed: {e}");
-                }
             }
+
+            let end = cursor.saturating_add(batch_size).min(all_pending.len());
+            let batch_items = all_pending
+                .get(cursor..end)
+                .ok_or_else(|| anyhow::anyhow!("invalid embed batch range"))?;
+            let text_refs: Vec<&str> = batch_items
+                .iter()
+                .map(|(chunk, _, _)| chunk.body.as_ref())
+                .collect();
+            let batch_started = std::time::Instant::now();
+            let rows = engine.embed_texts_async(&text_refs).await?;
+            let embs = rows_into_pooled(rows, engine.dim())?;
+            let n = embs.batch;
+            if n != batch_items.len() {
+                anyhow::bail!(
+                    "embed row count mismatch: got {}, expected {}",
+                    n,
+                    batch_items.len(),
+                );
+            }
+
+            let dim = engine.dim();
+            let now_ns = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64;
+
+            // Quantize the whole batch in parallel: TurboQuantizer::encode
+            // is the #1 app-CPU cost and was previously run serially on the
+            // async task while rayon cores sat idle. `&reranker` is Sync;
+            // results are index-aligned with rows, preserving order.
+            let turbo_codes: Vec<Option<Vec<u8>>> = (0..n)
+                .into_par_iter()
+                .map(|i| match reranker.encode(embs.row(i)) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        tracing::debug!("turbo encode failed: {}", e);
+                        None
+                    }
+                })
+                .collect();
+
+            let mut chunk_id_builder = FixedSizeBinaryBuilder::new(16);
+            let mut file_path_builder = StringBuilder::with_capacity(n, n * 64);
+            let mut language_builder = StringBuilder::with_capacity(n, n * 8);
+            let mut file_type_builder = UInt8Array::builder(n);
+            let mut symbol_qualified_builder = StringBuilder::with_capacity(n, n * 64);
+            let mut symbol_kind_builder = StringBuilder::with_capacity(n, n * 16);
+            let mut sym_id_builder = UInt32Array::builder(n);
+            let mut sub_chunk_idx_builder = UInt32Array::builder(n);
+            let mut total_sub_chunks_builder = UInt32Array::builder(n);
+            let mut chunk_strategy_builder = UInt8Array::builder(n);
+            let mut parent_sym_id_builder = UInt32Array::builder(n);
+            let mut appendix_sym_ids_builder = ListBuilder::new(UInt32Builder::new());
+            let mut start_line_builder = UInt32Array::builder(n);
+            let mut end_line_builder = UInt32Array::builder(n);
+            let mut content_builder = StringBuilder::with_capacity(n, n * 64);
+            let mut turbo_code_builder = BinaryBuilder::new();
+            let mut indexed_at_builder = UInt64Array::builder(n);
+
+            for (i, (chunk, lang, fidx)) in batch_items.iter().enumerate() {
+                pending_file_idxs.push(*fidx);
+                let file_type = need_reindex
+                    .get(*fidx as usize)
+                    .and_then(|rel| snapshots.get(rel))
+                    .map(|snap| snap.file_type)
+                    .unwrap_or_default();
+                let emb = embs.row(i);
+
+                if emb.iter().any(|v| v.is_nan()) {
+                    anyhow::bail!(
+                        "NaN embedding for {}:{}-{}",
+                        chunk.file,
+                        chunk.start_line,
+                        chunk.end_line,
+                    );
+                }
+
+                let chunk_id = content_chunk_id(chunk);
+
+                let parent_sym_id = if chunk.sym_id == u32::MAX {
+                    None
+                } else {
+                    dsl_index
+                        .symbols
+                        .get(chunk.sym_id as usize)
+                        .and_then(|s| s.parent)
+                };
+                let appendix_ids: Vec<u32> = if chunk.sym_id == u32::MAX {
+                    Vec::with_capacity(0)
+                } else {
+                    appendix_for(chunk.sym_id)
+                };
+
+                chunk_id_builder.append_value(chunk_id)?;
+                file_path_builder.append_value(&chunk.file);
+                language_builder.append_value(lang);
+                file_type_builder.append_value(file_type.into());
+                symbol_qualified_builder.append_value(&chunk.qualified);
+                symbol_kind_builder.append_value(chunk.kind.as_str());
+                sym_id_builder.append_value(chunk.sym_id);
+                sub_chunk_idx_builder.append_value(chunk.sub_chunk_idx);
+                total_sub_chunks_builder.append_value(chunk.total_sub_chunks);
+                chunk_strategy_builder.append_value(chunk.chunk_strategy as u8);
+                match parent_sym_id {
+                    Some(p) => parent_sym_id_builder.append_value(p),
+                    None => parent_sym_id_builder.append_null(),
+                }
+                if appendix_ids.is_empty() {
+                    appendix_sym_ids_builder.append_null();
+                } else {
+                    for id in &appendix_ids {
+                        appendix_sym_ids_builder.values().append_value(*id);
+                    }
+                    appendix_sym_ids_builder.append(true);
+                }
+                start_line_builder.append_value(chunk.start_line);
+                end_line_builder.append_value(chunk.end_line);
+                content_builder.append_value(&chunk.body);
+                match turbo_codes.get(i).and_then(Option::as_ref) {
+                    Some(t) => turbo_code_builder.append_value(t),
+                    None => turbo_code_builder.append_null(),
+                }
+                indexed_at_builder.append_value(now_ns);
+
+                total_embedded = total_embedded.saturating_add(1);
+            }
+
+            let embedding_arr = embs.into_fixed_size_list();
+            let record = RecordBatch::try_new(
+                std::sync::Arc::new(zti_store::schema::chunks_schema(dim)),
+                vec![
+                    std::sync::Arc::new(chunk_id_builder.finish()),
+                    std::sync::Arc::new(file_path_builder.finish()),
+                    std::sync::Arc::new(language_builder.finish()),
+                    std::sync::Arc::new(file_type_builder.finish()),
+                    std::sync::Arc::new(symbol_qualified_builder.finish()),
+                    std::sync::Arc::new(symbol_kind_builder.finish()),
+                    std::sync::Arc::new(sym_id_builder.finish()),
+                    std::sync::Arc::new(sub_chunk_idx_builder.finish()),
+                    std::sync::Arc::new(total_sub_chunks_builder.finish()),
+                    std::sync::Arc::new(chunk_strategy_builder.finish()),
+                    std::sync::Arc::new(parent_sym_id_builder.finish()),
+                    std::sync::Arc::new(appendix_sym_ids_builder.finish()),
+                    std::sync::Arc::new(start_line_builder.finish()),
+                    std::sync::Arc::new(end_line_builder.finish()),
+                    std::sync::Arc::new(content_builder.finish()),
+                    std::sync::Arc::new(turbo_code_builder.finish()),
+                    std::sync::Arc::new(indexed_at_builder.finish()),
+                    std::sync::Arc::new(embedding_arr),
+                ],
+            )?;
+
+            pending_rows += record.num_rows();
+            pending_batches.push(record);
+            if pending_rows >= CHUNK_FLUSH_ROWS {
+                chunks_table
+                    .append_batches(std::mem::take(&mut pending_batches))
+                    .await?;
+                pending_rows = 0;
+                checkpoint_completed(
+                    &files_table,
+                    &snapshots,
+                    &need_reindex,
+                    &mut remaining,
+                    &std::mem::take(&mut pending_file_idxs),
+                )
+                .await?;
+            }
+
             tracing::debug!(
-                items = n_batch,
-                seq = pad_len,
+                items = n,
                 ms = batch_started.elapsed().as_millis() as u64,
                 "embedded batch",
             );
-            reporter.inc(n_batch as u64);
+            reporter.inc(n as u64);
+            cursor = end;
         }
     } // if !paused
 
@@ -771,7 +710,13 @@ pub async fn index_project(
         anyhow::bail!("no embeddings produced from {total_chunks} chunks");
     }
 
-    let hw = engine.hardware();
+    let fallback_hw;
+    let hw = if let Some(hw) = engine.hardware() {
+        hw
+    } else {
+        fallback_hw = zti_hw::probe();
+        &fallback_hw
+    };
     let previous_row = db.projects_table().await?.get(&pid).await.ok().flatten();
     let previous_params: Option<zti_ann::SearchParams> = previous_row
         .as_ref()
@@ -849,6 +794,18 @@ pub async fn index_project(
         duration_ms: elapsed.as_millis() as u64,
         paused,
     })
+}
+
+fn rows_into_pooled(rows: Vec<Vec<f32>>, dim: usize) -> Result<Pooled> {
+    let batch = rows.len();
+    let mut data = Vec::with_capacity(batch.saturating_mul(dim));
+    for row in rows {
+        if row.len() != dim {
+            anyhow::bail!("embedding dim mismatch: got {}, expected {dim}", row.len());
+        }
+        data.extend(row);
+    }
+    Ok(Pooled { data, dim, batch })
 }
 
 async fn upsert_files(
@@ -944,7 +901,7 @@ async fn upsert_project(
     total_chunks: usize,
     total_files: usize,
     languages: &[&Language],
-    engine: &EmbedEngine,
+    engine: &AnyEmbedEngine,
     choice: &zti_ann::SearchParams,
 ) -> Result<()> {
     let projects_table = db.projects_table().await?;
@@ -977,7 +934,7 @@ async fn upsert_project(
             Arc::new(project_id_builder.finish()),
             Arc::new(StringArray::from(vec![root.to_string()])),
             Arc::new(languages_arr),
-            Arc::new(StringArray::from(vec![engine.profile().model_id.clone()])),
+            Arc::new(StringArray::from(vec![engine.persisted_model_id().as_ref()])),
             Arc::new(UInt32Array::from(vec![engine.dim() as u32])),
             Arc::new(UInt64Array::from(vec![total_chunks as u64])),
             Arc::new(UInt64Array::from(vec![total_files as u64])),

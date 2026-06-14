@@ -10,13 +10,6 @@ pub async fn handle(state: &DaemonState) -> Response {
         let engines = state.engines.read().await;
         engines.keys().map(|k| k.to_string()).collect()
     };
-    let loading_model = state
-        .loading_model
-        .read()
-        .await
-        .as_deref()
-        .map(str::to_string);
-
     let device = state.device_str().to_owned();
 
     Response::DaemonStatus(DaemonStatusInfo {
@@ -29,6 +22,6 @@ pub async fn handle(state: &DaemonState) -> Response {
         mem_total_mb: state.hardware.mem_total / (1024 * 1024),
         model_dtype: state.model_dtype.clone(),
         loaded_models,
-        loading_model,
+        loading_model: None,
     })
 }

@@ -21,18 +21,35 @@ impl Client {
         query_prefix: Option<&str>,
         passage_prefix: Option<&str>,
         model_dtype: Option<&str>,
+        remote_api_key: Option<&str>,
+        remote_dim_hint: Option<usize>,
     ) -> Result<Self> {
-        let stream =
-            connect_or_spawn(timeout, model, query_prefix, passage_prefix, model_dtype).await?;
+        let stream = connect_or_spawn(
+            timeout,
+            model,
+            query_prefix,
+            passage_prefix,
+            model_dtype,
+            remote_api_key,
+            remote_dim_hint,
+        )
+        .await?;
         let mut client = Self { stream };
         match client.handshake().await {
             Ok(_) => Ok(client),
             Err(e) if e.to_string().contains("protocol mismatch") => {
                 tracing::warn!("daemon protocol mismatch, restarting...");
                 kill_daemon().await?;
-                let stream =
-                    connect_or_spawn(timeout, model, query_prefix, passage_prefix, model_dtype)
-                        .await?;
+                let stream = connect_or_spawn(
+                    timeout,
+                    model,
+                    query_prefix,
+                    passage_prefix,
+                    model_dtype,
+                    remote_api_key,
+                    remote_dim_hint,
+                )
+                .await?;
                 let mut client = Self { stream };
                 client.handshake().await?;
                 Ok(client)

@@ -13,6 +13,14 @@ pub fn handle(state: &DaemonState) -> Response {
 
     let device = state.device_str().to_owned();
 
+    let (query_prefix, passage_prefix) = match engine.as_ref() {
+        zti_embed::AnyEmbedEngine::Local(local) => (
+            local.profile().query_prefix.clone(),
+            local.profile().passage_prefix.clone(),
+        ),
+        zti_embed::AnyEmbedEngine::Remote(_) => (None, None),
+    };
+
     Response::DaemonEnv(DaemonEnvInfo {
         data_dir,
         socket_path,
@@ -20,7 +28,8 @@ pub fn handle(state: &DaemonState) -> Response {
         device,
         cpus: state.hardware.cpus as u32,
         mem_total_mb: state.hardware.mem_total / (1024 * 1024),
-        query_prefix: engine.profile().query_prefix.clone(),
-        passage_prefix: engine.profile().passage_prefix.clone(),
+        model_dim: engine.dim() as u32,
+        query_prefix,
+        passage_prefix,
     })
 }

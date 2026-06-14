@@ -6,7 +6,8 @@ use anyhow::{Context, Result};
 use fs2::FileExt;
 use tokio::net::UnixListener;
 use tracing_subscriber::EnvFilter;
-use zti_embed::{EmbedEngine, LoadOverrides};
+use zti_embed::{AnyEmbedEngine, EmbedEngine, LoadOverrides};
+use zti_remote_embed::{RemoteEmbedEngine, RemoteModelInfo, RemoteProvider};
 
 pub mod handlers;
 pub mod listener;
@@ -21,6 +22,8 @@ pub struct DaemonConfig<'a> {
     pub query_prefix: Option<&'a str>,
     pub passage_prefix: Option<&'a str>,
     pub model_dtype: Option<&'a str>,
+    pub remote_api_key: Option<&'a str>,
+    pub remote_dim_hint: Option<usize>,
 }
 
 pub fn run_daemon(config: &DaemonConfig<'_>) -> Result<()> {
@@ -73,7 +76,21 @@ pub fn run_daemon(config: &DaemonConfig<'_>) -> Result<()> {
         passage_prefix: config.passage_prefix,
         model_dtype: config.model_dtype.and_then(zti_embed::parse_model_dtype),
     };
-    let engine = EmbedEngine::load_with(&config.model, Arc::clone(&hw), &opts)?;
+    let is_remote_model = config
+        .model
+        .as_ref()
+        .starts_with(RemoteProvider::OpenRouter.model_prefix());
+    let preloaded_engine = if is_remote_model {
+        None
+    } else {
+        Some(AnyEmbedEngine::Local(EmbedEngine::load_with(
+            &config.model,
+            Arc::clone(&hw),
+            &opts,
+        )?))
+    };
+    let remote_api_key = config.remote_api_key.map(Arc::<str>::from);
+    let remote_dim_hint = config.remote_dim_hint;
 
     // Build the runtime explicitly: a fixed, named worker pool (one per core)
     // keeps the reactor from over-provisioning and makes thread profiles
@@ -90,12 +107,43 @@ pub fn run_daemon(config: &DaemonConfig<'_>) -> Result<()> {
         .build()?;
     rt.block_on(async {
         let model_id: Arc<str> = Arc::from(config.model.as_ref());
+        let engine = if let Some(engine) = preloaded_engine {
+            engine
+        } else if let Some(remote_model) = config
+            .model
+            .as_ref()
+            .strip_prefix(RemoteProvider::OpenRouter.model_prefix())
+        {
+            let api_key = remote_api_key
+                .as_ref()
+                .map(Arc::clone)
+                .ok_or_else(|| anyhow::anyhow!("remote API key is required for OpenRouter"))?;
+            let info = RemoteModelInfo {
+                id: remote_model.to_string(),
+                name: remote_model.to_string(),
+                description: String::new(),
+                context_length: 0,
+            };
+            let remote = RemoteEmbedEngine::connect(
+                RemoteProvider::OpenRouter,
+                Arc::clone(&api_key),
+                &info,
+                remote_dim_hint,
+            )
+            .await?;
+            tracing::info!(dim = remote.dim(), model = remote.model_id(), "remote embed engine ready");
+            AnyEmbedEngine::Remote(remote)
+        } else {
+            anyhow::bail!("unsupported remote model '{}': missing provider prefix", config.model);
+        };
         let model_dtype = config.model_dtype.map(String::from);
         let state = Arc::new(DaemonState::new(
             engine,
             model_id,
             hw,
             model_dtype,
+            remote_api_key,
+            remote_dim_hint,
             pid_file,
         ));
 
