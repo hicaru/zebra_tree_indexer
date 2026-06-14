@@ -75,7 +75,7 @@ pub enum CliCommand {
 pub enum RemoteCommand {
     #[command(about = "List embedding models for a provider")]
     Models {
-        #[arg(short, long, help = "openrouter | openai | xai | alibaba")]
+        #[arg(short, long, help = "openrouter | alibaba")]
         provider: String,
         #[arg(
             short = 'k',
@@ -87,7 +87,7 @@ pub enum RemoteCommand {
     },
     #[command(about = "Validate the API key for a provider")]
     Validate {
-        #[arg(short, long, help = "openrouter | openai | xai | alibaba")]
+        #[arg(short, long, help = "openrouter | alibaba")]
         provider: String,
         #[arg(
             short = 'k',
@@ -99,7 +99,7 @@ pub enum RemoteCommand {
     },
     #[command(about = "One-shot embed (connect + embed) to smoke-test a model")]
     Embed {
-        #[arg(short, long, help = "openrouter | openai | xai | alibaba")]
+        #[arg(short, long, help = "openrouter | alibaba")]
         provider: String,
         #[arg(short, long, help = "Model id, with or without the provider: prefix")]
         model: String,

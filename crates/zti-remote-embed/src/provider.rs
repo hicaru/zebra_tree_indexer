@@ -1,21 +1,17 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteProvider {
     OpenRouter,
-    OpenAI,
-    XAI,
     Alibaba,
 }
 
 impl RemoteProvider {
     /// Every supported provider, for iteration (model-id resolution, menus).
-    pub const ALL: &'static [Self] = &[Self::OpenRouter, Self::OpenAI, Self::XAI, Self::Alibaba];
+    pub const ALL: &'static [Self] = &[Self::OpenRouter, Self::Alibaba];
 
     #[inline]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::OpenRouter => "openrouter",
-            Self::OpenAI => "openai",
-            Self::XAI => "xai",
             Self::Alibaba => "alibaba",
         }
     }
@@ -24,8 +20,6 @@ impl RemoteProvider {
     pub const fn label(self) -> &'static str {
         match self {
             Self::OpenRouter => "OpenRouter",
-            Self::OpenAI => "OpenAI",
-            Self::XAI => "xAI",
             Self::Alibaba => "Alibaba",
         }
     }
@@ -34,20 +28,16 @@ impl RemoteProvider {
     pub const fn env_var(self) -> &'static str {
         match self {
             Self::OpenRouter => "ZEBRA_OPENROUTER_KEY",
-            Self::OpenAI => "ZEBRA_OPENAI_KEY",
-            Self::XAI => "ZEBRA_XAI_KEY",
             Self::Alibaba => "ZEBRA_DASHSCOPE_KEY",
         }
     }
 
     /// Prefix that tags a model id as belonging to this provider, e.g.
-    /// `openai:text-embedding-3-small`.
+    /// `openrouter:some-model`.
     #[inline]
     pub const fn model_prefix(self) -> &'static str {
         match self {
             Self::OpenRouter => "openrouter:",
-            Self::OpenAI => "openai:",
-            Self::XAI => "xai:",
             Self::Alibaba => "alibaba:",
         }
     }
@@ -56,8 +46,6 @@ impl RemoteProvider {
     pub const fn base_url(self) -> &'static str {
         match self {
             Self::OpenRouter => "https://openrouter.ai/api/v1",
-            Self::OpenAI => "https://api.openai.com/v1",
-            Self::XAI => "https://api.x.ai/v1",
             Self::Alibaba => "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         }
     }
@@ -70,18 +58,18 @@ impl RemoteProvider {
     pub const fn models_query(self) -> &'static str {
         match self {
             Self::OpenRouter => "output_modalities=embeddings",
-            Self::OpenAI | Self::XAI | Self::Alibaba => "",
+            Self::Alibaba => "",
         }
     }
 
     /// Path GET'd to validate an API key; a 401 there means a bad key.
-    /// OpenRouter exposes a free `/key` endpoint; the OpenAI-compatible
-    /// providers reuse `/models`.
+    /// OpenRouter exposes a free `/key` endpoint; other providers
+    /// reuse `/models`.
     #[inline]
     pub const fn validate_path(self) -> &'static str {
         match self {
             Self::OpenRouter => "/key",
-            Self::OpenAI | Self::XAI | Self::Alibaba => "/models",
+            Self::Alibaba => "/models",
         }
     }
 
@@ -94,7 +82,7 @@ impl RemoteProvider {
                 ("http-referer", "https://github.com/hicaru/zebra_tree_indexer"),
                 ("x-title", "zebraindex"),
             ],
-            Self::OpenAI | Self::XAI | Self::Alibaba => &[],
+            Self::Alibaba => &[],
         }
     }
 
@@ -104,7 +92,7 @@ impl RemoteProvider {
     pub const fn requires_client_side_embedding_filter(self) -> bool {
         match self {
             Self::OpenRouter => false,
-            Self::OpenAI | Self::XAI | Self::Alibaba => true,
+            Self::Alibaba => true,
         }
     }
 
@@ -118,9 +106,8 @@ impl RemoteProvider {
             // OpenRouter free tier is request/min-bound; larger batches
             // mean fewer requests → less rate-limit pressure.
             Self::OpenRouter => 128,
-            Self::OpenAI => 64,
-            // DashScope caps `input` at 25 items; xAI follows the smaller bound too.
-            Self::XAI | Self::Alibaba => 25,
+            // DashScope caps `input` at 25 items.
+            Self::Alibaba => 25,
         }
     }
 
@@ -132,8 +119,7 @@ impl RemoteProvider {
     pub const fn max_concurrency(self) -> usize {
         match self {
             Self::OpenRouter => 2,
-            Self::OpenAI => 6,
-            Self::XAI | Self::Alibaba => 2,
+            Self::Alibaba => 2,
         }
     }
 
@@ -148,7 +134,7 @@ impl RemoteProvider {
     }
 }
 
-/// Heuristic for OpenAI-compatible `/models` listings that don't tag modality:
+/// Heuristic for provider `/models` listings that don't tag modality:
 /// keep ids that look like embedding models.
 #[inline]
 pub fn is_embedding_model(id: &str) -> bool {
