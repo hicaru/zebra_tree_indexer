@@ -90,7 +90,9 @@ pub fn build_change_method_modal(
 }
 
 pub async fn resolve_startup(tx: mpsc::Sender<app::AppMessage>) {
-    if let Ok(Some(mut cfg)) = config::load() {
+    if let Ok(Some(mut cfg)) = config::load()
+        && !cfg.default_model.is_empty()
+    {
         if let Some((provider, _)) = RemoteProvider::from_model_id(&cfg.default_model) {
             // The key was entered at setup and saved to the OS keyring (keyed by
             // provider name); fall back to a plaintext config value only on
@@ -123,19 +125,20 @@ pub async fn resolve_startup(tx: mpsc::Sender<app::AppMessage>) {
             return;
         }
 
-        if registry::is_model_downloaded(&cfg.default_model) {
-            let _ = tx
-                .send(app::AppMessage::ConfigResolved {
-                    model: Some(cfg.default_model),
-                    search_method: cfg.default_search_method,
-                    model_dtype: cfg.default_dtype,
-                    remote_provider: None,
-                    remote_api_key: None,
-                    remote_dim_hint: None,
-                })
-                .await;
-            return;
-        }
+        // Local model – always respect the user's explicit choice, even when
+        // the model files aren't downloaded yet (the TUI will download them).
+        // Do NOT fall through to the project-inference path below.
+        let _ = tx
+            .send(app::AppMessage::ConfigResolved {
+                model: Some(cfg.default_model),
+                search_method: cfg.default_search_method,
+                model_dtype: cfg.default_dtype,
+                remote_provider: None,
+                remote_api_key: None,
+                remote_dim_hint: None,
+            })
+            .await;
+        return;
     }
 
     if let Ok(projects) = zti_store::list_projects().await
