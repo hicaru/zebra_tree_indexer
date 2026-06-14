@@ -36,12 +36,22 @@ pub fn run_daemon(config: &DaemonConfig<'_>) -> Result<()> {
         .open(&pid_path)
         .with_context(|| format!("opening {}", pid_path.display()))?;
 
-    if let Err(e) = pid_file.try_lock_exclusive() {
-        anyhow::bail!(
-            "another daemon is running (cannot lock {}): {}",
-            pid_path.display(),
-            e
+    if pid_file.try_lock_exclusive().is_err() {
+        // Lock held — a daemon is already running. Show a friendly
+        // message with the existing PID instead of a cryptic OS error.
+        let existing_pid = std::fs::read_to_string(&pid_path)
+            .unwrap_or_else(|_| String::from("?"));
+        let socket = zti_common::paths::daemon_socket()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| String::from("?"));
+        eprintln!(
+            "Daemon is already running (PID {}).\n\
+             Socket: {}\n\
+             Use CLI commands directly: `zebraindex index`, `zebraindex search`, etc.",
+            existing_pid.trim(),
+            socket,
         );
+        return Ok(());
     }
 
     pid_file.set_len(0)?;
