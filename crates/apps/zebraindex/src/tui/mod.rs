@@ -157,11 +157,18 @@ async fn dispatch(app: &mut App, msg: AppMessage, tx: &mpsc::Sender<AppMessage>)
             api_key,
             models,
         } => {
+            // If the key matches what's already in memory, it came from the
+            // keyring (or was pre-filled from it) — no need to re-store.
+            let from_keyring = app
+                .remote_api_key
+                .as_deref()
+                .is_some_and(|stored| stored == api_key.as_ref());
             app.screen = Screen::Setup(SetupPhase::RemoteModelSelection {
                 provider,
                 api_key,
                 models: Arc::from(models),
                 selected: 0,
+                from_keyring,
             });
         }
         AppMessage::RemoteModelsError(msg) => {

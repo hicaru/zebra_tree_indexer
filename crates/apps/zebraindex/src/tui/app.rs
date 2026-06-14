@@ -55,12 +55,14 @@ pub enum SetupPhase {
         provider: RemoteProvider,
         api_key: Arc<str>,
         cancel: Arc<tokio::task::AbortHandle>,
+        from_keyring: bool,
     },
     RemoteModelSelection {
         provider: RemoteProvider,
         api_key: Arc<str>,
         models: Arc<[zti_remote_embed::RemoteModelInfo]>,
         selected: usize,
+        from_keyring: bool,
     },
     Launching {
         model_id: Arc<str>,
