@@ -83,46 +83,39 @@ impl RemoteEmbedEngine {
     }
 
     /// Dynamic batch sizing: split `texts` into provider-sized sub-batches and
-    /// pipeline several HTTP requests while preserving response order.
+    /// pipeline several HTTP requests while preserving response order. Each batch
+    /// is a contiguous borrowed sub-slice of `texts` — no chunk text is copied.
     pub async fn embed_texts(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
         let max_items = self.provider.max_batch_items().max(1);
-        let mut batches: Vec<Vec<String>> = Vec::with_capacity(texts.len().div_ceil(max_items));
-        let mut batch: Vec<String> = Vec::with_capacity(texts.len().min(max_items));
-        let mut batch_chars: usize = 0;
-
-        for text in texts {
+        let mut ranges: Vec<(usize, usize)> = Vec::with_capacity(texts.len().div_ceil(max_items));
+        let (mut start, mut batch_chars) = (0usize, 0usize);
+        for (i, text) in texts.iter().enumerate() {
             let len = text.len();
-            if !batch.is_empty()
-                && (batch.len() >= max_items
+            if i > start
+                && (i - start >= max_items
                     || batch_chars.saturating_add(len) > self.batch_char_limit)
             {
-                batches.push(std::mem::take(&mut batch));
-                batch = Vec::with_capacity(max_items);
+                ranges.push((start, i));
+                start = i;
                 batch_chars = 0;
             }
-            batch.push((*text).to_string());
             batch_chars = batch_chars.saturating_add(len);
         }
-        if !batch.is_empty() {
-            batches.push(batch);
-        }
+        ranges.push((start, texts.len()));
 
         let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-        let client = self.client.clone();
-        let model_id = Arc::clone(&self.model_id);
-        let mut stream = futures::stream::iter(batches.into_iter().map(move |batch| {
-            let client = client.clone();
-            let model_id = Arc::clone(&model_id);
-            async move {
-                let refs: Vec<&str> = batch.iter().map(String::as_str).collect();
-                client.embed_batch(&model_id, &refs).await
-            }
-        }))
-        .buffered(REMOTE_EMBED_PIPELINE);
+        let mut stream = futures::stream::iter(ranges)
+            .map(|(s, e)| async move {
+                match texts.get(s..e) {
+                    Some(batch) => self.client.embed_batch(&self.model_id, batch).await,
+                    None => Err(anyhow::anyhow!("invalid embed batch range {s}..{e}")),
+                }
+            })
+            .buffered(REMOTE_EMBED_PIPELINE);
 
         while let Some(rows) = stream.next().await {
             out.extend(rows?);
