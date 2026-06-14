@@ -149,18 +149,42 @@ impl RemoteEmbedClient {
         }
     }
 
-    /// Model listing — single attempt (failures are surfaced to the TUI immediately).
+    /// List embedding models for this provider. The provider's `models_query`
+    /// restricts the result server-side, so callers receive only embedding
+    /// models — no client-side filtering needed.
     pub async fn get_models<T>(&self) -> Result<T>
     where
         T: DeserializeOwned,
     {
+        let query = self.provider.models_query();
+        let url = if query.is_empty() {
+            format!("{}/models", self.provider.base_url())
+        } else {
+            format!("{}/models?{query}", self.provider.base_url())
+        };
         let resp = self
             .inner
-            .get(format!("{}/models", self.provider.base_url()))
+            .get(url)
             .bearer_auth(self.api_key.as_ref())
             .send()
             .await?
             .error_for_status()?;
         Ok(resp.json().await?)
+    }
+
+    /// Validate the API key cheaply via `GET /key` (free; no credits required).
+    /// Surfaces a bad key on the entry screen instead of as a later daemon crash.
+    pub async fn validate_key(&self) -> Result<()> {
+        let resp = self
+            .inner
+            .get(format!("{}/key", self.provider.base_url()))
+            .bearer_auth(self.api_key.as_ref())
+            .send()
+            .await?;
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            bail!("invalid or unauthorized {} API key", self.provider.label());
+        }
+        resp.error_for_status()?;
+        Ok(())
     }
 }

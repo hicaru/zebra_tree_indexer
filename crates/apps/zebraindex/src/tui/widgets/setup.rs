@@ -608,6 +608,22 @@ fn draw_api_key_entry(f: &mut Frame, provider: RemoteProvider, input: &str, erro
     f.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
+fn pricing_span(pricing: &Option<zti_remote_embed::RemoteModelPricing>) -> Span<'static> {
+    match pricing {
+        Some(p) if p.is_free() => Span::styled(
+            "  FREE",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Some(p) => Span::styled(
+            format!("  {}", p.format_price()),
+            Style::default().fg(Color::Yellow),
+        ),
+        None => Span::raw(""),
+    }
+}
+
 fn draw_remote_model_selection(
     f: &mut Frame,
     provider: RemoteProvider,
@@ -632,7 +648,8 @@ fn draw_remote_model_selection(
         } else {
             Span::raw("")
         };
-        let line1 = Line::from(vec![Span::styled(&model.id, Style::default()), ctx]);
+        let price = pricing_span(&model.pricing);
+        let line1 = Line::from(vec![Span::styled(&model.id, Style::default()), ctx, price]);
         let line2 = Line::from(vec![
             Span::raw("    "),
             Span::styled(&model.description, Style::default().fg(Color::Gray)),

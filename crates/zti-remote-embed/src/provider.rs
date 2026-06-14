@@ -39,6 +39,15 @@ impl RemoteProvider {
         }
     }
 
+    /// Query string that restricts the provider's `/models` listing to
+    /// embedding models. Empty when the provider needs no filter.
+    #[inline]
+    pub const fn models_query(self) -> &'static str {
+        match self {
+            Self::OpenRouter => "output_modalities=embeddings",
+        }
+    }
+
     /// Conservative item-count cap for one provider embeddings request.
     /// The remote engine also applies a char-budget split; this outer count
     /// cap avoids oversized JSON arrays on providers with element limits.

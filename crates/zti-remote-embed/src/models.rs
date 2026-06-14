@@ -7,6 +7,41 @@ use crate::client::RemoteEmbedClient;
 use crate::provider::RemoteProvider;
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RemoteModelPricing {
+    #[serde(default)]
+    pub prompt: String,
+}
+
+impl RemoteModelPricing {
+    /// Dollar cost per million tokens. Returns 0.0 when the prompt price
+    /// string is missing, empty, or unparseable.
+    pub fn price_per_million(&self) -> f64 {
+        self.prompt
+            .parse::<f64>()
+            .unwrap_or(0.0)
+            .mul_add(1_000_000.0, 0.0)
+    }
+
+    #[inline]
+    pub fn is_free(&self) -> bool {
+        self.price_per_million() == 0.0
+    }
+
+    /// Human-readable price label: `"FREE"` when the model costs nothing,
+    /// `"$0.20/M tok"` otherwise (3 decimal places for sub-cent pricing).
+    pub fn format_price(&self) -> String {
+        let price = self.price_per_million();
+        if price == 0.0 {
+            "FREE".to_string()
+        } else if price >= 0.01 {
+            format!("${price:.2}/M tok")
+        } else {
+            format!("${price:.3}/M tok")
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct RemoteModelInfo {
     pub id: String,
     pub name: String,
@@ -14,6 +49,8 @@ pub struct RemoteModelInfo {
     pub description: String,
     #[serde(default)]
     pub context_length: u32,
+    #[serde(default)]
+    pub pricing: Option<RemoteModelPricing>,
 }
 
 /// Returns embedding-capable models for a provider.
@@ -26,15 +63,9 @@ pub async fn list_models(
     }
 }
 
-/// Case-insensitive substring test without allocating a lowercased copy.
-fn contains_ignore_ascii_case(haystack: &str, needle: &[u8]) -> bool {
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle))
-}
-
-/// Returns OpenRouter embedding-capable models only (id or name contains "embed").
+/// Lists OpenRouter embedding models via `/models?output_modalities=embeddings`.
+/// The server returns only embedding models, so no client-side filtering is done.
+/// The key is validated first so a bad key fails here, not at daemon launch.
 pub async fn list_openrouter_models(api_key: &Arc<str>) -> Result<Vec<RemoteModelInfo>> {
     #[derive(Deserialize)]
     struct Resp {
@@ -42,15 +73,9 @@ pub async fn list_openrouter_models(api_key: &Arc<str>) -> Result<Vec<RemoteMode
     }
 
     let client = RemoteEmbedClient::new(RemoteProvider::OpenRouter, Arc::clone(api_key))?;
+    client.validate_key().await?;
     let resp: Resp = client.get_models().await?;
-    let mut models: Vec<RemoteModelInfo> = resp
-        .data
-        .into_iter()
-        .filter(|m| {
-            contains_ignore_ascii_case(&m.id, b"embed")
-                || contains_ignore_ascii_case(&m.name, b"embed")
-        })
-        .collect();
+    let mut models = resp.data;
     models.sort_unstable_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
 }

@@ -123,6 +123,7 @@ pub fn run_daemon(config: &DaemonConfig<'_>) -> Result<()> {
                 name: remote_model.to_string(),
                 description: String::new(),
                 context_length: 0,
+                pricing: None,
             };
             let remote = RemoteEmbedEngine::connect(
                 RemoteProvider::OpenRouter,

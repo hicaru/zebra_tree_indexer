@@ -151,6 +151,7 @@ impl DaemonState {
                 name: remote_model.to_string(),
                 description: String::new(),
                 context_length: 0,
+                pricing: None,
             };
             RemoteEmbedEngine::connect(
                 RemoteProvider::OpenRouter,
