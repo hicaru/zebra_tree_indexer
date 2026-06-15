@@ -16,9 +16,10 @@ use crate::bert::BertModel;
 use crate::jina_bert::JinaBertModel;
 
 use crate::batch::{BATCH_BUCKETS, BATCH_CEILING, SEQ_BUCKETS, next_bucket};
-use crate::model_registry::{ModelProfile, PoolingStrategyEnum, read_json, resolve_profile};
-use crate::normalize::normalize_l2;
-use crate::pooling::{PoolingStrategy, pool_row_into};
+use crate::model_registry::{
+    ComputeDTypeHint, ModelProfile, PoolingStrategyEnum, read_json, resolve_profile,
+};
+use crate::pooling::{PoolingStrategy, pool_on_device};
 use crate::tokenizer::{Tokenized, Tokenizer};
 use zti_hw::{Hardware, candle_device, probe};
 
@@ -160,6 +161,73 @@ struct EmbedRequest {
     reply: oneshot::Sender<Result<Pooled>>,
 }
 
+#[inline]
+fn dtype_from_hint(hint: ComputeDTypeHint, device: &zti_hw::Device) -> DType {
+    match (hint, device) {
+        (ComputeDTypeHint::F32, _) => DType::F32,
+        (ComputeDTypeHint::F16, _) | (ComputeDTypeHint::BF16, zti_hw::Device::Metal) => DType::F16,
+        (ComputeDTypeHint::BF16, _) => DType::BF16,
+    }
+}
+
+fn load_model(profile: &ModelProfile, dtype: DType, device: &candle_core::Device) -> Result<Model> {
+    let vb =
+        unsafe { VarBuilder::from_mmaped_safetensors(&[&profile.weights_path], dtype, device)? };
+
+    match read_json::<PositionEmbeddingPeek>(&profile.config_path)?
+        .position_embedding_type
+        .as_deref()
+    {
+        Some("alibi") => {
+            let config: JinaConfig = read_json(&profile.config_path)?;
+            Ok(Model::Jina(JinaBertModel::load(vb, &config)?))
+        }
+        _ => {
+            let config: BertConfig = read_json(&profile.config_path)?;
+            Ok(Model::Bert(BertModel::load(vb, &config)?))
+        }
+    }
+}
+
+fn warmup_model(
+    model: &Model,
+    tokenizer: &Tokenizer,
+    device: &candle_core::Device,
+    profile: &mut ModelProfile,
+    dtype: DType,
+    hw: &Hardware,
+) -> Result<()> {
+    let enc = tokenizer.encode("a")?;
+    if enc.ids.is_empty() {
+        anyhow::bail!("warmup produced no tokens");
+    }
+    let ids = Tensor::from_slice(&enc.ids, (1, enc.ids.len()), device)?;
+    let token_type_ids = Tensor::zeros_like(&ids)?;
+    let mask = Tensor::ones_like(&ids)?;
+    let out = model.forward(&ids, &token_type_ids, Some(&mask))?;
+    if profile.dim == 0 {
+        profile.dim = out
+            .dims()
+            .get(2)
+            .copied()
+            .ok_or_else(|| anyhow!("warmup output missing embedding dim"))?;
+        tracing::info!(dim = profile.dim, "probed embedding dim");
+    }
+    let flat = out
+        .to_device(&candle_core::Device::Cpu)?
+        .to_dtype(DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    if flat.iter().any(|v| v.is_nan()) {
+        anyhow::bail!(
+            "model produced NaN at load (dtype {dtype:?}, device {:?}) — \
+             this precision is unsupported for this model/device",
+            hw.device
+        );
+    }
+    Ok(())
+}
+
 pub struct EmbedEngine {
     /// Hands jobs to the single thread that owns the model/device/scratch. The
     /// reactor never blocks on GPU work and the model is never contended —
@@ -190,24 +258,15 @@ impl EmbedEngine {
         tracing::info!(path = %profile.weights_path.display(), "loading safetensors model");
 
         let device = candle_device(&hw);
-        let dtype = opts.model_dtype.unwrap_or(DType::F32);
-        let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[&profile.weights_path], dtype, &device)?
-        };
-
-        let model = match read_json::<PositionEmbeddingPeek>(&profile.config_path)?
-            .position_embedding_type
-            .as_deref()
-        {
-            Some("alibi") => {
-                let config: JinaConfig = read_json(&profile.config_path)?;
-                Model::Jina(JinaBertModel::load(vb, &config)?)
-            }
-            _ => {
-                let config: BertConfig = read_json(&profile.config_path)?;
-                Model::Bert(BertModel::load(vb, &config)?)
-            }
-        };
+        let requested_dtype = opts
+            .model_dtype
+            .or_else(|| {
+                profile
+                    .compute_dtype
+                    .filter(|_| !matches!(hw.device, zti_hw::Device::Cpu))
+                    .map(|hint| dtype_from_hint(hint, &hw.device))
+            })
+            .unwrap_or(DType::F32);
         let mut tokenizer = Tokenizer::from_file(&profile.tokenizer_path)?;
 
         let seq_cap = crate::batch::attention_safe_seq_cap(&profile, &hw);
@@ -228,33 +287,28 @@ impl EmbedEngine {
 
         // Warmup forward: validates the model is NaN-free for this dtype/device
         // and probes the embedding dim when the config didn't provide it. A
-        // reduced-precision dtype that overflows (e.g. a candle mask bug) is
-        // rejected here instead of silently wasting an entire index.
-        {
-            let enc = tokenizer.encode("a")?;
-            if enc.ids.is_empty() {
-                anyhow::bail!("warmup produced no tokens");
+        // reduced-precision dtype that overflows (e.g. a candle mask bug) falls
+        // back to F32 once instead of silently wasting an entire index.
+        let mut model = load_model(&profile, requested_dtype, &device)?;
+        if let Err(e) = warmup_model(
+            &model,
+            &tokenizer,
+            &device,
+            &mut profile,
+            requested_dtype,
+            &hw,
+        ) {
+            if requested_dtype == DType::F32 {
+                return Err(e);
             }
-            let ids = Tensor::from_slice(&enc.ids, (1, enc.ids.len()), &device)?;
-            let token_type_ids = Tensor::zeros_like(&ids)?;
-            let mask = Tensor::ones_like(&ids)?;
-            let out = model.forward(&ids, &token_type_ids, Some(&mask))?;
-            if profile.dim == 0 {
-                profile.dim = out.dims()[2];
-                tracing::info!(dim = profile.dim, "probed embedding dim");
-            }
-            let flat = out
-                .to_device(&candle_core::Device::Cpu)?
-                .to_dtype(DType::F32)?
-                .flatten_all()?
-                .to_vec1::<f32>()?;
-            if flat.iter().any(|v| v.is_nan()) {
-                anyhow::bail!(
-                    "model produced NaN at load (dtype {dtype:?}, device {:?}) — \
-                     this precision is unsupported for this model/device",
-                    hw.device
-                );
-            }
+            tracing::warn!(
+                error = %e,
+                requested_dtype = ?requested_dtype,
+                "model dtype warmup failed; retrying embed load with F32"
+            );
+            profile.dim = 0;
+            model = load_model(&profile, DType::F32, &device)?;
+            warmup_model(&model, &tokenizer, &device, &mut profile, DType::F32, &hw)?;
         }
 
         tracing::info!(
@@ -454,7 +508,6 @@ fn embed_on_state(state: &mut State, encs: &[&Tokenized], cfg: &WorkerCfg) -> Re
             batch,
             seq,
             real_batch,
-            dim: cfg.dim,
         },
         &PoolingStrategy::from(cfg.pooling),
     )?;
@@ -481,7 +534,6 @@ struct Shape {
     batch: usize,
     seq: usize,
     real_batch: usize,
-    dim: usize,
 }
 
 fn run_and_pool(
@@ -495,29 +547,25 @@ fn run_and_pool(
         batch,
         seq,
         real_batch,
-        dim,
+        ..
     } = shape;
+    let total = batch * seq;
 
-    let ids = Tensor::from_slice(&scratch.input_ids[..batch * seq], (batch, seq), device)?;
+    let ids_src = scratch
+        .input_ids
+        .get(..total)
+        .ok_or_else(|| anyhow!("input_ids shorter than batch*seq"))?;
+    let mask_src = scratch
+        .attention_mask
+        .get(..total)
+        .ok_or_else(|| anyhow!("attention_mask shorter than batch*seq"))?;
+
+    let ids = Tensor::from_slice(ids_src, (batch, seq), device)?;
     let token_type_ids = Tensor::zeros_like(&ids)?;
-    let mask = Tensor::from_slice(&scratch.attention_mask[..batch * seq], (batch, seq), device)?;
+    let mask = Tensor::from_slice(mask_src, (batch, seq), device)?;
 
     let output = model.forward(&ids, &token_type_ids, Some(&mask))?;
-    let output = output
-        .to_device(&candle_core::Device::Cpu)?
-        .to_dtype(DType::F32)?;
-    let data_flat = output.flatten_all()?.to_vec1::<f32>()?;
-
-    scratch.pooled_flat.clear();
-    scratch.pooled_flat.resize(real_batch * dim, 0.0);
-
-    for i in 0..real_batch {
-        let start = i * seq * dim;
-        let row_flat = &data_flat[start..start + seq * dim];
-        let out = &mut scratch.pooled_flat[i * dim..(i + 1) * dim];
-        pool_row_into(strategy, row_flat, scratch.valid_counts[i], out);
-        normalize_l2(out);
-    }
+    scratch.pooled_flat = pool_on_device(&output, &mask, strategy, real_batch)?;
 
     Ok(())
 }
@@ -566,6 +614,11 @@ mod worker_tests {
             assert!(
                 base.iter().any(|v| *v != 0.0),
                 "embedding must be non-trivial"
+            );
+            let norm = base.iter().map(|v| v * v).sum::<f32>().sqrt();
+            assert!(
+                (norm - 1.0).abs() < 1e-3,
+                "embedding must be L2-normalized, got norm {norm}"
             );
 
             let again = engine.embed_query_async(query).await.expect("embed again");
